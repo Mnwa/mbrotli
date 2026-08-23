@@ -6,8 +6,8 @@ explicitly an upstream-vendor update.
 
 ## Architecture and API boundaries
 
-- Keep low-level algorithms and state machines in private modules named
-  `core`. For example, `compressor` exposes the public compressor API and
+- Keep low-level algorithms and state machines in private submodules named
+  `core::*`. For example, `compressor` exposes the public compressor API and
   delegates its implementation to the private `compressor::core` module.
 - Follow the same shape for new subsystems: the public module owns ergonomic,
   high-level APIs; its private `core` module owns the implementation details.

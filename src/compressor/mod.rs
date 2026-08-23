@@ -1,6 +1,6 @@
+mod core;
 pub mod reader;
 pub mod writer;
-mod core;
 
 use crate::Brotli;
 use crate::compressor::reader::BrotliCompressorReader;
@@ -15,11 +15,11 @@ pub struct BrotliCompressor {
 }
 
 impl BrotliCompressor {
-    pub fn calculate_bound(&self, params: &BrotliCompressParams) -> usize {
-        todo!()
+    pub const fn calculate_bound(&self, params: &BrotliCompressParams, input_size: usize) -> usize {
+        core::bound::bound(params, input_size)
     }
     pub fn compress(&self, params: BrotliCompressParams, src: &[u8]) -> BrotliResult<Vec<u8>> {
-        let mut output = Vec::with_capacity(self.calculate_bound(&params));
+        let mut output = Vec::with_capacity(self.calculate_bound(&params, src.len()));
         self.compress_to_slice(params, src, &mut output)?;
         Ok(output)
     }
