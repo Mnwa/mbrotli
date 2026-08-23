@@ -264,12 +264,13 @@ graph TD
     C --> E["find_match_length&lt;S&gt;"]
     D --> E
     E --> F{"S::u8s::N"}
-    F -->|16| G["u8x16 loop"]
-    F -->|32| H["u8x32 loop"]
-    F -->|64| I["u8x64 loop"]
+    F -->|16| G["u8x16 loop, stride 16"]
+    F -->|32| H["u8x32 loop, stride 32"]
+    F -->|64| I["u8x64 loop, stride 64"]
+    F -->|other| J["byte scan, stride 1"]
 
     classDef scalar fill:#fce5cd,stroke:#b45f06;
-    class C,D scalar;
+    class C,D,J scalar;
 ```
 
 Only the exact match-length scan is vectorised. Hash lookups, candidate
@@ -283,6 +284,39 @@ bounds check nor a length assertion in the loop.
 then native vectors, then whole words, then single bytes. The staging only
 changes how a length is discovered, never which length it is, so every backend
 emits identical bytes.
+
+### 7.1. The stride invariant
+
+Each stage decides "did every step match?" by comparing what the scan reported
+against the window rounded down to a whole number of steps, and returns early
+when the scan stopped short. That test is only exact when the size it rounds by
+is the step the scan really takes, so `native_vector_stride` reports the stride
+rather than the lane count: every width without a vector loop degrades to the
+byte scan, whose stride is one. Rounding by a lane count the scan does not use
+would round the window up past what the scan can report and truncate a match
+that ran to the limit. No backend `fearless_simd` ships reaches that arm —
+NEON, SSE2 and the fallback all have `u8s::N == 16` — so it is an invariant kept
+honest rather than a live path.
+
+### 7.2. Measured reach of the vector stage
+
+The prefix is 16 bytes and the widest shipping backend on the reference host is
+also 16 lanes, so the vector loop only ever sees matches of 16 bytes or more.
+Counting how often it runs, per whole file at quality 0:
+
+| Corpus | `find_match_length` calls | Exit in the scalar prefix | Vector iterations |
+| --- | ---: | ---: | ---: |
+| `alice29.txt` | 19,291 | 99.4% | 29 |
+| `lcet10.txt` | 52,743 | 98.8% | 519 |
+| `plrabn12.txt` | 68,960 | 99.9% | 47 |
+| `mapsdatazrh` | 10,319 | 91.0% | 1,633 |
+| `random_org_10k.bin` | 0 | — | 0 |
+
+Text finds short matches, so the scalar word prefix answers almost every call
+and the vector stage earns its keep only on structured binary. This is a
+property of the fast qualities, not a tuning gap: the stages exist so that a
+long match does not pay a byte-at-a-time scan, and short matches never enter
+them.
 
 ## 8. Table-bit specialisation
 
@@ -315,8 +349,25 @@ removes their bounds checks without any unsafe code:
 | `match_len_vectors_*` | `as_chunks::<LANES>` plus `load_array_ref` |
 | `match_len_bytes` | `zip` + `take_while` over the tails |
 | `histogram::accumulate` | `as_chunks::<4>` into four independent counters, scalar tail |
-| `emit_literals` (q0) | `as_chunks::<2>`, two codes per bit-writer call |
+| `emit_literals` (q0) | `as_chunks::<4>` above an eight literal run, then `as_chunks::<2>`, then singles |
 | `pack_literals` (q1) | greedy accumulation up to the writer's 56 bit limit |
+
+### 9.1. Literal packing width
+
+The tree builder caps a literal depth at fourteen bits, so four codes are at
+most 56 bits and always fit one `BitWriter::write`; two fit with room to spare.
+Quality 0 emits literals between matches, and run length varies by an order of
+magnitude across corpora — roughly three literals per run on text against
+twenty on structured binary — so the quadruple loop is gated on the run being
+at least eight literals long and short runs go straight to the pair loop. An
+ungated quadruple loop measures 4% slower on `alice29.txt`, where a run rarely
+fills one quadruple, while keeping the full gain on `mapsdatazrh`.
+
+Quality 1 replays a whole meta-block of literals at once, so its packer stays
+greedy: it accumulates codes until the next would overflow the 56 bit limit,
+which reaches far more codes per store than a fixed quadruple. Batching that
+loop four at a time to amortise its per-literal branch measures within noise on
+every corpus, so it keeps the simpler shape.
 
 ## Known gaps
 

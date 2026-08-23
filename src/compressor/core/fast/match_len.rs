@@ -82,6 +82,22 @@ vector_scan!(match_len_vectors_16, u8x16, 16);
 vector_scan!(match_len_vectors_32, u8x32, 32);
 vector_scan!(match_len_vectors_64, u8x64, 64);
 
+/// Bytes [`match_len_native_vectors`] advances per step on this backend.
+///
+/// The caller uses this to work out how many bytes a fully matching scan would
+/// have reported, so it has to be the stride the scan really takes rather than
+/// the backend's lane count: a width with no vector loop degrades to a
+/// byte-at-a-time scan, whose stride is one.
+#[inline(always)]
+const fn native_vector_stride<S: Simd>() -> usize {
+    match <S::u8s as SimdBase<S>>::N {
+        16 => 16,
+        32 => 32,
+        64 => 64,
+        _ => 1,
+    }
+}
+
 /// Runs the vector scan with the backend's native lane count baked in.
 ///
 /// The match resolves at monomorphisation time, because `S::u8s::N` is a
@@ -92,9 +108,12 @@ fn match_len_native_vectors<S: Simd>(simd: S, left: &[u8], right: &[u8]) -> usiz
         16 => match_len_vectors_16(simd, left, right),
         32 => match_len_vectors_32(simd, left, right),
         64 => match_len_vectors_64(simd, left, right),
-        // No supported backend has another width; fall back to whole words so
-        // the result stays correct if one ever appears.
-        _ => match_len_words(left, right),
+        // No supported backend has another width. Falling back to single bytes
+        // rather than to whole words is what keeps the caller's "did every step
+        // match?" test exact: it pairs with the stride of one that
+        // `native_vector_stride` reports, whereas a word scan would round the
+        // window down to a multiple of eight and under-report a shorter match.
+        _ => match_len_bytes(left, right),
     }
 }
 
@@ -134,8 +153,8 @@ pub(crate) fn find_match_length<S: Simd>(
     }
 
     // Native-width vectors over the bulk of a long match.
-    let lanes = <S::u8s as SimdBase<S>>::N;
-    let whole_vectors = (limit - matched) - (limit - matched) % lanes;
+    let stride = native_vector_stride::<S>();
+    let whole_vectors = (limit - matched) - (limit - matched) % stride;
     let vectored =
         match_len_native_vectors(simd, &left_window[matched..], &right_window[matched..]);
     matched += vectored;
@@ -242,6 +261,46 @@ mod tests {
                 assert_eq!(measure_fallback(&data, left, right, limit), expected);
             }
         }
+    }
+
+    #[test]
+    fn a_window_that_does_not_fit_the_input_reports_no_match() {
+        let data = vec![0u8; 32];
+        for (left, right, limit) in [(0usize, 16usize, 17usize), (24, 0, 9), (33, 0, 1)] {
+            assert_eq!(measure(&data, left, right, limit), 0);
+            assert_eq!(measure_fallback(&data, left, right, limit), 0);
+        }
+    }
+
+    /// The stride the caller reasons with has to be the one the scan takes.
+    ///
+    /// `find_match_length` decides "did every step match?" by comparing the
+    /// scan's result against the window rounded down to a whole number of
+    /// strides. A stride wider than the scan's own step would round the window
+    /// up past what the scan can report and truncate a match that ran to the
+    /// limit, so the two must agree for every backend.
+    #[test]
+    fn the_reported_stride_is_the_one_the_vector_scan_takes() {
+        fn check<S: Simd>(simd: S) {
+            let stride = native_vector_stride::<S>();
+            assert!(matches!(stride, 1 | 16 | 32 | 64), "stride {stride}");
+            let data = vec![0xCDu8; 4 * stride];
+            let left = vec![0xCDu8; 4 * stride];
+            assert_eq!(
+                match_len_native_vectors(simd, &left, &data),
+                4 * stride,
+                "a fully matching window has to report every stride"
+            );
+            // One byte short of two strides: a scan stepping by `stride` sees
+            // one whole step, and the caller's guard has to agree.
+            let window = 2 * stride - 1;
+            assert_eq!(
+                match_len_native_vectors(simd, &left[..window], &data[..window]),
+                window - window % stride
+            );
+        }
+        dispatch!(Level::new(), simd => check(simd));
+        dispatch!(Level::fallback(), simd => check(simd));
     }
 
     #[test]

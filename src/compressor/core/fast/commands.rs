@@ -275,10 +275,18 @@ pub(crate) mod one_pass {
         histo[code] += 1;
     }
 
+    /// Shortest literal run for which the four-at-a-time loop pays off.
+    ///
+    /// Below this a run yields at most one quadruple, and the extra split costs
+    /// more than the store it saves; the pair loop alone is faster.
+    const QUAD_RUN_THRESHOLD: usize = 8;
+
     /// Writes `len` literal bytes starting at `start`.
     ///
-    /// Literal codes are short — at most fourteen bits — so two of them always
-    /// fit in one bit-writer call, which halves the number of stores without
+    /// Literal codes are capped at a depth of fourteen bits by the tree
+    /// builder, so four of them always fit in the writer's
+    /// [`MAX_BITS_PER_WRITE`] budget, and two always fit with room to spare.
+    /// Packing several codes per call cuts the number of stores without
     /// changing a single emitted bit.
     #[inline(always)]
     pub(crate) fn emit_literals(
@@ -292,11 +300,36 @@ pub(crate) mod one_pass {
         let Some(literals) = data.get(start..start + len) else {
             return;
         };
-        // Quality 0 emits literals between matches, so the runs are short:
-        // pairs measure faster here than the greedy packing quality 1 uses,
-        // which pays a per-literal branch that only earns its keep on long
-        // runs. `as_chunks` keeps the loop bounds-check free with a one byte
-        // tail.
+        // Quality 0 emits literals between matches, so run length varies by
+        // corpus: text averages roughly three literals per run while
+        // structured binary averages twenty. Long runs are packed four at a
+        // time, short ones go straight to the pair loop, which is why the
+        // split is gated on the run length rather than applied unconditionally.
+        // The greedy packing quality 1 uses is a loss here either way: it pays
+        // a per-literal branch that only earns its keep across a whole
+        // meta-block of literals.
+        let literals = if literals.len() >= QUAD_RUN_THRESHOLD {
+            // `as_chunks` keeps the loop bounds-check free; the running widths
+            // are a plain prefix sum over the four code lengths.
+            let (quads, rest) = literals.as_chunks::<4>();
+            for quad in quads {
+                let first = usize::from(quad[0]);
+                let second = usize::from(quad[1]);
+                let third = usize::from(quad[2]);
+                let fourth = usize::from(quad[3]);
+                let first_width = u32::from(depth[first]);
+                let second_width = first_width + u32::from(depth[second]);
+                let third_width = second_width + u32::from(depth[third]);
+                let value = u64::from(bits[first])
+                    | (u64::from(bits[second]) << first_width)
+                    | (u64::from(bits[third]) << second_width)
+                    | (u64::from(bits[fourth]) << third_width);
+                w.write(third_width + u32::from(depth[fourth]), value);
+            }
+            rest
+        } else {
+            literals
+        };
         let (pairs, tail) = literals.as_chunks::<2>();
         for pair in pairs {
             let first = usize::from(pair[0]);
@@ -588,6 +621,85 @@ mod tests {
             });
             assert_eq!(used, vec![code], "distance {distance}");
         }
+    }
+
+    /// Emits one literal per bit-writer call, the shape both packers refine.
+    fn literals_one_at_a_time(
+        literals: &[u8],
+        depth: &[u8; 256],
+        bits: &[u16; 256],
+        w: &mut BitWriter,
+    ) {
+        for &literal in literals {
+            let index = usize::from(literal);
+            w.write(u32::from(depth[index]), u64::from(bits[index]));
+        }
+    }
+
+    /// Builds a literal code whose depths span the full one-to-fourteen range.
+    fn literal_code() -> ([u8; 256], [u16; 256]) {
+        let mut depth = [0u8; 256];
+        let mut bits = [0u16; 256];
+        for (index, (slot, code)) in depth.iter_mut().zip(bits.iter_mut()).enumerate() {
+            *slot = 1 + (index % 14) as u8;
+            *code = (index as u16) & ((1u16 << *slot) - 1);
+        }
+        (depth, bits)
+    }
+
+    #[test]
+    fn packed_literals_match_one_code_per_call_at_every_run_length() {
+        let (depth, bits) = literal_code();
+        let data: Vec<u8> = (0..64u16).map(|i| (i * 7 % 256) as u8).collect();
+
+        for len in 0..=data.len() {
+            let mut packed_storage = vec![0u8; 256];
+            let mut packed = BitWriter::new(&mut packed_storage, 0);
+            one_pass::emit_literals(&data, 0, len, &depth, &bits, &mut packed);
+
+            let mut plain_storage = vec![0u8; 256];
+            let mut plain = BitWriter::new(&mut plain_storage, 0);
+            literals_one_at_a_time(&data[..len], &depth, &bits, &mut plain);
+
+            assert!(!packed.overflowed() && !plain.overflowed(), "length {len}");
+            assert_eq!(packed.position(), plain.position(), "length {len}");
+            let bytes = plain.position().div_ceil(8);
+            assert_eq!(
+                packed_storage[..bytes],
+                plain_storage[..bytes],
+                "length {len}"
+            );
+        }
+    }
+
+    #[test]
+    fn packed_literals_stay_inside_the_writers_budget_at_the_deepest_codes() {
+        // Four codes of the maximum depth are exactly the writer's limit, so
+        // this is the widest call the quadruple loop can ever make.
+        let depth = [14u8; 256];
+        let mut bits = [0u16; 256];
+        for (index, code) in bits.iter_mut().enumerate() {
+            *code = (index as u16) & 0x3FFF;
+        }
+        let data: Vec<u8> = (0..16u8).map(|i| i.wrapping_mul(17)).collect();
+
+        let mut storage = vec![0u8; 128];
+        let mut w = BitWriter::new(&mut storage, 0);
+        one_pass::emit_literals(&data, 0, data.len(), &depth, &bits, &mut w);
+        assert!(!w.overflowed());
+        assert_eq!(w.position(), data.len() * 14);
+        assert_eq!(u32::from(depth[0]) * 4, MAX_BITS_PER_WRITE);
+    }
+
+    #[test]
+    fn literal_runs_outside_the_input_emit_nothing() {
+        let (depth, bits) = literal_code();
+        let data = [1u8, 2, 3];
+        let mut storage = vec![0u8; 32];
+        let mut w = BitWriter::new(&mut storage, 0);
+        one_pass::emit_literals(&data, 1, 99, &depth, &bits, &mut w);
+        assert_eq!(w.position(), 0);
+        assert!(!w.overflowed());
     }
 
     #[test]
