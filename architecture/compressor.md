@@ -249,7 +249,7 @@ graph LR
 | `tests/simd_backends.rs` | Byte identity between the scalar fallback and every SIMD backend the host supports. |
 | `tests/streaming.rs` | Chunk-size independence, writer/reader agreement, one-shot equivalence. |
 | `tests/randomized.rs` | Seeded property tests mixing literal runs, back-references and noise. |
-| `fuzz/afl/` | AFL targets for the same oracles, seeded from the vendored Brotli test data. |
+| `fuzz/afl/` | AFL targets for the same oracles plus parameter rejection, seeded from the vendored Brotli test data; see [fuzzing.md](fuzzing.md). |
 
 ## Known gaps
 

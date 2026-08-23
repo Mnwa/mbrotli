@@ -6,6 +6,7 @@ explicitly an upstream-vendor update.
 
 ## Architecture and API boundaries
 
+- Read architecture [documentation](./architecture/README.md) before start
 - Keep low-level algorithms and state machines in private submodules named
   `core::*`. For example, `compressor` exposes the public compressor API and
   delegates its implementation to the private `compressor::core` module.
@@ -158,6 +159,22 @@ After changing Rust code:
 6. Run relevant Criterion benchmarks for performance-sensitive changes and the
    relevant AFL target for changes to fuzzed boundaries.
 7. Do not use `#[allow(..)]` to fix clippy warnings.
+
+Steps 1 through 3 run at the workspace root, which does not reach `fuzz/afl`;
+that package is excluded from the workspace so AFL's instrumentation cannot
+affect them. It is not exempt from the checks. After changing anything under
+`fuzz/afl/`, or any public API a fuzz target calls, also run from `fuzz/afl/`:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo afl test
+```
+
+`cargo afl test` rather than `cargo test`: the fuzz binaries link AFL's
+runtime, so plain `cargo test` cannot link them. It replays the committed
+regression corpus in `fuzz/afl/regressions/` through the target bodies, which
+carry no AFL dependency of their own.
 
 Fix warnings and formatting issues rather than suppressing them. If a Clippy
 lint is a demonstrated false positive, use the narrowest possible

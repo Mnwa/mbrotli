@@ -5,17 +5,13 @@ today. Each specification covers one subsystem: its module boundaries, public
 API surface, control and data flow, state machines, SIMD dispatch points, and
 error propagation, with Mermaid diagrams for the mechanics it describes.
 
-`specifications/` is a different thing: it holds externally authored source
-specifications (the Brotli q0/q1 encoder brief) that describe intended
-behavior. This directory describes actual behavior, including what is still
-unimplemented.
-
 ## Index
 
 | Specification | Summary |
 | --- | --- |
 | [compressor.md](compressor.md) | Compressor subsystem: SIMD level detection and hand-off, parameter and bound types, one-shot and streaming compression paths, error model, verification topology, and current implementation gaps. |
 | [fast-encoder.md](fast-encoder.md) | Quality 0 and quality 1 encoder core: module map, workspace ownership, fragment lifecycle, the two scan state machines, bitstream layer, SIMD dispatch points, and table-bit specialisation. |
+| [fuzzing.md](fuzzing.md) | AFL fuzzing subsystem: package isolation, the engine-neutral target layer, input model and payload cap, the eight targets and their oracles, backend deduplication, and the crash-to-regression lifecycle. |
 
 ## Module map
 
@@ -75,10 +71,9 @@ the ergonomic surface; `core` owns the algorithms.
 | `src/compressor/core/` | Private implementation modules. |
 | `src/compressor/core/fast/` | Quality 0 and quality 1 encoders, bitstream, Huffman and SIMD dispatch. |
 | `docs/` | Port documentation: API binding, design, reference differences, benchmark report. |
-| `fuzz/afl/` | AFL fuzz targets, excluded from the workspace. |
+| `fuzz/afl/` | AFL fuzz targets and their regression corpus, excluded from the workspace. |
 | `brotli-ffi/` | Workspace crate binding Google's C Brotli; `vendor/` is upstream source and is not hand-edited. |
 | `examples/` | Runnable example mirroring the README, so the documented usage stays compiled. |
 | `benches/` | Criterion benchmarks comparing this crate with the C implementation. |
 | `tests/` | Integration tests over the public API. |
-| `specifications/` | Externally authored source specifications. |
 | `architecture/` | This directory. |

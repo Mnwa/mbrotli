@@ -1,20 +1,13 @@
 //! Quality 0 must never panic and must always round-trip.
+//!
+//! Thin AFL adapter; the body lives in [`mbrotli_afl::targets::q0_roundtrip`] so a
+//! finding can be replayed without an instrumented binary.
 
-use mbrotli::Brotli;
-use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
-use mbrotli_afl::assert_round_trip;
+use mbrotli_afl::{Context, targets};
 
 fn main() {
-    let compressor = Brotli::default().compressor();
-    let params = CompressParams::new(QualityLevel::Q0, WindowBits::DEFAULT);
+    let ctx = Context::default();
     afl::fuzz!(|data: &[u8]| {
-        let bound = compressor
-            .calculate_bound(&params, data.len())
-            .expect("bound overflowed");
-        let compressed = compressor
-            .compress(params, data)
-            .expect("compression failed");
-        assert!(compressed.len() <= bound, "output exceeded the bound");
-        assert_round_trip(data, &compressed);
+        targets::q0_roundtrip(&ctx, data);
     });
 }
