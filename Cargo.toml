@@ -9,6 +9,17 @@ edition = "2024"
 version = "0.7"
 features = ["libm"]
 
+[dependencies.thiserror]
+version = "2"
+
+[dependencies.hotpath]
+version = "0.24"
+
+[features]
+hotpath = ["hotpath/hotpath"]
+hotpath-cpu = ["hotpath/hotpath-cpu"]
+hotpath-alloc = ["hotpath/hotpath-alloc"]
+
 [workspace]
 members = ["brotli-ffi"]
 resolver = "3"
