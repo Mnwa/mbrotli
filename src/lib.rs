@@ -16,10 +16,10 @@
 //!
 //! ```
 //! use mbrotli::Brotli;
-//! use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+//! use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
 //!
 //! let compressor = Brotli::default().compressor();
-//! let params = BrotliCompressParams::new(BrotliQualityLevel::Q1, BrotliWindowBits::DEFAULT);
+//! let params = CompressParams::new(QualityLevel::Q1, WindowBits::DEFAULT);
 //!
 //! let payload = "brotli ".repeat(1000);
 //! let compressed = compressor.compress(params, payload.as_bytes())?;
@@ -31,15 +31,15 @@
 //! ```
 //!
 //! Streaming into a writer, which has to be closed with
-//! [`finish`](compressor::writer::BrotliCompressorWriter::finish):
+//! [`finish`](compressor::writer::CompressorWriter::finish):
 //!
 //! ```
 //! use mbrotli::Brotli;
-//! use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+//! use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
 //! use std::io::Write;
 //!
 //! let compressor = Brotli::default().compressor();
-//! let params = BrotliCompressParams::new(BrotliQualityLevel::Q0, BrotliWindowBits::DEFAULT);
+//! let params = CompressParams::new(QualityLevel::Q0, WindowBits::DEFAULT);
 //!
 //! let mut sink = compressor.compress_writer(params, Vec::new());
 //! sink.write_all(b"chunk one ")?;
@@ -50,7 +50,7 @@
 //! # Ok::<(), std::io::Error>(())
 //! ```
 
-use crate::compressor::BrotliCompressor;
+use crate::compressor::Compressor;
 use fearless_simd::Level;
 
 pub mod compressor;
@@ -102,16 +102,16 @@ impl Brotli {
     ///
     /// ```
     /// use mbrotli::Brotli;
-    /// use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+    /// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
     ///
-    /// let params = BrotliCompressParams::new(BrotliQualityLevel::Q0, BrotliWindowBits::DEFAULT);
+    /// let params = CompressParams::new(QualityLevel::Q0, WindowBits::DEFAULT);
     /// let compressed = Brotli::default().compressor().compress(params, b"payload payload")?;
     ///
     /// assert!(!compressed.is_empty());
     /// # Ok::<(), mbrotli::compressor::BrotliCompressError>(())
     /// ```
-    pub fn compressor(&self) -> BrotliCompressor {
-        BrotliCompressor::from(*self)
+    pub fn compressor(&self) -> Compressor {
+        Compressor::from(*self)
     }
 }
 

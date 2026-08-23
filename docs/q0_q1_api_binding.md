@@ -9,10 +9,10 @@ implementation details behind the API that was already there.
 
 | Item | Finding |
 | --- | --- |
-| Public compression entry point | `mbrotli::compressor::BrotliCompressor`, obtained from `Brotli::compressor()`. |
-| Settings type | `BrotliCompressParams { quality, lgwin }`, `Copy`, built with `new`. |
-| Quality specification | `BrotliQualityLevel`, a closed enum `Q0..Q9`, `Q11` (no `Q10`). |
-| Window size | `BrotliWindowBits`, a validated newtype over `10..=24`. |
+| Public compression entry point | `mbrotli::compressor::Compressor`, obtained from `Brotli::compressor()`. |
+| Settings type | `CompressParams { quality, lgwin }`, `Copy`, built with `new`. |
+| Quality specification | `QualityLevel`, a closed enum `Q0..Q9`, `Q11` (no `Q10`). |
+| Window size | `WindowBits`, a validated newtype over `10..=24`. |
 | Mode / size hint | Not modelled. The reference default (`BROTLI_MODE_GENERIC`, no size hint) is what the fast path uses anyway. |
 | One-shot entry points | `compress` (to `Vec<u8>`) and `compress_to_slice`. |
 | Streaming entry points | `compress_writer` (`Write`) and `compress_reader` (`Read`). |
@@ -30,16 +30,16 @@ implementation details behind the API that was already there.
 
 | Conceptual role | Actual repository symbol | Ownership / lifetime | q0 / q1 usage |
 | --- | --- | --- | --- |
-| Encoder settings | `compressor::BrotliCompressParams` | `Copy`, passed by value per call | read once when a `FastEncoder` is built |
-| Quality routing | `compressor::BrotliQualityLevel` → `core::fast::FastQuality` | `Copy` | `TryFrom` accepts `Q0` and `Q1`, refuses the rest |
-| Window size | `compressor::BrotliWindowBits` | `Copy`, validated at construction | fragment size is `1 << lgwin`; the stream header advertises `max(lgwin, 18)` |
+| Encoder settings | `compressor::CompressParams` | `Copy`, passed by value per call | read once when a `FastEncoder` is built |
+| Quality routing | `compressor::QualityLevel` → `core::fast::FastQuality` | `Copy` | `TryFrom` accepts `Q0` and `Q1`, refuses the rest |
+| Window size | `compressor::WindowBits` | `Copy`, validated at construction | fragment size is `1 << lgwin`; the stream header advertises `max(lgwin, 18)` |
 | Input fragment | `&[u8]` slice of the caller's input | borrowed for the call | `FastEncoder::encode_block` |
 | Output sink | `Vec<u8>` / `&mut [u8]` / inner `Write` | caller-owned | fragments are appended as they complete |
 | Workspace / allocator | `core::fast::FastEncoder` (`table`, `storage`, `FastCore`) | owned by the encoder, reused across fragments | allocated once, cleared per fragment |
 | Bit writer | `core::fast::bits::BitWriter` | borrows the encoder's scratch buffer | every meta-block |
 | Huffman builder | `core::fast::huffman` | operates on arena-owned scratch | literal, command and distance codes |
 | Error type | `compressor::BrotliCompressError` | returned by value | `UnsupportedQuality`, `OutputTooSmall`, `BufferOverflow`, `BoundOverflow` |
-| Streaming state | `BrotliCompressorWriter` / `BrotliCompressorReader`, each owning a `FastEncoder` | created lazily on first use | carries `last_bytes` across fragments |
+| Streaming state | `CompressorWriter` / `CompressorReader`, each owning a `FastEncoder` | created lazily on first use | carries `last_bytes` across fragments |
 | SIMD level | `fearless_simd::Level`, stored in `Brotli` | `Copy`, detected once per process | one `dispatch!` per fragment |
 
 ## Integration rule
@@ -50,7 +50,7 @@ quality == 1  -> core::fast q1 two-pass
 quality >= 2  -> BrotliCompressError::UnsupportedQuality
 ```
 
-Routing uses the existing `BrotliQualityLevel`; no second way to specify a
+Routing uses the existing `QualityLevel`; no second way to specify a
 quality was added.
 
 ## Changes made to the existing public API
@@ -61,13 +61,13 @@ broken before this change.
 
 | Symbol | Before | After | Why |
 | --- | --- | --- | --- |
-| `BrotliCompressor::compress_to_slice` | `-> BrotliResult<()>` | `-> BrotliResult<usize>` | The caller could not learn how many bytes were written, which makes the entry point unusable. |
-| `BrotliCompressor::calculate_bound` | `-> usize`, `todo!()` | `-> BrotliResult<usize>` | The bound can overflow `usize`; saturating would return a value that no longer bounds anything. |
-| `BrotliQualityLevel: TryFrom<usize>` | `todo!()` | implemented | Panicking on a public conversion is not acceptable. |
+| `Compressor::compress_to_slice` | `-> BrotliResult<()>` | `-> BrotliResult<usize>` | The caller could not learn how many bytes were written, which makes the entry point unusable. |
+| `Compressor::calculate_bound` | `-> usize`, `todo!()` | `-> BrotliResult<usize>` | The bound can overflow `usize`; saturating would return a value that no longer bounds anything. |
+| `QualityLevel: TryFrom<usize>` | `todo!()` | implemented | Panicking on a public conversion is not acceptable. |
 
 Additions that do not change existing signatures:
 
-- `BrotliCompressorWriter::finish` and `get_ref`, `BrotliCompressorReader::get_ref`.
+- `CompressorWriter::finish` and `get_ref`, `CompressorReader::get_ref`.
   A `Write` implementation has no terminating hook, so the stream cannot be
   closed without one.
 - New variants on the two `#[non_exhaustive]` error enums:

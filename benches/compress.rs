@@ -25,15 +25,15 @@
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mbrotli::Brotli;
-use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
 use std::hint::black_box;
 use std::path::Path;
 
 /// Sliding window size used by every benchmark.
-const LGWIN: BrotliWindowBits = BrotliWindowBits::DEFAULT;
+const LGWIN: WindowBits = WindowBits::DEFAULT;
 
 /// Quality levels under measurement, paired with their numeric value.
-const QUALITIES: [BrotliQualityLevel; 2] = [BrotliQualityLevel::Q0, BrotliQualityLevel::Q1];
+const QUALITIES: [QualityLevel; 2] = [QualityLevel::Q0, QualityLevel::Q1];
 
 /// Safe wrappers over the raw C Brotli bindings.
 mod c_brotli {
@@ -237,7 +237,7 @@ fn incompressible(len: usize) -> Vec<u8> {
 
 /// Verifies both implementations against the C decoder and reports the
 /// compressed sizes they produced.
-fn validate(params: BrotliCompressParams, corpus: &Corpus) {
+fn validate(params: CompressParams, corpus: &Corpus) {
     let quality = usize::from(params.quality());
     let input = corpus.data.as_slice();
 
@@ -287,7 +287,7 @@ fn bench_oneshot(criterion: &mut Criterion) {
     );
 
     for quality in QUALITIES {
-        let params = BrotliCompressParams::new(quality, LGWIN);
+        let params = CompressParams::new(quality, LGWIN);
         let numeric_quality = usize::from(quality);
         let mut group = criterion.benchmark_group(format!("oneshot/q{numeric_quality}"));
         let compressor = Brotli::default().compressor();
@@ -341,7 +341,7 @@ fn bench_presized(criterion: &mut Criterion) {
     let corpora = corpora();
 
     for quality in QUALITIES {
-        let params = BrotliCompressParams::new(quality, LGWIN);
+        let params = CompressParams::new(quality, LGWIN);
         let numeric_quality = usize::from(quality);
         let mut group = criterion.benchmark_group(format!("presized/q{numeric_quality}"));
         let compressor = Brotli::default().compressor();
@@ -393,7 +393,7 @@ fn bench_tiny(criterion: &mut Criterion) {
     let payload = text(*TINY_SIZES.iter().max().unwrap_or(&1024));
 
     for quality in QUALITIES {
-        let params = BrotliCompressParams::new(quality, LGWIN);
+        let params = CompressParams::new(quality, LGWIN);
         let numeric_quality = usize::from(quality);
         let mut group = criterion.benchmark_group(format!("tiny/q{numeric_quality}"));
         let compressor = Brotli::default().compressor();

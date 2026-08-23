@@ -1,6 +1,6 @@
 //! Streaming compression from a [`Read`] source.
 
-use crate::compressor::BrotliCompressParams;
+use crate::compressor::CompressParams;
 use crate::compressor::core::fast::FastEncoder;
 use fearless_simd::Level;
 use std::io::{Error, ErrorKind, Read, Result};
@@ -15,11 +15,11 @@ use std::io::{Error, ErrorKind, Read, Result};
 ///
 /// ```
 /// use mbrotli::Brotli;
-/// use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+/// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
 /// use std::io::Read;
 ///
 /// let compressor = Brotli::default().compressor();
-/// let params = BrotliCompressParams::new(BrotliQualityLevel::Q1, BrotliWindowBits::DEFAULT);
+/// let params = CompressParams::new(QualityLevel::Q1, WindowBits::DEFAULT);
 ///
 /// let mut source = compressor.compress_reader(params, &b"payload payload payload"[..]);
 /// let mut compressed = Vec::new();
@@ -28,10 +28,10 @@ use std::io::{Error, ErrorKind, Read, Result};
 /// assert_eq!(compressed, compressor.compress(params, b"payload payload payload")?);
 /// # Ok::<(), std::io::Error>(())
 /// ```
-pub struct BrotliCompressorReader<T: Read> {
+pub struct CompressorReader<T: Read> {
     pub(crate) reader: T,
     pub(crate) level: Level,
-    pub(crate) params: BrotliCompressParams,
+    pub(crate) params: CompressParams,
     pub(crate) encoder: Option<FastEncoder>,
     pub(crate) input: Vec<u8>,
     pub(crate) output: Vec<u8>,
@@ -39,9 +39,9 @@ pub struct BrotliCompressorReader<T: Read> {
     pub(crate) eof: bool,
 }
 
-impl<T: Read> BrotliCompressorReader<T> {
+impl<T: Read> CompressorReader<T> {
     /// Creates an adapter compressing the bytes produced by `reader`.
-    pub(crate) const fn new(reader: T, level: Level, params: BrotliCompressParams) -> Self {
+    pub(crate) const fn new(reader: T, level: Level, params: CompressParams) -> Self {
         Self {
             reader,
             level,
@@ -60,10 +60,10 @@ impl<T: Read> BrotliCompressorReader<T> {
     ///
     /// ```
     /// use mbrotli::Brotli;
-    /// use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+    /// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
     ///
     /// let compressor = Brotli::default().compressor();
-    /// let params = BrotliCompressParams::new(BrotliQualityLevel::Q0, BrotliWindowBits::DEFAULT);
+    /// let params = CompressParams::new(QualityLevel::Q0, WindowBits::DEFAULT);
     /// let source = compressor.compress_reader(params, &b"data"[..]);
     ///
     /// assert_eq!(source.get_ref().len(), 4);
@@ -142,7 +142,7 @@ impl<T: Read> BrotliCompressorReader<T> {
     }
 }
 
-impl<T: Read> Read for BrotliCompressorReader<T> {
+impl<T: Read> Read for CompressorReader<T> {
     /// Fills `buf` with the next compressed bytes.
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         if buf.is_empty() {

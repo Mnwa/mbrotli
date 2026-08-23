@@ -5,8 +5,8 @@ mod support;
 
 use mbrotli::Brotli;
 use mbrotli::compressor::{
-    BrotliCompressError, BrotliCompressParams, BrotliCompressor, BrotliQualityLevel,
-    BrotliWindowBits, ParseQualityLevelError, ParseWindowBitsError,
+    BrotliCompressError, CompressParams, Compressor, ParseQualityLevelError, ParseWindowBitsError,
+    QualityLevel, WindowBits,
 };
 use std::io::{Read, Write};
 use support::{FAST_QUALITIES, c_decompress, params};
@@ -14,11 +14,11 @@ use support::{FAST_QUALITIES, c_decompress, params};
 #[test]
 fn a_compressor_can_be_built_from_a_level_or_from_brotli() {
     let level = fearless_simd::Level::new();
-    let from_level = BrotliCompressor::from(level);
-    let from_brotli = BrotliCompressor::from(Brotli::from(level));
+    let from_level = Compressor::from(level);
+    let from_brotli = Compressor::from(Brotli::from(level));
     let from_entry = Brotli::from(level).compressor();
 
-    let parameters = params(BrotliQualityLevel::Q0, 22);
+    let parameters = params(QualityLevel::Q0, 22);
     let expected = from_level
         .compress(parameters, b"identical output please")
         .expect("compression failed");
@@ -32,24 +32,24 @@ fn a_compressor_can_be_built_from_a_level_or_from_brotli() {
 
 #[test]
 fn parameters_report_what_they_were_built_with() {
-    let parameters = BrotliCompressParams::new(BrotliQualityLevel::Q1, BrotliWindowBits::MIN);
+    let parameters = CompressParams::new(QualityLevel::Q1, WindowBits::MIN);
     assert_eq!(usize::from(parameters.quality()), 1);
-    assert_eq!(parameters.lgwin(), BrotliWindowBits::MIN);
-    assert_eq!(BrotliWindowBits::default(), BrotliWindowBits::DEFAULT);
+    assert_eq!(parameters.lgwin(), WindowBits::MIN);
+    assert_eq!(WindowBits::default(), WindowBits::DEFAULT);
 }
 
 #[test]
 fn quality_levels_round_trip_through_their_numeric_value() {
     for value in [0usize, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11] {
-        let quality = BrotliQualityLevel::try_from(value).expect("valid quality");
+        let quality = QualityLevel::try_from(value).expect("valid quality");
         assert_eq!(usize::from(quality), value);
     }
     assert!(matches!(
-        BrotliQualityLevel::try_from(10),
+        QualityLevel::try_from(10),
         Err(ParseQualityLevelError::Unrepresentable)
     ));
     assert!(matches!(
-        BrotliQualityLevel::try_from(12),
+        QualityLevel::try_from(12),
         Err(ParseQualityLevelError::UpperBound)
     ));
 }
@@ -108,7 +108,7 @@ fn encoder_errors_travel_through_the_io_error_conversion() {
 #[test]
 fn the_bound_rejects_arithmetic_that_cannot_fit() {
     let compressor = Brotli::default().compressor();
-    let parameters = params(BrotliQualityLevel::Q0, 10);
+    let parameters = params(QualityLevel::Q0, 10);
     assert!(compressor.calculate_bound(&parameters, 4096).is_ok());
     assert!(matches!(
         compressor.calculate_bound(&parameters, usize::MAX),
@@ -157,7 +157,7 @@ fn the_slice_entry_point_reports_a_buffer_that_is_one_byte_short() {
 #[test]
 fn unsupported_qualities_are_reported_by_every_entry_point() {
     let compressor = Brotli::default().compressor();
-    let parameters = params(BrotliQualityLevel::Q9, 22);
+    let parameters = params(QualityLevel::Q9, 22);
     let mut buffer = [0u8; 64];
 
     assert!(matches!(
@@ -180,7 +180,7 @@ fn unsupported_qualities_are_reported_by_every_entry_point() {
 #[test]
 fn the_streaming_adapters_expose_their_inner_stream() {
     let compressor = Brotli::default().compressor();
-    let parameters = params(BrotliQualityLevel::Q0, 22);
+    let parameters = params(QualityLevel::Q0, 22);
 
     let mut sink = compressor.compress_writer(parameters, Vec::new());
     assert!(sink.get_ref().is_empty());
@@ -199,7 +199,7 @@ fn the_streaming_adapters_expose_their_inner_stream() {
 #[test]
 fn a_reader_yields_nothing_for_a_zero_length_buffer() {
     let compressor = Brotli::default().compressor();
-    let parameters = params(BrotliQualityLevel::Q1, 22);
+    let parameters = params(QualityLevel::Q1, 22);
     let mut source = compressor.compress_reader(parameters, &b"payload"[..]);
     let mut empty: [u8; 0] = [];
     assert_eq!(source.read(&mut empty).expect("read failed"), 0);
@@ -208,7 +208,7 @@ fn a_reader_yields_nothing_for_a_zero_length_buffer() {
 #[test]
 fn the_default_entry_point_uses_a_detected_level() {
     let brotli = Brotli::default();
-    let parameters = params(BrotliQualityLevel::Q0, 22);
+    let parameters = params(QualityLevel::Q0, 22);
     let compressed = brotli
         .compressor()
         .compress(parameters, b"detected level output")

@@ -1,6 +1,6 @@
 //! Streaming compression into a [`Write`] sink.
 
-use crate::compressor::BrotliCompressParams;
+use crate::compressor::CompressParams;
 use crate::compressor::core::fast::FastEncoder;
 use fearless_simd::Level;
 use std::io::{Error, Result, Write};
@@ -8,7 +8,7 @@ use std::io::{Error, Result, Write};
 /// Adapter that compresses everything written to it into an inner writer.
 ///
 /// Input is buffered until a whole fragment is available, so the compressed
-/// stream is only complete after [`BrotliCompressorWriter::finish`]. Dropping
+/// stream is only complete after [`CompressorWriter::finish`]. Dropping
 /// the adapter without finishing discards the buffered tail; [`Write::flush`]
 /// only flushes the inner writer, because a fragment boundary does not
 /// necessarily fall on a byte boundary.
@@ -17,11 +17,11 @@ use std::io::{Error, Result, Write};
 ///
 /// ```
 /// use mbrotli::Brotli;
-/// use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+/// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
 /// use std::io::Write;
 ///
 /// let compressor = Brotli::default().compressor();
-/// let params = BrotliCompressParams::new(BrotliQualityLevel::Q0, BrotliWindowBits::DEFAULT);
+/// let params = CompressParams::new(QualityLevel::Q0, WindowBits::DEFAULT);
 ///
 /// let mut sink = compressor.compress_writer(params, Vec::new());
 /// sink.write_all(b"chunk one ")?;
@@ -31,17 +31,17 @@ use std::io::{Error, Result, Write};
 /// assert_eq!(compressed, compressor.compress(params, b"chunk one chunk two ")?);
 /// # Ok::<(), std::io::Error>(())
 /// ```
-pub struct BrotliCompressorWriter<T: Write> {
+pub struct CompressorWriter<T: Write> {
     pub(crate) writer: T,
     pub(crate) level: Level,
-    pub(crate) params: BrotliCompressParams,
+    pub(crate) params: CompressParams,
     pub(crate) encoder: Option<FastEncoder>,
     pub(crate) pending: Vec<u8>,
 }
 
-impl<T: Write> BrotliCompressorWriter<T> {
+impl<T: Write> CompressorWriter<T> {
     /// Creates an adapter writing compressed data into `writer`.
-    pub(crate) const fn new(writer: T, level: Level, params: BrotliCompressParams) -> Self {
+    pub(crate) const fn new(writer: T, level: Level, params: CompressParams) -> Self {
         Self {
             writer,
             level,
@@ -57,10 +57,10 @@ impl<T: Write> BrotliCompressorWriter<T> {
     ///
     /// ```
     /// use mbrotli::Brotli;
-    /// use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+    /// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
     ///
     /// let compressor = Brotli::default().compressor();
-    /// let params = BrotliCompressParams::new(BrotliQualityLevel::Q0, BrotliWindowBits::DEFAULT);
+    /// let params = CompressParams::new(QualityLevel::Q0, WindowBits::DEFAULT);
     /// let sink = compressor.compress_writer(params, Vec::new());
     ///
     /// assert!(sink.get_ref().is_empty());
@@ -118,7 +118,7 @@ impl<T: Write> BrotliCompressorWriter<T> {
     }
 }
 
-impl<T: Write> Write for BrotliCompressorWriter<T> {
+impl<T: Write> Write for CompressorWriter<T> {
     /// Buffers `buf` and compresses every whole fragment it completes.
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         let limit = self.encoder()?.block_size_limit();

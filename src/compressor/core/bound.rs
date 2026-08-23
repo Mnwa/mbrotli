@@ -1,7 +1,7 @@
 //! Upper bound on the size of a compressed stream.
 
 use crate::compressor::core::fast::constants::{OUTPUT_RESERVE_CONST, OUTPUT_SLACK};
-use crate::compressor::{BrotliCompressError, BrotliCompressParams, BrotliResult};
+use crate::compressor::{BrotliCompressError, BrotliResult, CompressParams};
 
 /// Returns an upper bound on the compressed size of `input_size` bytes.
 ///
@@ -17,7 +17,7 @@ use crate::compressor::{BrotliCompressError, BrotliCompressParams, BrotliResult}
 /// Returns [`BrotliCompressError::BoundOverflow`] when that arithmetic does not
 /// fit in a `usize`, rather than wrapping or saturating into a bound that no
 /// longer bounds anything.
-pub(crate) const fn bound(params: &BrotliCompressParams, input_size: usize) -> BrotliResult<usize> {
+pub(crate) const fn bound(params: &CompressParams, input_size: usize) -> BrotliResult<usize> {
     let fragment = 1usize << params.lgwin.0;
     let fragments = if input_size == 0 {
         1
@@ -43,12 +43,12 @@ pub(crate) const fn bound(params: &BrotliCompressParams, input_size: usize) -> B
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compressor::{BrotliQualityLevel, BrotliWindowBits, ParseWindowBitsError};
+    use crate::compressor::{ParseWindowBitsError, QualityLevel, WindowBits};
 
-    fn params(lgwin: usize) -> Result<BrotliCompressParams, ParseWindowBitsError> {
-        Ok(BrotliCompressParams::new(
-            BrotliQualityLevel::Q0,
-            BrotliWindowBits::try_from(lgwin)?,
+    fn params(lgwin: usize) -> Result<CompressParams, ParseWindowBitsError> {
+        Ok(CompressParams::new(
+            QualityLevel::Q0,
+            WindowBits::try_from(lgwin)?,
         ))
     }
 

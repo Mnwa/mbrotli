@@ -15,6 +15,10 @@ fn main() {
             .compress(case.params, case.data)
             .expect("compression failed");
         assert_eq!(actual, expected, "the Rust and C encoders disagree");
-        assert!(FAST_QUALITIES.iter().any(|&q| usize::from(q) == quality as usize));
+        assert!(
+            FAST_QUALITIES
+                .iter()
+                .any(|&q| usize::from(q) == quality as usize)
+        );
     });
 }

@@ -1,7 +1,7 @@
 //! Public compression API.
 //!
-//! [`BrotliCompressor`] pairs a resolved SIMD level with per-call
-//! [`BrotliCompressParams`] and exposes one-shot and streaming entry points.
+//! [`Compressor`] pairs a resolved SIMD level with per-call
+//! [`CompressParams`] and exposes one-shot and streaming entry points.
 //! The algorithms themselves live in the private `core` tree.
 
 mod core;
@@ -9,18 +9,18 @@ pub mod reader;
 pub mod writer;
 
 use crate::Brotli;
-use crate::compressor::reader::BrotliCompressorReader;
-use crate::compressor::writer::BrotliCompressorWriter;
+use crate::compressor::reader::CompressorReader;
+use crate::compressor::writer::CompressorWriter;
 use fearless_simd::Level;
 use std::io::{Read, Write};
 use thiserror::Error;
 
 #[derive(Copy, Clone, Debug)]
-pub struct BrotliCompressor {
+pub struct Compressor {
     level: Level,
 }
 
-impl BrotliCompressor {
+impl Compressor {
     /// Returns an upper bound on the compressed size of `input_size` bytes.
     ///
     /// # Errors
@@ -32,10 +32,10 @@ impl BrotliCompressor {
     ///
     /// ```
     /// use mbrotli::Brotli;
-    /// use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+    /// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
     ///
     /// let compressor = Brotli::default().compressor();
-    /// let params = BrotliCompressParams::new(BrotliQualityLevel::Q0, BrotliWindowBits::DEFAULT);
+    /// let params = CompressParams::new(QualityLevel::Q0, WindowBits::DEFAULT);
     ///
     /// assert!(compressor.calculate_bound(&params, 4096)? >= 4096);
     /// assert!(compressor.calculate_bound(&params, usize::MAX).is_err());
@@ -43,7 +43,7 @@ impl BrotliCompressor {
     /// ```
     pub const fn calculate_bound(
         &self,
-        params: &BrotliCompressParams,
+        params: &CompressParams,
         input_size: usize,
     ) -> BrotliResult<usize> {
         core::bound::bound(params, input_size)
@@ -60,16 +60,16 @@ impl BrotliCompressor {
     ///
     /// ```
     /// use mbrotli::Brotli;
-    /// use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+    /// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
     ///
     /// let compressor = Brotli::default().compressor();
-    /// let params = BrotliCompressParams::new(BrotliQualityLevel::Q1, BrotliWindowBits::DEFAULT);
+    /// let params = CompressParams::new(QualityLevel::Q1, WindowBits::DEFAULT);
     /// let compressed = compressor.compress(params, b"hello hello hello hello")?;
     ///
     /// assert!(!compressed.is_empty());
     /// # Ok::<(), mbrotli::compressor::BrotliCompressError>(())
     /// ```
-    pub fn compress(&self, params: BrotliCompressParams, src: &[u8]) -> BrotliResult<Vec<u8>> {
+    pub fn compress(&self, params: CompressParams, src: &[u8]) -> BrotliResult<Vec<u8>> {
         let mut output = Vec::with_capacity(self.calculate_bound(&params, src.len())?);
         core::fast::compress_to_vec(self.level, &params, src, &mut output)?;
         Ok(output)
@@ -77,7 +77,7 @@ impl BrotliCompressor {
 
     /// Compresses `src` into `dst` and returns the number of bytes written.
     ///
-    /// Size `dst` with [`BrotliCompressor::calculate_bound`]; a shorter buffer
+    /// Size `dst` with [`Compressor::calculate_bound`]; a shorter buffer
     /// is reported rather than truncated.
     ///
     /// # Errors
@@ -90,10 +90,10 @@ impl BrotliCompressor {
     ///
     /// ```
     /// use mbrotli::Brotli;
-    /// use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+    /// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
     ///
     /// let compressor = Brotli::default().compressor();
-    /// let params = BrotliCompressParams::new(BrotliQualityLevel::Q0, BrotliWindowBits::DEFAULT);
+    /// let params = CompressParams::new(QualityLevel::Q0, WindowBits::DEFAULT);
     /// let mut buffer = vec![0u8; compressor.calculate_bound(&params, 5)?];
     /// let written = compressor.compress_to_slice(params, b"aaaaa", &mut buffer)?;
     ///
@@ -102,7 +102,7 @@ impl BrotliCompressor {
     /// ```
     pub fn compress_to_slice(
         &self,
-        params: BrotliCompressParams,
+        params: CompressParams,
         src: &[u8],
         dst: &mut [u8],
     ) -> BrotliResult<usize> {
@@ -112,18 +112,18 @@ impl BrotliCompressor {
     /// Wraps `writer` in an adapter that compresses everything written to it.
     ///
     /// The stream is only terminated by
-    /// [`BrotliCompressorWriter::finish`]; dropping the adapter discards any
+    /// [`CompressorWriter::finish`]; dropping the adapter discards any
     /// buffered input.
     ///
     /// # Examples
     ///
     /// ```
     /// use mbrotli::Brotli;
-    /// use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+    /// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
     /// use std::io::Write;
     ///
     /// let compressor = Brotli::default().compressor();
-    /// let params = BrotliCompressParams::new(BrotliQualityLevel::Q0, BrotliWindowBits::DEFAULT);
+    /// let params = CompressParams::new(QualityLevel::Q0, WindowBits::DEFAULT);
     /// let mut sink = compressor.compress_writer(params, Vec::new());
     /// sink.write_all(b"streamed payload")?;
     /// let compressed = sink.finish()?;
@@ -133,10 +133,10 @@ impl BrotliCompressor {
     /// ```
     pub fn compress_writer<T: Write>(
         &self,
-        params: BrotliCompressParams,
+        params: CompressParams,
         writer: T,
-    ) -> BrotliCompressorWriter<T> {
-        BrotliCompressorWriter::new(writer, self.level, params)
+    ) -> CompressorWriter<T> {
+        CompressorWriter::new(writer, self.level, params)
     }
 
     /// Wraps `reader` in an adapter that yields the compressed stream.
@@ -145,11 +145,11 @@ impl BrotliCompressor {
     ///
     /// ```
     /// use mbrotli::Brotli;
-    /// use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+    /// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
     /// use std::io::Read;
     ///
     /// let compressor = Brotli::default().compressor();
-    /// let params = BrotliCompressParams::new(BrotliQualityLevel::Q1, BrotliWindowBits::DEFAULT);
+    /// let params = CompressParams::new(QualityLevel::Q1, WindowBits::DEFAULT);
     /// let mut source = compressor.compress_reader(params, &b"streamed payload"[..]);
     /// let mut compressed = Vec::new();
     /// source.read_to_end(&mut compressed)?;
@@ -159,44 +159,44 @@ impl BrotliCompressor {
     /// ```
     pub fn compress_reader<T: Read>(
         &self,
-        params: BrotliCompressParams,
+        params: CompressParams,
         reader: T,
-    ) -> BrotliCompressorReader<T> {
-        BrotliCompressorReader::new(reader, self.level, params)
+    ) -> CompressorReader<T> {
+        CompressorReader::new(reader, self.level, params)
     }
 }
 
-impl From<Level> for BrotliCompressor {
+impl From<Level> for Compressor {
     fn from(value: Level) -> Self {
         Self { level: value }
     }
 }
 
-impl From<Brotli> for BrotliCompressor {
+impl From<Brotli> for Compressor {
     fn from(value: Brotli) -> Self {
         Self::from(value.level)
     }
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct BrotliCompressParams {
-    quality: BrotliQualityLevel,
-    lgwin: BrotliWindowBits,
+pub struct CompressParams {
+    quality: QualityLevel,
+    lgwin: WindowBits,
 }
 
-impl BrotliCompressParams {
+impl CompressParams {
     /// Creates compression parameters from a quality level and a window size.
     ///
     /// # Examples
     ///
     /// ```
-    /// use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+    /// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
     ///
-    /// let params = BrotliCompressParams::new(BrotliQualityLevel::Q0, BrotliWindowBits::DEFAULT);
+    /// let params = CompressParams::new(QualityLevel::Q0, WindowBits::DEFAULT);
     ///
-    /// assert_eq!(params.lgwin(), BrotliWindowBits::DEFAULT);
+    /// assert_eq!(params.lgwin(), WindowBits::DEFAULT);
     /// ```
-    pub const fn new(quality: BrotliQualityLevel, lgwin: BrotliWindowBits) -> Self {
+    pub const fn new(quality: QualityLevel, lgwin: WindowBits) -> Self {
         Self { quality, lgwin }
     }
 
@@ -205,13 +205,13 @@ impl BrotliCompressParams {
     /// # Examples
     ///
     /// ```
-    /// use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+    /// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
     ///
-    /// let params = BrotliCompressParams::new(BrotliQualityLevel::Q1, BrotliWindowBits::DEFAULT);
+    /// let params = CompressParams::new(QualityLevel::Q1, WindowBits::DEFAULT);
     ///
     /// assert_eq!(usize::from(params.quality()), 1);
     /// ```
-    pub const fn quality(&self) -> BrotliQualityLevel {
+    pub const fn quality(&self) -> QualityLevel {
         self.quality
     }
 
@@ -220,15 +220,15 @@ impl BrotliCompressParams {
     /// # Examples
     ///
     /// ```
-    /// use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+    /// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
     ///
-    /// let lgwin = BrotliWindowBits::try_from(18)?;
-    /// let params = BrotliCompressParams::new(BrotliQualityLevel::Q1, lgwin);
+    /// let lgwin = WindowBits::try_from(18)?;
+    /// let params = CompressParams::new(QualityLevel::Q1, lgwin);
     ///
     /// assert_eq!(usize::from(params.lgwin()), 18);
     /// # Ok::<(), mbrotli::compressor::ParseWindowBitsError>(())
     /// ```
-    pub const fn lgwin(&self) -> BrotliWindowBits {
+    pub const fn lgwin(&self) -> WindowBits {
         self.lgwin
     }
 }
@@ -236,25 +236,25 @@ impl BrotliCompressParams {
 /// Base-2 logarithm of the Brotli sliding window size.
 ///
 /// The Brotli format restricts this value to the inclusive range
-/// `10..=24`; every way of building a `BrotliWindowBits` enforces that range,
+/// `10..=24`; every way of building a `WindowBits` enforces that range,
 /// so a value of this type is always usable as a window size.
 ///
 /// # Examples
 ///
 /// ```
-/// use mbrotli::compressor::BrotliWindowBits;
+/// use mbrotli::compressor::WindowBits;
 ///
-/// let lgwin = BrotliWindowBits::try_from(16)?;
+/// let lgwin = WindowBits::try_from(16)?;
 ///
 /// assert_eq!(usize::from(lgwin), 16);
-/// assert!(BrotliWindowBits::try_from(9).is_err());
-/// assert!(BrotliWindowBits::try_from(25).is_err());
+/// assert!(WindowBits::try_from(9).is_err());
+/// assert!(WindowBits::try_from(25).is_err());
 /// # Ok::<(), mbrotli::compressor::ParseWindowBitsError>(())
 /// ```
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct BrotliWindowBits(usize);
+pub struct WindowBits(usize);
 
-impl BrotliWindowBits {
+impl WindowBits {
     /// Smallest window size allowed by the Brotli format: 2^10 bytes.
     pub const MIN: Self = Self(10);
 
@@ -265,22 +265,22 @@ impl BrotliWindowBits {
     pub const DEFAULT: Self = Self(22);
 }
 
-impl Default for BrotliWindowBits {
-    /// Returns [`BrotliWindowBits::DEFAULT`].
+impl Default for WindowBits {
+    /// Returns [`WindowBits::DEFAULT`].
     ///
     /// # Examples
     ///
     /// ```
-    /// use mbrotli::compressor::BrotliWindowBits;
+    /// use mbrotli::compressor::WindowBits;
     ///
-    /// assert_eq!(BrotliWindowBits::default(), BrotliWindowBits::DEFAULT);
+    /// assert_eq!(WindowBits::default(), WindowBits::DEFAULT);
     /// ```
     fn default() -> Self {
         Self::DEFAULT
     }
 }
 
-impl TryFrom<usize> for BrotliWindowBits {
+impl TryFrom<usize> for WindowBits {
     type Error = ParseWindowBitsError;
 
     /// Creates a window size from its base-2 logarithm.
@@ -288,22 +288,22 @@ impl TryFrom<usize> for BrotliWindowBits {
     /// # Errors
     ///
     /// Returns [`ParseWindowBitsError::LowerBound`] when `value` is below
-    /// [`BrotliWindowBits::MIN`] and [`ParseWindowBitsError::UpperBound`] when
-    /// it is above [`BrotliWindowBits::MAX`].
+    /// [`WindowBits::MIN`] and [`ParseWindowBitsError::UpperBound`] when
+    /// it is above [`WindowBits::MAX`].
     ///
     /// # Examples
     ///
     /// ```
-    /// use mbrotli::compressor::{BrotliWindowBits, ParseWindowBitsError};
+    /// use mbrotli::compressor::{WindowBits, ParseWindowBitsError};
     ///
-    /// assert_eq!(BrotliWindowBits::try_from(10)?, BrotliWindowBits::MIN);
-    /// assert_eq!(BrotliWindowBits::try_from(24)?, BrotliWindowBits::MAX);
+    /// assert_eq!(WindowBits::try_from(10)?, WindowBits::MIN);
+    /// assert_eq!(WindowBits::try_from(24)?, WindowBits::MAX);
     /// assert!(matches!(
-    ///     BrotliWindowBits::try_from(9),
+    ///     WindowBits::try_from(9),
     ///     Err(ParseWindowBitsError::LowerBound)
     /// ));
     /// assert!(matches!(
-    ///     BrotliWindowBits::try_from(25),
+    ///     WindowBits::try_from(25),
     ///     Err(ParseWindowBitsError::UpperBound)
     /// ));
     /// # Ok::<(), ParseWindowBitsError>(())
@@ -319,19 +319,19 @@ impl TryFrom<usize> for BrotliWindowBits {
     }
 }
 
-impl From<BrotliWindowBits> for usize {
+impl From<WindowBits> for usize {
     /// Returns the base-2 logarithm of the window size.
     ///
     /// # Examples
     ///
     /// ```
-    /// use mbrotli::compressor::BrotliWindowBits;
+    /// use mbrotli::compressor::WindowBits;
     ///
-    /// assert_eq!(usize::from(BrotliWindowBits::MIN), 10);
-    /// assert_eq!(usize::from(BrotliWindowBits::MAX), 24);
-    /// assert_eq!(usize::from(BrotliWindowBits::DEFAULT), 22);
+    /// assert_eq!(usize::from(WindowBits::MIN), 10);
+    /// assert_eq!(usize::from(WindowBits::MAX), 24);
+    /// assert_eq!(usize::from(WindowBits::DEFAULT), 22);
     /// ```
-    fn from(value: BrotliWindowBits) -> Self {
+    fn from(value: WindowBits) -> Self {
         value.0
     }
 }
@@ -348,7 +348,7 @@ pub enum ParseWindowBitsError {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub enum BrotliQualityLevel {
+pub enum QualityLevel {
     Q0,
     Q1,
     Q2,
@@ -362,35 +362,35 @@ pub enum BrotliQualityLevel {
     Q11,
 }
 
-impl From<BrotliQualityLevel> for usize {
+impl From<QualityLevel> for usize {
     /// Returns the numeric quality understood by the Brotli format.
     ///
     /// # Examples
     ///
     /// ```
-    /// use mbrotli::compressor::BrotliQualityLevel;
+    /// use mbrotli::compressor::QualityLevel;
     ///
-    /// assert_eq!(usize::from(BrotliQualityLevel::Q0), 0);
-    /// assert_eq!(usize::from(BrotliQualityLevel::Q11), 11);
+    /// assert_eq!(usize::from(QualityLevel::Q0), 0);
+    /// assert_eq!(usize::from(QualityLevel::Q11), 11);
     /// ```
-    fn from(value: BrotliQualityLevel) -> Self {
+    fn from(value: QualityLevel) -> Self {
         match value {
-            BrotliQualityLevel::Q0 => 0,
-            BrotliQualityLevel::Q1 => 1,
-            BrotliQualityLevel::Q2 => 2,
-            BrotliQualityLevel::Q3 => 3,
-            BrotliQualityLevel::Q4 => 4,
-            BrotliQualityLevel::Q5 => 5,
-            BrotliQualityLevel::Q6 => 6,
-            BrotliQualityLevel::Q7 => 7,
-            BrotliQualityLevel::Q8 => 8,
-            BrotliQualityLevel::Q9 => 9,
-            BrotliQualityLevel::Q11 => 11,
+            QualityLevel::Q0 => 0,
+            QualityLevel::Q1 => 1,
+            QualityLevel::Q2 => 2,
+            QualityLevel::Q3 => 3,
+            QualityLevel::Q4 => 4,
+            QualityLevel::Q5 => 5,
+            QualityLevel::Q6 => 6,
+            QualityLevel::Q7 => 7,
+            QualityLevel::Q8 => 8,
+            QualityLevel::Q9 => 9,
+            QualityLevel::Q11 => 11,
         }
     }
 }
 
-impl TryFrom<usize> for BrotliQualityLevel {
+impl TryFrom<usize> for QualityLevel {
     type Error = ParseQualityLevelError;
 
     /// Creates a quality level from its numeric value.
@@ -404,16 +404,16 @@ impl TryFrom<usize> for BrotliQualityLevel {
     /// # Examples
     ///
     /// ```
-    /// use mbrotli::compressor::{BrotliQualityLevel, ParseQualityLevelError};
+    /// use mbrotli::compressor::{QualityLevel, ParseQualityLevelError};
     ///
-    /// assert_eq!(usize::from(BrotliQualityLevel::try_from(0)?), 0);
-    /// assert_eq!(usize::from(BrotliQualityLevel::try_from(11)?), 11);
+    /// assert_eq!(usize::from(QualityLevel::try_from(0)?), 0);
+    /// assert_eq!(usize::from(QualityLevel::try_from(11)?), 11);
     /// assert!(matches!(
-    ///     BrotliQualityLevel::try_from(12),
+    ///     QualityLevel::try_from(12),
     ///     Err(ParseQualityLevelError::UpperBound)
     /// ));
     /// assert!(matches!(
-    ///     BrotliQualityLevel::try_from(10),
+    ///     QualityLevel::try_from(10),
     ///     Err(ParseQualityLevelError::Unrepresentable)
     /// ));
     /// # Ok::<(), ParseQualityLevelError>(())

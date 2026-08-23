@@ -6,17 +6,16 @@
 
 use fearless_simd::Level;
 use google_brotli_ffi as ffi;
-use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
 use std::ffi::c_int;
 
 /// The two qualities the fast encoder implements.
-pub const FAST_QUALITIES: [BrotliQualityLevel; 2] =
-    [BrotliQualityLevel::Q0, BrotliQualityLevel::Q1];
+pub const FAST_QUALITIES: [QualityLevel; 2] = [QualityLevel::Q0, QualityLevel::Q1];
 
 /// Parameters and payload decoded from one fuzz input.
 pub struct Case<'a> {
     /// Encoder parameters.
-    pub params: BrotliCompressParams,
+    pub params: CompressParams,
     /// Chunk size for the streaming targets, always at least one.
     pub chunk: usize,
     /// The bytes to compress.
@@ -31,10 +30,10 @@ pub fn decode_case(input: &[u8]) -> Case<'_> {
     let (header, data) = input.split_at(input.len().min(3));
     let quality = FAST_QUALITIES[usize::from(header.first().copied().unwrap_or(0)) % 2];
     let lgwin_index = usize::from(header.get(1).copied().unwrap_or(12)) % 15;
-    let lgwin = BrotliWindowBits::try_from(10 + lgwin_index).unwrap_or(BrotliWindowBits::DEFAULT);
+    let lgwin = WindowBits::try_from(10 + lgwin_index).unwrap_or(WindowBits::DEFAULT);
     let chunk = 1usize << (usize::from(header.get(2).copied().unwrap_or(12)) % 18);
     Case {
-        params: BrotliCompressParams::new(quality, lgwin),
+        params: CompressParams::new(quality, lgwin),
         chunk,
         data,
     }

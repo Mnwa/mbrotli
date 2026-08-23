@@ -8,12 +8,12 @@
 //! ```
 
 use mbrotli::Brotli;
-use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
 use std::io::{Read, Write};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let compressor = Brotli::default().compressor();
-    let params = BrotliCompressParams::new(BrotliQualityLevel::Q1, BrotliWindowBits::DEFAULT);
+    let params = CompressParams::new(QualityLevel::Q1, WindowBits::DEFAULT);
     let payload = "brotli ".repeat(1000);
 
     // One shot, into a freshly allocated buffer.

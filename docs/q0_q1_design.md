@@ -11,7 +11,7 @@ Reference: Google Brotli v1.2.0, commit `028fb5a`, MIT licence, vendored at
 
 ```mermaid
 graph TD
-    api["BrotliCompressor<br/>(public)"]
+    api["Compressor<br/>(public)"]
     enc["FastEncoder<br/>(private, owns every buffer)"]
     disp["dispatch!(level, simd => ...)"]
     q0["q0: one pass"]
@@ -77,7 +77,7 @@ pages, while a resize would memset a region the encoder overwrites immediately.
 
 ### 3.1. Writing in place
 
-A destination sized with `BrotliCompressor::calculate_bound` always has room
+A destination sized with `Compressor::calculate_bound` always has room
 for a whole fragment's reservation, so `compress` and `compress_to_slice`
 encode straight into it and never copy the compressed stream. That is what the
 bound counts the bit writer's eight byte headroom **per fragment** for. The

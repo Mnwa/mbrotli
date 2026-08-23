@@ -23,9 +23,9 @@ unimplemented.
 graph TD
     subgraph public["Public API"]
         lib["mbrotli<br/>(Brotli, SIMD level entry point)"]
-        comp["compressor<br/>(BrotliCompressor, params, errors)"]
-        reader["compressor::reader<br/>(BrotliCompressorReader: Read)"]
-        writer["compressor::writer<br/>(BrotliCompressorWriter: Write)"]
+        comp["compressor<br/>(Compressor, params, errors)"]
+        reader["compressor::reader<br/>(CompressorReader: Read)"]
+        writer["compressor::writer<br/>(CompressorWriter: Write)"]
     end
 
     subgraph private["Private implementation"]

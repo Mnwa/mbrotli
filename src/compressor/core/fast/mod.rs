@@ -28,9 +28,7 @@ use self::bits::BitWriter;
 use self::constants::{OUTPUT_RESERVE_CONST, OUTPUT_SLACK, WINDOW_BITS_FAST};
 use self::q1::TwoPassState;
 use self::workspace::OnePassArena;
-use crate::compressor::{
-    BrotliCompressError, BrotliCompressParams, BrotliQualityLevel, BrotliResult,
-};
+use crate::compressor::{BrotliCompressError, BrotliResult, CompressParams, QualityLevel};
 
 /// The two qualities this encoder implements.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -41,7 +39,7 @@ pub(crate) enum FastQuality {
     Q1,
 }
 
-impl TryFrom<BrotliQualityLevel> for FastQuality {
+impl TryFrom<QualityLevel> for FastQuality {
     type Error = BrotliCompressError;
 
     /// Routes quality 0 and 1 to the fast path.
@@ -50,10 +48,10 @@ impl TryFrom<BrotliQualityLevel> for FastQuality {
     ///
     /// Returns [`BrotliCompressError::UnsupportedQuality`] for every other
     /// quality, which has no implementation yet.
-    fn try_from(value: BrotliQualityLevel) -> Result<Self, Self::Error> {
+    fn try_from(value: QualityLevel) -> Result<Self, Self::Error> {
         match value {
-            BrotliQualityLevel::Q0 => Ok(Self::Q0),
-            BrotliQualityLevel::Q1 => Ok(Self::Q1),
+            QualityLevel::Q0 => Ok(Self::Q0),
+            QualityLevel::Q1 => Ok(Self::Q1),
             other => Err(BrotliCompressError::UnsupportedQuality(usize::from(other))),
         }
     }
@@ -163,7 +161,7 @@ impl FastEncoder {
     ///
     /// Returns [`BrotliCompressError::UnsupportedQuality`] when the quality is
     /// outside the range this encoder implements.
-    pub(crate) fn new(level: Level, params: &BrotliCompressParams) -> BrotliResult<Self> {
+    pub(crate) fn new(level: Level, params: &CompressParams) -> BrotliResult<Self> {
         let quality = FastQuality::try_from(params.quality())?;
         let lgwin = usize::from(params.lgwin());
         // The reference fast path always advertises at least eighteen window
@@ -329,7 +327,7 @@ impl FastEncoder {
 /// copied, so a caller-sized buffer still works when it is merely tight.
 fn drive_into(
     level: Level,
-    params: &BrotliCompressParams,
+    params: &CompressParams,
     src: &[u8],
     dst: &mut [u8],
 ) -> BrotliResult<usize> {
@@ -417,7 +415,7 @@ fn make_uncompressed_stream(src: &[u8], out: &mut Vec<u8>) {
 /// fast path does not implement.
 pub(crate) fn compress_to_vec(
     level: Level,
-    params: &BrotliCompressParams,
+    params: &CompressParams,
     src: &[u8],
     out: &mut Vec<u8>,
 ) -> BrotliResult<()> {
@@ -456,7 +454,7 @@ pub(crate) fn compress_to_vec(
 /// whole stream, and propagates quality routing errors.
 pub(crate) fn compress_to_slice(
     level: Level,
-    params: &BrotliCompressParams,
+    params: &CompressParams,
     src: &[u8],
     dst: &mut [u8],
 ) -> BrotliResult<usize> {
@@ -493,11 +491,11 @@ pub(crate) fn compress_to_slice(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compressor::BrotliWindowBits;
+    use crate::compressor::WindowBits;
 
-    fn params(quality: BrotliQualityLevel, lgwin: usize) -> BrotliCompressParams {
-        let lgwin = BrotliWindowBits::try_from(lgwin).unwrap_or(BrotliWindowBits::DEFAULT);
-        BrotliCompressParams::new(quality, lgwin)
+    fn params(quality: QualityLevel, lgwin: usize) -> CompressParams {
+        let lgwin = WindowBits::try_from(lgwin).unwrap_or(WindowBits::DEFAULT);
+        CompressParams::new(quality, lgwin)
     }
 
     #[test]
@@ -513,15 +511,15 @@ mod tests {
     #[test]
     fn quality_routing_accepts_only_the_fast_path() {
         assert_eq!(
-            FastQuality::try_from(BrotliQualityLevel::Q0).ok(),
+            FastQuality::try_from(QualityLevel::Q0).ok(),
             Some(FastQuality::Q0)
         );
         assert_eq!(
-            FastQuality::try_from(BrotliQualityLevel::Q1).ok(),
+            FastQuality::try_from(QualityLevel::Q1).ok(),
             Some(FastQuality::Q1)
         );
         assert!(matches!(
-            FastQuality::try_from(BrotliQualityLevel::Q5),
+            FastQuality::try_from(QualityLevel::Q5),
             Err(BrotliCompressError::UnsupportedQuality(5))
         ));
     }
@@ -530,8 +528,8 @@ mod tests {
     fn block_size_limit_follows_the_requested_window() -> Result<(), BrotliCompressError> {
         let level = Level::new();
         for lgwin in [10usize, 16, 18, 22, 24] {
-            let lgwin_bits = BrotliWindowBits::try_from(lgwin).unwrap_or(BrotliWindowBits::DEFAULT);
-            let params = BrotliCompressParams::new(BrotliQualityLevel::Q0, lgwin_bits);
+            let lgwin_bits = WindowBits::try_from(lgwin).unwrap_or(WindowBits::DEFAULT);
+            let params = CompressParams::new(QualityLevel::Q0, lgwin_bits);
             let encoder = FastEncoder::new(level, &params)?;
             assert_eq!(encoder.block_size_limit(), 1 << usize::from(lgwin_bits));
         }
@@ -555,7 +553,7 @@ mod tests {
     #[test]
     fn slice_output_reports_a_too_small_buffer() {
         let level = Level::new();
-        let params = params(BrotliQualityLevel::Q0, 22);
+        let params = params(QualityLevel::Q0, 22);
         let mut dst = [0u8; 1];
         assert!(matches!(
             compress_to_slice(level, &params, b"hello world hello world", &mut dst),
@@ -566,7 +564,7 @@ mod tests {
     #[test]
     fn vector_and_slice_outputs_agree() {
         let level = Level::new();
-        for quality in [BrotliQualityLevel::Q0, BrotliQualityLevel::Q1] {
+        for quality in [QualityLevel::Q0, QualityLevel::Q1] {
             let params = params(quality, 22);
             let input: Vec<u8> = (0..10_000u32).map(|i| (i % 251) as u8).collect();
             let mut expected = Vec::new();
@@ -582,7 +580,7 @@ mod tests {
     #[test]
     fn unsupported_qualities_are_rejected_before_any_output() {
         let level = Level::new();
-        let params = params(BrotliQualityLevel::Q11, 22);
+        let params = params(QualityLevel::Q11, 22);
         let mut out = Vec::new();
         assert!(matches!(
             compress_to_vec(level, &params, b"data", &mut out),

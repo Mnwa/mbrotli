@@ -11,8 +11,8 @@ The subsystem is a three-layer funnel:
 
 1. **Level layer** — `Brotli` resolves the SIMD instruction set once, at
    construction time, and carries it as a `Copy` value.
-2. **API layer** — `BrotliCompressor` pairs that level with per-call
-   `BrotliCompressParams` and exposes four entry points: bound calculation,
+2. **API layer** — `Compressor` pairs that level with per-call
+   `CompressParams` and exposes four entry points: bound calculation,
    one-shot to a `Vec`, one-shot into a caller slice, and the two streaming
    adapters.
 3. **Core layer** — private `compressor::core` modules own the algorithms:
@@ -30,12 +30,12 @@ runs. Nothing below the API layer re-detects features.
 graph LR
     detect["Level::try_detect()<br/>fallback: Level::baseline()"]
     brotli["Brotli { level }"]
-    compressor["BrotliCompressor { level }"]
-    params["BrotliCompressParams<br/>{ quality, lgwin }"]
+    compressor["Compressor { level }"]
+    params["CompressParams<br/>{ quality, lgwin }"]
 
     oneshot["compress / compress_to_slice"]
-    rd["BrotliCompressorReader<br/>{ reader, level, params, encoder }"]
-    wr["BrotliCompressorWriter<br/>{ writer, level, params, encoder }"]
+    rd["CompressorReader<br/>{ reader, level, params, encoder }"]
+    wr["CompressorWriter<br/>{ writer, level, params, encoder }"]
     bound["core::bound::bound(&params, input_size)"]
     fast["core::fast<br/>(FastEncoder, dispatch)"]
 
@@ -59,30 +59,30 @@ graph LR
 classDiagram
     class Brotli {
         -Level level
-        +compressor() BrotliCompressor
+        +compressor() Compressor
     }
-    class BrotliCompressor {
+    class Compressor {
         -Level level
         +calculate_bound(params, usize) BrotliResult~usize~
         +compress(params, src) BrotliResult~Vec~u8~~
         +compress_to_slice(params, src, dst) BrotliResult~usize~
-        +compress_writer(params, w) BrotliCompressorWriter
-        +compress_reader(params, r) BrotliCompressorReader
+        +compress_writer(params, w) CompressorWriter
+        +compress_reader(params, r) CompressorReader
     }
-    class BrotliCompressParams {
-        -BrotliQualityLevel quality
-        -BrotliWindowBits lgwin
+    class CompressParams {
+        -QualityLevel quality
+        -WindowBits lgwin
         +new(quality, lgwin)
-        +quality() BrotliQualityLevel
-        +lgwin() BrotliWindowBits
+        +quality() QualityLevel
+        +lgwin() WindowBits
     }
-    class BrotliWindowBits {
+    class WindowBits {
         <<newtype usize>>
         +MIN = 10
         +MAX = 24
         +DEFAULT = 22
     }
-    class BrotliQualityLevel {
+    class QualityLevel {
         <<enum Q0..Q9, Q11>>
     }
     class FastEncoder {
@@ -95,13 +95,13 @@ classDiagram
         +encode_block(input, is_last) BrotliResult~&[u8]~
     }
 
-    Brotli --> BrotliCompressor : From
-    BrotliCompressor --> BrotliCompressParams : uses
-    BrotliCompressParams *-- BrotliQualityLevel
-    BrotliCompressParams *-- BrotliWindowBits
-    BrotliCompressor ..> FastEncoder : drives
-    BrotliCompressorReader *-- FastEncoder
-    BrotliCompressorWriter *-- FastEncoder
+    Brotli --> Compressor : From
+    Compressor --> CompressParams : uses
+    CompressParams *-- QualityLevel
+    CompressParams *-- WindowBits
+    Compressor ..> FastEncoder : drives
+    CompressorReader *-- FastEncoder
+    CompressorWriter *-- FastEncoder
 ```
 
 ### 1.3. Parameter validation
@@ -109,10 +109,10 @@ classDiagram
 Both parameter types make the invalid state unrepresentable rather than
 validating at use:
 
-- `BrotliWindowBits` is only constructible through `TryFrom<usize>`, which
+- `WindowBits` is only constructible through `TryFrom<usize>`, which
   rejects anything outside `10..=24`, or through the `MIN` / `MAX` / `DEFAULT`
   associated constants.
-- `BrotliQualityLevel` is a closed enum. `TryFrom<usize>` rejects values above
+- `QualityLevel` is a closed enum. `TryFrom<usize>` rejects values above
   eleven and reports quality 10, which the enum does not model, as
   `ParseQualityLevelError::Unrepresentable`.
 
@@ -128,7 +128,7 @@ point, including its two special cases.
 ```mermaid
 sequenceDiagram
     participant Caller
-    participant API as BrotliCompressor
+    participant API as Compressor
     participant Fast as core::fast
     participant Enc as FastEncoder
 
@@ -180,7 +180,7 @@ The writer only emits a fragment once **more** than a whole fragment is
 buffered, so the final call always has data for the terminating meta-block.
 `Write::flush` flushes the inner writer without terminating the stream, because
 a fragment boundary need not fall on a byte boundary;
-`BrotliCompressorWriter::finish` writes the final meta-block and returns the
+`CompressorWriter::finish` writes the final meta-block and returns the
 inner writer.
 
 The reader keeps one byte more than a fragment buffered, which is what lets it
@@ -214,7 +214,7 @@ through `BufferOverflow`, which no correct input can reach.
 ```mermaid
 graph TD
     A["Brotli::default()"] -->|"Level::try_detect()"| B["Level stored by value"]
-    B --> C["BrotliCompressor { level }"]
+    B --> C["Compressor { level }"]
     C --> D["FastEncoder { level }"]
     D -->|"once per fragment"| E["dispatch!(level, simd => encode_fragment)"]
     E --> F["q0 / q1 scan, generic over S: Simd"]
@@ -254,13 +254,13 @@ graph LR
 ## Known gaps
 
 - **Qualities 2 through 11 are not implemented.** `compress` returns
-  `BrotliCompressError::UnsupportedQuality` for them. `BrotliQualityLevel` has
+  `BrotliCompressError::UnsupportedQuality` for them. `QualityLevel` has
   no `Q10` variant, and `TryFrom<usize>` reports 10 as unrepresentable.
 - **No decoder.** Round-trip verification uses Google's C decoder from the
   `google-brotli-ffi` workspace crate.
 - **No large-window support.** The fast path never sets the large-window bit,
   matching the reference, so `lgwin` above 24 is not representable.
 - **`Write::flush` does not terminate the stream.** Callers must use
-  `BrotliCompressorWriter::finish`; dropping the adapter discards buffered
+  `CompressorWriter::finish`; dropping the adapter discards buffered
   input.
 - **No `Send`/`Sync` guarantees are documented** beyond what the fields imply.

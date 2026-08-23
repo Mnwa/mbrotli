@@ -82,10 +82,10 @@ Notable consequences:
 
 - **Mode and size hint are not exposed.** The fast path ignores both in the
   reference too, so output is unaffected.
-- **Large window is not supported.** `BrotliWindowBits` stops at 24, and the
+- **Large window is not supported.** `WindowBits` stops at 24, and the
   fast path never sets the large-window bit — the reference disables it for
   quality ≤ 2 as well.
-- **Quality 10 is not representable.** `BrotliQualityLevel` has no `Q10`
+- **Quality 10 is not representable.** `QualityLevel` has no `Q10`
   variant; `TryFrom<usize>` reports it as
   `ParseQualityLevelError::Unrepresentable`.
 - **Streaming semantics differ from the one-shot API.** The one-shot entry

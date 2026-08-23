@@ -31,10 +31,10 @@ every corpus, on every run.
 
 ```rust
 use mbrotli::Brotli;
-use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
 
 let compressor = Brotli::default().compressor();
-let params = BrotliCompressParams::new(BrotliQualityLevel::Q1, BrotliWindowBits::DEFAULT);
+let params = CompressParams::new(QualityLevel::Q1, WindowBits::DEFAULT);
 
 let payload = "brotli ".repeat(1000);
 let compressed = compressor.compress(params, payload.as_bytes())?;
@@ -84,11 +84,11 @@ cargo run --example compress
 | Item | Role |
 | --- | --- |
 | `Brotli` | Entry point; resolves the SIMD level once |
-| `BrotliCompressor` | Compression entry points, bound to a level |
-| `BrotliCompressParams` | Quality and window size, `Copy` |
-| `BrotliQualityLevel` | Closed enum, `Q0`–`Q9` and `Q11` |
-| `BrotliWindowBits` | Validated newtype over `10..=24` |
-| `BrotliCompressorWriter` / `BrotliCompressorReader` | Streaming adapters |
+| `Compressor` | Compression entry points, bound to a level |
+| `CompressParams` | Quality and window size, `Copy` |
+| `QualityLevel` | Closed enum, `Q0`–`Q9` and `Q11` |
+| `WindowBits` | Validated newtype over `10..=24` |
+| `CompressorWriter` / `CompressorReader` | Streaming adapters |
 | `BrotliCompressError` | `#[non_exhaustive]` error type |
 
 Everything below that surface is private. No encoder internal, SIMD type or FFI

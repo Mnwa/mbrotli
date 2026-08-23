@@ -7,7 +7,7 @@
 #![allow(dead_code, reason = "each integration test uses a different subset")]
 
 use google_brotli_ffi as ffi;
-use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
 use std::ffi::c_int;
 
 /// Compresses `input` with the pinned C encoder.
@@ -56,7 +56,7 @@ pub fn c_decompress(input: &[u8], expected_size: usize) -> Option<Vec<u8>> {
 }
 
 /// Returns the numeric quality of a level, for the C side.
-pub fn quality_number(quality: BrotliQualityLevel) -> c_int {
+pub fn quality_number(quality: QualityLevel) -> c_int {
     usize::from(quality) as c_int
 }
 
@@ -65,14 +65,13 @@ pub fn quality_number(quality: BrotliQualityLevel) -> c_int {
 /// # Panics
 ///
 /// Panics when `lgwin` is outside the range the Brotli format allows.
-pub fn params(quality: BrotliQualityLevel, lgwin: usize) -> BrotliCompressParams {
-    let lgwin = BrotliWindowBits::try_from(lgwin).expect("window size out of range");
-    BrotliCompressParams::new(quality, lgwin)
+pub fn params(quality: QualityLevel, lgwin: usize) -> CompressParams {
+    let lgwin = WindowBits::try_from(lgwin).expect("window size out of range");
+    CompressParams::new(quality, lgwin)
 }
 
 /// The two qualities the fast encoder implements.
-pub const FAST_QUALITIES: [BrotliQualityLevel; 2] =
-    [BrotliQualityLevel::Q0, BrotliQualityLevel::Q1];
+pub const FAST_QUALITIES: [QualityLevel; 2] = [QualityLevel::Q0, QualityLevel::Q1];
 
 /// Deterministic xorshift generator, so corpora are reproducible.
 pub struct Rng(u64);
