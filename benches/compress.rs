@@ -6,20 +6,28 @@
 //! sides measure the same end-to-end shape: allocate an output buffer sized by
 //! the compressed-size bound, then compress the whole input in one shot.
 //!
-//! Corpora are generated deterministically at startup and validated before any
-//! timing: every compressed stream is decoded with the C decoder and compared
-//! with the original input, and the compressed sizes are printed so a speedup
-//! can be checked against the compression ratio it produced.
+//! Corpora are generated deterministically at startup, or read from Google
+//! Brotli's own test data in `brotli-ffi/vendor/brotli/tests/testdata`, and
+//! validated before any timing: every compressed stream is decoded with the C
+//! decoder and compared with the original input, and the compressed sizes are
+//! printed so a speedup can be checked against the compression ratio it
+//! produced.
 //!
-//! This crate's compressor is still unimplemented. Until it is, the benchmark
-//! probe below detects the panic, prints a notice, and registers only the C
-//! benchmarks; the comparison turns itself on as soon as the core lands.
+//! Two shapes are measured, as required by the acceptance gate:
+//!
+//! * `oneshot` — the full end-to-end API, including output allocation and
+//!   growth on both sides.
+//! * `presized` — the same work into a caller-owned buffer sized by the
+//!   compressed-size bound, so output allocation leaves the timed region.
+//!
+//! A separate `tiny` group measures per-call overhead, including the single
+//! runtime SIMD dispatch, on payloads where it dominates.
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mbrotli::Brotli;
 use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
 use std::hint::black_box;
-use std::panic::{self, AssertUnwindSafe};
+use std::path::Path;
 
 /// Sliding window size used by every benchmark.
 const LGWIN: BrotliWindowBits = BrotliWindowBits::DEFAULT;
@@ -109,35 +117,57 @@ mod c_brotli {
 
 /// A named benchmark input.
 struct Corpus {
-    name: &'static str,
+    name: String,
     data: Vec<u8>,
+}
+
+impl Corpus {
+    fn new(name: impl Into<String>, data: Vec<u8>) -> Self {
+        Self {
+            name: name.into(),
+            data,
+        }
+    }
 }
 
 /// Builds the deterministic corpora: text, binary, compressible,
 /// incompressible, small, and large inputs.
 fn corpora() -> Vec<Corpus> {
-    vec![
-        Corpus {
-            name: "text-1KiB",
-            data: text(1 << 10),
-        },
-        Corpus {
-            name: "text-1MiB",
-            data: text(1 << 20),
-        },
-        Corpus {
-            name: "binary-256KiB",
-            data: binary(1 << 18),
-        },
-        Corpus {
-            name: "compressible-256KiB",
-            data: compressible(1 << 18),
-        },
-        Corpus {
-            name: "incompressible-256KiB",
-            data: incompressible(1 << 18),
-        },
-    ]
+    let mut corpora = vec![
+        Corpus::new("text-1KiB", text(1 << 10)),
+        Corpus::new("text-1MiB", text(1 << 20)),
+        Corpus::new("binary-256KiB", binary(1 << 18)),
+        Corpus::new("compressible-256KiB", compressible(1 << 18)),
+        Corpus::new("incompressible-256KiB", incompressible(1 << 18)),
+    ];
+    corpora.extend(vendor_corpora());
+    corpora
+}
+
+/// Payload sizes used to measure the fixed per-call cost.
+const TINY_SIZES: [usize; 4] = [16, 64, 256, 1024];
+
+/// Files of Google Brotli's own corpus used as real-world inputs.
+const VENDOR_FILES: [&str; 6] = [
+    "alice29.txt",
+    "lcet10.txt",
+    "plrabn12.txt",
+    "mapsdatazrh",
+    "random_org_10k.bin",
+    "quickfox_repeated",
+];
+
+/// Reads the vendored reference corpus, skipping files that are not present.
+fn vendor_corpora() -> Vec<Corpus> {
+    let directory =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("brotli-ffi/vendor/brotli/tests/testdata");
+    VENDOR_FILES
+        .iter()
+        .filter_map(|name| {
+            let data = std::fs::read(directory.join(name)).ok()?;
+            Some(Corpus::new(format!("vendor-{name}"), data))
+        })
+        .collect()
 }
 
 /// Generates `len` bytes of English-like text.
@@ -205,28 +235,9 @@ fn incompressible(len: usize) -> Vec<u8> {
         .collect()
 }
 
-/// Compresses `data` with this crate, returning `None` when the compressor is
-/// not implemented yet.
-fn mbrotli_compress(params: BrotliCompressParams, data: &[u8]) -> Option<Vec<u8>> {
-    let compressor = Brotli::default().compressor();
-
-    let previous_hook = panic::take_hook();
-    panic::set_hook(Box::new(|_| {}));
-    let outcome = panic::catch_unwind(AssertUnwindSafe(|| compressor.compress(params, data)));
-    panic::set_hook(previous_hook);
-
-    match outcome {
-        Ok(Ok(compressed)) => Some(compressed),
-        Ok(Err(error)) => panic!("mbrotli failed to compress {} bytes: {error}", data.len()),
-        Err(_) => None,
-    }
-}
-
 /// Verifies both implementations against the C decoder and reports the
 /// compressed sizes they produced.
-///
-/// Returns whether this crate's compressor took part.
-fn validate(params: BrotliCompressParams, corpus: &Corpus) -> bool {
+fn validate(params: BrotliCompressParams, corpus: &Corpus) {
     let quality = usize::from(params.quality());
     let input = corpus.data.as_slice();
 
@@ -241,30 +252,32 @@ fn validate(params: BrotliCompressParams, corpus: &Corpus) -> bool {
         corpus.name,
     );
 
-    let Some(rust_output) = mbrotli_compress(params, input) else {
-        println!(
-            "q{quality} {name:<22} c-brotli {c_size:>9} bytes  mbrotli unimplemented",
-            name = corpus.name,
-        );
-        return false;
-    };
-
+    let compressor = Brotli::default().compressor();
+    let rust_output = compressor
+        .compress(params, input)
+        .expect("mbrotli failed to compress the corpus");
     assert_eq!(
         c_brotli::decompress(&rust_output, input.len()).as_deref(),
         Some(input),
         "mbrotli output does not round-trip for {} at q{quality}",
         corpus.name,
     );
+    // Parity with the reference is a test-suite guarantee; reasserting it here
+    // keeps a benchmark run from reporting a speedup that changed the output.
+    assert_eq!(
+        rust_output, c_output,
+        "mbrotli and C Brotli disagree for {} at q{quality}",
+        corpus.name,
+    );
     println!(
-        "q{quality} {name:<22} c-brotli {c_size:>9} bytes  mbrotli {rust_size:>9} bytes",
+        "q{quality} {name:<26} c-brotli {c_size:>9} bytes  mbrotli {rust_size:>9} bytes",
         name = corpus.name,
         rust_size = rust_output.len(),
     );
-    true
 }
 
-/// Registers the quality 0 and quality 1 comparison benchmarks.
-fn bench_compress(criterion: &mut Criterion) {
+/// Registers the end-to-end one-shot comparison, allocation included.
+fn bench_oneshot(criterion: &mut Criterion) {
     let corpora = corpora();
 
     println!(
@@ -276,15 +289,16 @@ fn bench_compress(criterion: &mut Criterion) {
     for quality in QUALITIES {
         let params = BrotliCompressParams::new(quality, LGWIN);
         let numeric_quality = usize::from(quality);
-        let mut group = criterion.benchmark_group(format!("compress/q{numeric_quality}"));
+        let mut group = criterion.benchmark_group(format!("oneshot/q{numeric_quality}"));
+        let compressor = Brotli::default().compressor();
 
         for corpus in &corpora {
-            let bench_mbrotli = validate(params, corpus);
+            validate(params, corpus);
             let data = corpus.data.as_slice();
             group.throughput(Throughput::Bytes(data.len() as u64));
 
             group.bench_with_input(
-                BenchmarkId::new("c-brotli", corpus.name),
+                BenchmarkId::new("c-brotli", &corpus.name),
                 &data,
                 |bencher, data| {
                     bencher.iter(|| {
@@ -301,13 +315,8 @@ fn bench_compress(criterion: &mut Criterion) {
                 },
             );
 
-            if !bench_mbrotli {
-                continue;
-            }
-
-            let compressor = Brotli::default().compressor();
             group.bench_with_input(
-                BenchmarkId::new("mbrotli", corpus.name),
+                BenchmarkId::new("mbrotli", &corpus.name),
                 &data,
                 |bencher, data| {
                     bencher.iter(|| {
@@ -323,5 +332,106 @@ fn bench_compress(criterion: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_compress);
+/// Registers the comparison into a caller-owned, pre-sized output buffer.
+///
+/// Output allocation and growth leave the timed region on both sides; the
+/// encoder workspaces are still built per call, exactly as the public API of
+/// each implementation does it.
+fn bench_presized(criterion: &mut Criterion) {
+    let corpora = corpora();
+
+    for quality in QUALITIES {
+        let params = BrotliCompressParams::new(quality, LGWIN);
+        let numeric_quality = usize::from(quality);
+        let mut group = criterion.benchmark_group(format!("presized/q{numeric_quality}"));
+        let compressor = Brotli::default().compressor();
+
+        for corpus in &corpora {
+            let data = corpus.data.as_slice();
+            group.throughput(Throughput::Bytes(data.len() as u64));
+
+            let mut c_output = Vec::with_capacity(c_brotli::max_compressed_size(data.len()) + 1024);
+            group.bench_with_input(
+                BenchmarkId::new("c-brotli", &corpus.name),
+                &data,
+                |bencher, data| {
+                    bencher.iter(|| {
+                        c_brotli::compress_into(
+                            numeric_quality,
+                            LGWIN.into(),
+                            black_box(data),
+                            &mut c_output,
+                        )
+                        .expect("C Brotli failed to compress the corpus");
+                    });
+                },
+            );
+
+            let bound = compressor
+                .calculate_bound(&params, data.len())
+                .expect("the compressed-size bound overflowed");
+            let mut rust_output = vec![0u8; bound];
+            group.bench_with_input(
+                BenchmarkId::new("mbrotli", &corpus.name),
+                &data,
+                |bencher, data| {
+                    bencher.iter(|| {
+                        compressor
+                            .compress_to_slice(params, black_box(data), &mut rust_output)
+                            .expect("mbrotli failed to compress the corpus")
+                    });
+                },
+            );
+        }
+
+        group.finish();
+    }
+}
+
+/// Registers the per-call overhead measurement, dispatch included.
+fn bench_tiny(criterion: &mut Criterion) {
+    let payload = text(*TINY_SIZES.iter().max().unwrap_or(&1024));
+
+    for quality in QUALITIES {
+        let params = BrotliCompressParams::new(quality, LGWIN);
+        let numeric_quality = usize::from(quality);
+        let mut group = criterion.benchmark_group(format!("tiny/q{numeric_quality}"));
+        let compressor = Brotli::default().compressor();
+
+        for size in TINY_SIZES {
+            let data = &payload[..size];
+            group.throughput(Throughput::Bytes(size as u64));
+
+            group.bench_with_input(
+                BenchmarkId::new("c-brotli", size),
+                &data,
+                |bencher, data| {
+                    bencher.iter(|| {
+                        let mut output = Vec::new();
+                        c_brotli::compress_into(
+                            numeric_quality,
+                            LGWIN.into(),
+                            black_box(data),
+                            &mut output,
+                        )
+                        .expect("C Brotli failed to compress the corpus");
+                        output
+                    });
+                },
+            );
+
+            group.bench_with_input(BenchmarkId::new("mbrotli", size), &data, |bencher, data| {
+                bencher.iter(|| {
+                    compressor
+                        .compress(params, black_box(data))
+                        .expect("mbrotli failed to compress the corpus")
+                });
+            });
+        }
+
+        group.finish();
+    }
+}
+
+criterion_group!(benches, bench_oneshot, bench_presized, bench_tiny);
 criterion_main!(benches);

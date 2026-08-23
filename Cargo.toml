@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 
 [dependencies.fearless_simd]
-version = "0.7"
+version = "=0.7.0"
 features = ["libm"]
 
 [dependencies.thiserror]
@@ -16,6 +16,13 @@ version = "2"
 version = "0.24"
 
 [dev-dependencies]
+
+# Tests exercise the scalar fallback backend explicitly; enabling the feature
+# here keeps it out of the distributable build while making `Level::fallback()`
+# available to every test target.
+[dev-dependencies.fearless_simd]
+version = "=0.7.0"
+features = ["libm", "force_support_fallback"]
 
 [dev-dependencies.criterion]
 version = "0.8"
@@ -34,4 +41,7 @@ hotpath-alloc = ["hotpath/hotpath-alloc"]
 
 [workspace]
 members = ["brotli-ffi"]
+# The fuzz package pulls in AFL's instrumentation runtime; keeping it out of
+# the workspace leaves `cargo test` and `cargo clippy` unaffected by it.
+exclude = ["fuzz/afl"]
 resolver = "3"

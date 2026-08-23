@@ -1,0 +1,25 @@
+[package]
+name = "mbrotli-afl"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "AFL++ fuzz targets for the mbrotli quality 0 and quality 1 encoders"
+
+[dependencies]
+afl = "0.18"
+
+[dependencies.mbrotli]
+path = "../.."
+
+[dependencies.google-brotli-ffi]
+path = "../../brotli-ffi"
+
+# The scalar fallback backend has to be reachable so the SIMD equivalence
+# target can compare against it.
+[dependencies.fearless_simd]
+version = "=0.7.0"
+features = ["libm", "force_support_fallback"]
+
+[profile.release]
+debug = true
+codegen-units = 1

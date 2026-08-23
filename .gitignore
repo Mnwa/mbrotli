@@ -3,3 +3,10 @@
 .claude
 Cargo.lock
 specifications
+
+# AFL crash and queue directories are local artifacts.
+fuzz/afl/findings/
+fuzz/afl/target/
+fuzz/afl/Cargo.lock
+# Seeds are materialised from the vendored Brotli test data.
+fuzz/afl/seeds/

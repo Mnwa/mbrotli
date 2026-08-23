@@ -1,25 +1,24 @@
 # google-brotli-ffi
 
-Raw Rust FFI bindings to the C implementation of Brotli maintained by Google.
-The upstream C sources are linked as a Git submodule pinned to Google Brotli
-v1.2.0 and built statically by this crate.
+Raw Rust FFI bindings to Google's Brotli C library, used by [`mbrotli`](../)
+as its differential-test oracle and benchmark baseline.
 
-The bindings cover the public common, encoder, and decoder APIs, including the
-one-shot, streaming, metadata, and shared-dictionary interfaces. All functions
-are unsafe because they preserve the original C pointer-based API.
+The C sources are vendored as a git submodule at `vendor/brotli`, pinned to
+**v1.2.0, commit `028fb5a`**. That tree is upstream source: it is not
+hand-edited, and only an explicit upstream-update change should touch it.
 
-Upstream: <https://github.com/google/brotli>
-
-## Cloning
-
-Initialize the C source after cloning this repository:
-
-```shell
+```sh
 git submodule update --init --recursive
 ```
 
-## Updating the C source
+`build.rs` compiles `brotlicommon`, `brotlidec` and `brotlienc` with the `cc`
+crate and links them statically. No architecture-specific flags are passed, so
+the result is a portable baseline build — which is what makes it a fair
+benchmark counterpart to the Rust encoder.
 
-Check out the desired tagged Google Brotli release in `vendor/brotli`, commit
-the updated submodule pointer, and keep `UPSTREAM_VERSION` and the version
-documented above in sync.
+The crate exposes the encoder and decoder C API verbatim: every item is
+`unsafe extern "C"`, with the upstream constants and enums mirrored as-is. It
+is a development dependency of `mbrotli`, not part of its public API.
+
+Distributed under the MIT licence, as is the vendored Brotli source; see
+`vendor/brotli/LICENSE`.

@@ -1,3 +1,9 @@
+//! Public compression API.
+//!
+//! [`BrotliCompressor`] pairs a resolved SIMD level with per-call
+//! [`BrotliCompressParams`] and exposes one-shot and streaming entry points.
+//! The algorithms themselves live in the private `core` tree.
+
 mod core;
 pub mod reader;
 pub mod writer;
@@ -15,48 +21,148 @@ pub struct BrotliCompressor {
 }
 
 impl BrotliCompressor {
-    pub const fn calculate_bound(&self, params: &BrotliCompressParams, input_size: usize) -> usize {
+    /// Returns an upper bound on the compressed size of `input_size` bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrotliCompressError::BoundOverflow`] when the bound does not
+    /// fit in a `usize`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::Brotli;
+    /// use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+    ///
+    /// let compressor = Brotli::default().compressor();
+    /// let params = BrotliCompressParams::new(BrotliQualityLevel::Q0, BrotliWindowBits::DEFAULT);
+    ///
+    /// assert!(compressor.calculate_bound(&params, 4096)? >= 4096);
+    /// assert!(compressor.calculate_bound(&params, usize::MAX).is_err());
+    /// # Ok::<(), mbrotli::compressor::BrotliCompressError>(())
+    /// ```
+    pub const fn calculate_bound(
+        &self,
+        params: &BrotliCompressParams,
+        input_size: usize,
+    ) -> BrotliResult<usize> {
         core::bound::bound(params, input_size)
     }
+
+    /// Compresses `src` into a freshly allocated Brotli stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrotliCompressError::UnsupportedQuality`] when `params` asks
+    /// for a quality this encoder does not implement yet.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::Brotli;
+    /// use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+    ///
+    /// let compressor = Brotli::default().compressor();
+    /// let params = BrotliCompressParams::new(BrotliQualityLevel::Q1, BrotliWindowBits::DEFAULT);
+    /// let compressed = compressor.compress(params, b"hello hello hello hello")?;
+    ///
+    /// assert!(!compressed.is_empty());
+    /// # Ok::<(), mbrotli::compressor::BrotliCompressError>(())
+    /// ```
     pub fn compress(&self, params: BrotliCompressParams, src: &[u8]) -> BrotliResult<Vec<u8>> {
-        let mut output = Vec::with_capacity(self.calculate_bound(&params, src.len()));
-        self.compress_to_slice(params, src, &mut output)?;
+        let mut output = Vec::with_capacity(self.calculate_bound(&params, src.len())?);
+        core::fast::compress_to_vec(self.level, &params, src, &mut output)?;
         Ok(output)
     }
 
+    /// Compresses `src` into `dst` and returns the number of bytes written.
+    ///
+    /// Size `dst` with [`BrotliCompressor::calculate_bound`]; a shorter buffer
+    /// is reported rather than truncated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrotliCompressError::OutputTooSmall`] when `dst` cannot hold
+    /// the whole stream, and [`BrotliCompressError::UnsupportedQuality`] for an
+    /// unimplemented quality.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::Brotli;
+    /// use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+    ///
+    /// let compressor = Brotli::default().compressor();
+    /// let params = BrotliCompressParams::new(BrotliQualityLevel::Q0, BrotliWindowBits::DEFAULT);
+    /// let mut buffer = vec![0u8; compressor.calculate_bound(&params, 5)?];
+    /// let written = compressor.compress_to_slice(params, b"aaaaa", &mut buffer)?;
+    ///
+    /// assert_eq!(&buffer[..written], compressor.compress(params, b"aaaaa")?.as_slice());
+    /// # Ok::<(), mbrotli::compressor::BrotliCompressError>(())
+    /// ```
     pub fn compress_to_slice(
         &self,
         params: BrotliCompressParams,
         src: &[u8],
         dst: &mut [u8],
-    ) -> BrotliResult<()> {
-        self.compress_reader(params, src)
-            .read_exact(dst)
-            .map_err(From::from)
+    ) -> BrotliResult<usize> {
+        core::fast::compress_to_slice(self.level, &params, src, dst)
     }
 
+    /// Wraps `writer` in an adapter that compresses everything written to it.
+    ///
+    /// The stream is only terminated by
+    /// [`BrotliCompressorWriter::finish`]; dropping the adapter discards any
+    /// buffered input.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::Brotli;
+    /// use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+    /// use std::io::Write;
+    ///
+    /// let compressor = Brotli::default().compressor();
+    /// let params = BrotliCompressParams::new(BrotliQualityLevel::Q0, BrotliWindowBits::DEFAULT);
+    /// let mut sink = compressor.compress_writer(params, Vec::new());
+    /// sink.write_all(b"streamed payload")?;
+    /// let compressed = sink.finish()?;
+    ///
+    /// assert!(!compressed.is_empty());
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn compress_writer<T: Write>(
         &self,
         params: BrotliCompressParams,
         writer: T,
     ) -> BrotliCompressorWriter<T> {
-        BrotliCompressorWriter {
-            writer,
-            level: self.level,
-            params,
-        }
+        BrotliCompressorWriter::new(writer, self.level, params)
     }
 
+    /// Wraps `reader` in an adapter that yields the compressed stream.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::Brotli;
+    /// use mbrotli::compressor::{BrotliCompressParams, BrotliQualityLevel, BrotliWindowBits};
+    /// use std::io::Read;
+    ///
+    /// let compressor = Brotli::default().compressor();
+    /// let params = BrotliCompressParams::new(BrotliQualityLevel::Q1, BrotliWindowBits::DEFAULT);
+    /// let mut source = compressor.compress_reader(params, &b"streamed payload"[..]);
+    /// let mut compressed = Vec::new();
+    /// source.read_to_end(&mut compressed)?;
+    ///
+    /// assert!(!compressed.is_empty());
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn compress_reader<T: Read>(
         &self,
         params: BrotliCompressParams,
         reader: T,
     ) -> BrotliCompressorReader<T> {
-        BrotliCompressorReader {
-            reader,
-            level: self.level,
-            params,
-        }
+        BrotliCompressorReader::new(reader, self.level, params)
     }
 }
 
@@ -287,11 +393,51 @@ impl From<BrotliQualityLevel> for usize {
 impl TryFrom<usize> for BrotliQualityLevel {
     type Error = ParseQualityLevelError;
 
+    /// Creates a quality level from its numeric value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseQualityLevelError::UpperBound`] above 11 and
+    /// [`ParseQualityLevelError::Unrepresentable`] for 10, which this API does
+    /// not model.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::compressor::{BrotliQualityLevel, ParseQualityLevelError};
+    ///
+    /// assert_eq!(usize::from(BrotliQualityLevel::try_from(0)?), 0);
+    /// assert_eq!(usize::from(BrotliQualityLevel::try_from(11)?), 11);
+    /// assert!(matches!(
+    ///     BrotliQualityLevel::try_from(12),
+    ///     Err(ParseQualityLevelError::UpperBound)
+    /// ));
+    /// assert!(matches!(
+    ///     BrotliQualityLevel::try_from(10),
+    ///     Err(ParseQualityLevelError::Unrepresentable)
+    /// ));
+    /// # Ok::<(), ParseQualityLevelError>(())
+    /// ```
     fn try_from(value: usize) -> Result<Self, Self::Error> {
-        todo!()
+        match value {
+            0 => Ok(Self::Q0),
+            1 => Ok(Self::Q1),
+            2 => Ok(Self::Q2),
+            3 => Ok(Self::Q3),
+            4 => Ok(Self::Q4),
+            5 => Ok(Self::Q5),
+            6 => Ok(Self::Q6),
+            7 => Ok(Self::Q7),
+            8 => Ok(Self::Q8),
+            9 => Ok(Self::Q9),
+            10 => Err(ParseQualityLevelError::Unrepresentable),
+            11 => Ok(Self::Q11),
+            _ => Err(ParseQualityLevelError::UpperBound),
+        }
     }
 }
 
+/// Error returned when a numeric quality cannot be represented.
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum ParseQualityLevelError {
@@ -299,13 +445,42 @@ pub enum ParseQualityLevelError {
     LowerBound,
     #[error("Quality level should be less than or equal to 11")]
     UpperBound,
+    #[error("Quality level 10 is not represented by this API")]
+    Unrepresentable,
 }
 
+/// Error returned by the compression entry points.
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum BrotliCompressError {
     #[error("IO error: {0}")]
     IOError(#[from] std::io::Error),
+    /// The requested quality has no implementation yet.
+    #[error("Quality level {0} is not implemented")]
+    UnsupportedQuality(usize),
+    /// The caller-provided output buffer cannot hold the stream.
+    #[error("The output buffer is too small for the compressed stream")]
+    OutputTooSmall,
+    /// The internal scratch buffer proved too small; this indicates a bug.
+    #[error("The encoder output buffer overflowed")]
+    BufferOverflow,
+    /// The compressed-size bound does not fit in a `usize`.
+    #[error("The compressed-size bound overflows the address space")]
+    BoundOverflow,
 }
 
+impl From<BrotliCompressError> for std::io::Error {
+    /// Wraps a compression error so it can travel through [`std::io`] adapters.
+    ///
+    /// An IO error that entered the encoder is unwrapped again rather than
+    /// nested.
+    fn from(value: BrotliCompressError) -> Self {
+        match value {
+            BrotliCompressError::IOError(error) => error,
+            other => Self::other(other),
+        }
+    }
+}
+
+/// Result alias used throughout the compressor API.
 pub type BrotliResult<T> = Result<T, BrotliCompressError>;
