@@ -17,6 +17,13 @@ explicitly an upstream-vendor update.
   (`&[u8]`, `&str`, and `&T`) when ownership is unnecessary, return owned data
   only when the caller needs it, and use small `Copy` configuration types when
   appropriate.
+- Prefer standard library traits over inherent constructors and accessors. Use
+  `From`/`Into` for infallible conversions, `TryFrom`/`TryInto` for validated
+  ones, `Default` for the canonical value, and `Display`, `FromStr`, `AsRef`,
+  `Deref`, and the operator traits where they fit. Add an inherent `new`, `get`,
+  or `to_*` method only when no trait expresses the operation, or when a
+  `const fn` is genuinely required; expose associated constants instead of
+  const constructors for well-known values.
 - Use dynamic dispatch at the top level of `core` module and pass chose simd to low level abstractions.
 - Document every public item. Include `#Examples`, `# Errors`, `# Panics`, and `# Safety`
   sections where applicable, plus runnable examples for important APIs.

@@ -15,6 +15,18 @@ version = "2"
 [dependencies.hotpath]
 version = "0.24"
 
+[dev-dependencies]
+
+[dev-dependencies.criterion]
+version = "0.8"
+
+[dev-dependencies.google-brotli-ffi]
+path = "brotli-ffi"
+
+[[bench]]
+name = "compress"
+harness = false
+
 [features]
 hotpath = ["hotpath/hotpath"]
 hotpath-cpu = ["hotpath/hotpath-cpu"]
