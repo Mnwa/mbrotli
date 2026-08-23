@@ -123,6 +123,7 @@ After changing Rust code:
 4. Check coverage for every changed function.
 5. Run relevant Criterion benchmarks for performance-sensitive changes and the
    relevant AFL target for changes to fuzzed boundaries.
+6. Do not use `#[allow(..)]` to fix clippy warnings.
 
 Fix warnings and formatting issues rather than suppressing them. If a Clippy
 lint is a demonstrated false positive, use the narrowest possible
