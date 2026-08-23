@@ -17,10 +17,10 @@ explicitly an upstream-vendor update.
   (`&[u8]`, `&str`, and `&T`) when ownership is unnecessary, return owned data
   only when the caller needs it, and use small `Copy` configuration types when
   appropriate.
-- Use static dispatch in performance-sensitive code. Use dynamic dispatch only
-  when runtime polymorphism is required and its cost is outside the hot path.
-- Document every public item. Include `# Errors`, `# Panics`, and `# Safety`
+- Use dynamic dispatch at the top level of `core` module and pass chose simd to low level abstractions.
+- Document every public item. Include `#Examples`, `# Errors`, `# Panics`, and `# Safety`
   sections where applicable, plus runnable examples for important APIs.
+- Do not use ready brotli dependencies.
 
 ## Performance and SIMD
 
@@ -42,6 +42,7 @@ explicitly an upstream-vendor update.
 - Run performance measurements with optimized builds and stable, representative
   corpora. Record both speed and compression ratio; a speedup that changes the
   output size or semantics is not an equivalent comparison.
+- Mark functions as const where it's possible.
 
 ## Errors
 
