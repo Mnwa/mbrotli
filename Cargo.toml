@@ -1,0 +1,10 @@
+[package]
+name = "mbrotli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+[workspace]
+members = ["brotli-ffi"]
+resolver = "3"

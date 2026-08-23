@@ -1,0 +1,22 @@
+[package]
+name = "google-brotli-ffi"
+version = "0.1.0"
+edition = "2024"
+links = "brotli"
+license = "MIT"
+description = "Raw Rust FFI bindings to Google's Brotli C library"
+homepage = "https://github.com/google/brotli"
+include = [
+    "src/**",
+    "build.rs",
+    "README.md",
+    "UPSTREAM_VERSION",
+    "vendor/brotli/LICENSE",
+    "vendor/brotli/c/common/**",
+    "vendor/brotli/c/dec/**",
+    "vendor/brotli/c/enc/**",
+    "vendor/brotli/c/include/**",
+]
+
+[build-dependencies]
+cc = "1.2"
