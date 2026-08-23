@@ -5,6 +5,10 @@ edition = "2024"
 
 [dependencies]
 
+[dependencies.fearless_simd]
+version = "0.7"
+features = ["libm"]
+
 [workspace]
 members = ["brotli-ffi"]
 resolver = "3"
