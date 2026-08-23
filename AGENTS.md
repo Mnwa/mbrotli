@@ -29,6 +29,31 @@ explicitly an upstream-vendor update.
   sections where applicable, plus runnable examples for important APIs.
 - Do not use ready brotli dependencies.
 
+## Architecture documentation
+
+- Keep the project architecture current: whenever a change adds, removes, or
+  reshapes a module, a public API, a state machine, a data flow, or a
+  dispatch boundary, update the architecture documentation in `architecture/`
+  in the same change. Documentation drift is treated as an incomplete change.
+- After the code change lands, write or refresh a specification under
+  `architecture/` that describes the core mechanics of the affected subsystem:
+  module and ownership boundaries, public API surface, control and data flow,
+  state transitions, SIMD dispatch points, error propagation, and the
+  invariants each layer relies on.
+- Every specification must contain Mermaid diagrams (fenced ```mermaid blocks)
+  for the mechanics it describes. Use the diagram type that fits: `graph` for
+  module and dependency maps, `classDiagram` for type relationships,
+  `sequenceDiagram` for call and data flow, `stateDiagram-v2` for state
+  machines and streaming lifecycles, `flowchart` for decision logic.
+- Keep `architecture/README.md` as the index: one entry per specification with
+  a one-line summary, plus the current high-level module map.
+- Describe what the code actually does today. Mark unimplemented paths
+  explicitly and keep a short "known gaps" section instead of documenting
+  intended behavior as if it already exists.
+- `specifications/` holds externally authored source specifications; do not
+  rewrite them. `architecture/` holds this repository's own, always-current
+  description of the implementation.
+
 ## Performance and SIMD
 
 - Measure before optimizing. Use `hotpath` on representative release-mode
@@ -128,9 +153,11 @@ After changing Rust code:
 2. Run `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`.
 3. Run `cargo test --workspace --all-features --locked`.
 4. Check coverage for every changed function.
-5. Run relevant Criterion benchmarks for performance-sensitive changes and the
+5. Update the affected specifications and diagrams in `architecture/`, and the
+   `architecture/README.md` index, so they match the code as changed.
+6. Run relevant Criterion benchmarks for performance-sensitive changes and the
    relevant AFL target for changes to fuzzed boundaries.
-6. Do not use `#[allow(..)]` to fix clippy warnings.
+7. Do not use `#[allow(..)]` to fix clippy warnings.
 
 Fix warnings and formatting issues rather than suppressing them. If a Clippy
 lint is a demonstrated false positive, use the narrowest possible
