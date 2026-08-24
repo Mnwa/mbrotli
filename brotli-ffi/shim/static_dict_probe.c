@@ -226,3 +226,62 @@ size_t mbrotli_shim_zopfli_references(int quality, int lgwin, const uint8_t* rin
   (void)capacity;
   return num_commands;
 }
+
+/* A window onto the prepared compound-dictionary index, for differential
+ * testing.
+ *
+ * `CreatePreparedDictionary` is `BROTLI_INTERNAL`, and its result is a single
+ * flat allocation whose three tables are reached by pointer arithmetic that no
+ * header describes. This shim builds one and copies the tables out, so the
+ * Rust port of the index can be compared entry for entry against the reference
+ * it was translated from.
+ *
+ * Returns 1 on success and 0 when the dictionary could not be built or a table
+ * did not fit the capacity it was given. The table sizes are reported through
+ * the out parameters whether or not they fit, so a caller can size its buffers
+ * from a first call.
+ */
+
+#include "enc/compound_dictionary.h"
+
+int mbrotli_shim_prepare_dictionary(const uint8_t* source, size_t source_size,
+                                    size_t capacity, uint32_t* out_bucket_bits,
+                                    uint32_t* out_slot_bits,
+                                    uint32_t* out_num_items,
+                                    uint32_t* out_slot_offsets,
+                                    uint16_t* out_heads, uint32_t* out_items) {
+  MemoryManager m;
+  PreparedDictionary* prepared;
+  const uint32_t* slot_offsets;
+  const uint16_t* heads;
+  const uint32_t* items;
+  size_t num_slots;
+  size_t num_buckets;
+
+  BrotliInitMemoryManager(&m, 0, 0, 0);
+  prepared = CreatePreparedDictionary(&m, source, source_size);
+  if (prepared == NULL) return 0;
+
+  num_slots = (size_t)1u << prepared->slot_bits;
+  num_buckets = (size_t)1u << prepared->bucket_bits;
+  *out_bucket_bits = prepared->bucket_bits;
+  *out_slot_bits = prepared->slot_bits;
+  *out_num_items = prepared->num_items;
+
+  slot_offsets = (const uint32_t*)(&prepared[1]);
+  heads = (const uint16_t*)(&slot_offsets[num_slots]);
+  items = (const uint32_t*)(&heads[num_buckets]);
+
+  if (num_slots > capacity || num_buckets > capacity ||
+      prepared->num_items > capacity) {
+    DestroyPreparedDictionary(&m, prepared);
+    return 0;
+  }
+
+  memcpy(out_slot_offsets, slot_offsets, num_slots * sizeof(uint32_t));
+  memcpy(out_heads, heads, num_buckets * sizeof(uint16_t));
+  memcpy(out_items, items, (size_t)prepared->num_items * sizeof(uint32_t));
+
+  DestroyPreparedDictionary(&m, prepared);
+  return 1;
+}

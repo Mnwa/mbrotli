@@ -1,7 +1,10 @@
 # RFC 9841: standard-mode performance
 
-Evidence that adding RFC 9841 Large Window Brotli did not slow ordinary
-RFC 7932 compression down. Section 50.1 of the implementation specification
+Evidence that adding RFC 9841 Large Window Brotli, and then the caller-owned
+shared context, did not slow ordinary RFC 7932 compression down. The Large
+Window measurement is first; the shared context has its own section, because
+its first attempt *did* slow quality 1 down and the measurement that caught it
+is the useful part. Section 50.1 of the implementation specification
 sets the gate:
 
 ```text
@@ -91,6 +94,88 @@ consistent +5..+8% on q0 over the vendored text corpora. Copying the main
 lockfile into the worktree and re-measuring turned the same three benchmarks
 into −1.0%, −2.2% and −1.1%. Always align the lockfile before believing a
 Criterion baseline in this repository.
+
+## Shared context: what it cost, and the one thing that did
+
+Adding the caller-owned `SharedContext`, its prepared indexes, its addressing
+and its prefix search touches no encoder hot path — `git diff` over
+`src/compressor/core/{fast,greedy,hq,shared}` is empty. That was not true of
+the first attempt, and the difference is the point of this section.
+
+### The regression, and where it came from
+
+The prefix scan needs to compare two windows that are *not* slices of one
+buffer: an attached dictionary is a separate allocation from the ring buffer it
+is matched against, and a match may run from one attachment into the next. The
+obvious move was to reuse `core::shared::match_len`, factoring its scan into a
+helper both callers share:
+
+```rust
+// what the first attempt did to a hot path
+fn find_match_length(simd, data, left, right, limit) -> usize {
+    let (Some(l), Some(r)) = (data.get(..), data.get(..)) else { return 0 };
+    scan(simd, l, r, limit)                 // body moved into `scan`
+}
+fn find_match_length_between(simd, l, r, limit) -> usize { scan(simd, l, r, limit) }
+```
+
+Both functions are `#[inline(always)]`, so this should have been free. It was
+not. Measured at 50 samples, 2 s warm-up and 5 s per benchmark against a
+baseline of the parent commit with the same `Cargo.lock`:
+
+| Benchmark | With the refactor | After reverting it |
+| --- | --- | --- |
+| `oneshot/q1/mbrotli/binary-256KiB` | **+5.97%** | +0.01% |
+| `oneshot/q1/mbrotli/text-1KiB` | **+5.63%** | −0.17% |
+| `oneshot/q1/mbrotli/compressible-256KiB` | **+2.93%** | −2.51% |
+| `oneshot/q1/mbrotli/incompressible-256KiB` | **+2.54%** | −1.71% |
+| `oneshot/q1/mbrotli/text-1MiB` | +0.32% | −0.45% |
+
+Four benchmarks moved by 2.5–6% with tight confidence intervals and returned to
+zero when the refactor was reverted. That is signal, and it is why
+`core::rfc9841::prefix::common_prefix_len` is its own scalar whole-word scan
+rather than a call into the encoders' kernel.
+
+The wider lesson: `#[inline(always)]` is a request, and a hot loop that the
+optimiser had arranged one way can be arranged another once its body moves
+behind a second caller. In this crate quality 1 is the most sensitive
+measurement available — its inner loop is small enough that layout matters —
+so it is the one to run before touching `core::shared`.
+
+### Separating it from drift
+
+Three vendored-corpus benchmarks still read +2.9% to +7.2% *after* the revert,
+which would have been easy to report as a residual regression. They are not one.
+Running the comparison in the opposite direction — a fresh baseline from the
+current code, then the parent commit measured against it — produced this:
+
+| Benchmark | Parent commit vs. this change |
+| --- | --- |
+| `oneshot/q1/mbrotli/vendor-lcet10.txt` | **+11.07%** "regressed" |
+| `oneshot/q1/mbrotli/vendor-plrabn12.txt` | +0.01% |
+| `oneshot/q1/mbrotli/vendor-mapsdatazrh` | −0.57% |
+
+The parent commit cannot be 11% slower than itself. The long vendored corpora
+are the longest-running benchmarks in the suite and the most exposed to thermal
+drift over a session of back-to-back Criterion runs; on this machine they are
+unreliable in isolation and only meaningful in aggregate. This is the same
+±6% trap the section above records, caught a second way — running the
+comparison symmetrically is the cheapest test for it.
+
+### What is not benchmarked
+
+`SharedContextBuilder::prepare` is not compared against the C reference's
+`CreatePreparedDictionary`. The reference does not expose it: it is reachable
+only through `brotli-ffi/shim/`, which copies the three tables out of the flat
+allocation the reference carves them from, and that copy would dominate the
+measurement. The shim exists to prove the *result* identical — which
+`prepared::the_index_is_identical_to_the_c_reference` does, entry for entry —
+not to time it. A timing comparison lands with the encoder integration, when
+preparation cost can be weighed against the compression it saves.
+
+`Compressor::longest_prefix_match` is likewise unbenchmarked. It is not on any
+compression path yet, and Section 42.3 lists its scan as a kernel to profile
+*after* an encoder consults it, not before.
 
 ## Not measured
 

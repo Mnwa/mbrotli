@@ -52,13 +52,16 @@ submodule already carries them:
 ./prepare-seeds.sh
 ```
 
-That produces two corpora:
+That produces four corpora:
 
 - `seeds/generic` — the raw test data, for targets that fuzz the payload only.
-- `seeds/large_window` — the parameter seeds behind one more byte, the declared
-  RFC 9841 window the `large_window` target reads first.
 - `seeds/params` — the same files behind a six byte parameter header, for
   targets that decode their settings from the start of the input.
+- `seeds/large_window` — the parameter seeds behind one more byte, the declared
+  RFC 9841 window the `large_window` target reads first.
+- `seeds/shared_context` — the parameter seeds behind two more bytes, the
+  attachment count and the limit squeeze the `shared_context` target reads
+  first.
 
 Then reduce them to a coverage-equivalent subset:
 
@@ -121,6 +124,7 @@ depending on the target. Large multi-fragment inputs are covered instead by
 | `output_capacity` | `seeds/params` | exact buffer accepted, short buffer reported |
 | `parameter_parsing` | `seeds/params` | illegal settings rejected, unimplemented qualities reported not panicked |
 | `large_window` | `seeds/large_window` | RFC 9841 window validation, refusal at qualities 0 and 1, determinism, backend identity, round-trip through the large-window C decoder |
+| `shared_context` | `seeds/shared_context` | context preparation is a transaction, accessors agree with what was attached, a reported prefix match really matches, the distance mapping round-trips, the match does not depend on the compressor's backend, an empty context emits what `compress` emits, a non-empty one is refused not ignored |
 
 ## Building and running
 

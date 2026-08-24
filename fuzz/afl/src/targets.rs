@@ -11,7 +11,7 @@ use crate::{
     cap, decode_case,
 };
 use mbrotli::Brotli;
-use mbrotli::compressor::shared::SharedBrotliError;
+use mbrotli::compressor::shared::{SharedBrotliError, SharedContext, SharedContextLimits};
 use mbrotli::compressor::{
     BrotliCompressError, CompressParams, ParseQualityLevelError, ParseWindowBitsError,
     QualityLevel, WindowBits,
@@ -45,6 +45,7 @@ pub const TARGETS: &[(&str, TargetFn)] = &[
     ("output_capacity", output_capacity),
     ("parameter_parsing", parameter_parsing),
     ("large_window", large_window),
+    ("shared_context", shared_context),
 ];
 
 /// Quality 0 must never panic and must always round-trip.
@@ -450,5 +451,238 @@ pub fn large_window(ctx: &Context, input: &[u8]) {
     assert_eq!(
         compressed, expected,
         "a wider declaration changed more than the header"
+    );
+}
+
+/// Dictionaries one RFC 9841 context may attach.
+const MAX_PREFIX_DICTIONARIES: usize = 15;
+
+/// An RFC 9841 shared context must be sound however it is built and read.
+///
+/// The first byte says how many prefix dictionaries to cut the payload into —
+/// sweeping past the fifteen the format allows, so the refusal is driven from
+/// fuzz input too — and the second tightens the resource limits, so a
+/// deliberately impossible budget is reached as often as a generous one. The
+/// rest is [`decode_case`]: the quality, the window and the payload the
+/// dictionaries are cut from and then matched against.
+///
+/// The oracles are that preparation is a transaction (a refusal yields no
+/// context at all), that the accessors agree with what was attached, that a
+/// reported prefix match really matches those bytes, that the distance mapping
+/// round-trips, that every backend finds the same match, that an empty context
+/// compresses exactly as the ordinary call does, and that a non-empty one is
+/// refused rather than quietly ignored.
+///
+/// # Panics
+///
+/// Panics when any of those is violated.
+pub fn shared_context(ctx: &Context, input: &[u8]) {
+    let (head, rest) = input.split_at(input.len().min(2));
+    let case = decode_case(rest);
+    let requested = usize::from(head.first().copied().unwrap_or(1)) % (MAX_PREFIX_DICTIONARIES + 3);
+    let squeeze = head.get(1).copied().unwrap_or(0);
+
+    // Cut the payload into `requested` attachments, keeping call order.
+    let attachments: Vec<Vec<u8>> = if requested == 0 {
+        Vec::new()
+    } else {
+        let stride = case.data.len().div_ceil(requested).max(1);
+        case.data
+            .chunks(stride)
+            .take(requested)
+            .map(<[u8]>::to_vec)
+            .collect()
+    };
+    let attached = attachments.len();
+    let source_size: usize = attachments.iter().map(Vec::len).sum();
+
+    // Every fourth input runs under a budget too small for anything.
+    let limits = if squeeze % 4 == 0 {
+        SharedContextLimits::default()
+            .with_max_prefix_bytes(u64::from(squeeze))
+            .with_max_allocated_bytes(1 << 12)
+    } else {
+        SharedContextLimits::default()
+    };
+
+    let mut builder = ctx
+        .compressor
+        .shared_context_builder(case.params.quality())
+        .with_limits(limits);
+    for attachment in attachments.clone() {
+        builder = builder.add_prefix_dictionary(attachment);
+    }
+
+    let mut context = match builder.prepare() {
+        Ok(context) => {
+            assert!(
+                requested <= MAX_PREFIX_DICTIONARIES,
+                "{requested} attachments should have been refused"
+            );
+            context
+        }
+        Err(BrotliCompressError::Shared(SharedBrotliError::TooManyPrefixDictionaries {
+            attached: reported,
+            limit,
+        })) => {
+            assert_eq!(limit, MAX_PREFIX_DICTIONARIES);
+            assert_eq!(reported, attached);
+            assert!(attached > limit, "{attached} attachments are legal");
+            return;
+        }
+        // A limit refusal is a transaction that produced nothing; there is no
+        // partial context to inspect.
+        Err(BrotliCompressError::Shared(
+            SharedBrotliError::DictionaryTooLarge { .. }
+            | SharedBrotliError::SharedContextTooLarge { .. },
+        )) => return,
+        Err(other) => panic!("preparing a context reported {other:?}"),
+    };
+
+    assert_eq!(context.max_quality(), case.params.quality());
+    assert_eq!(context.attachment_count(), attached);
+    assert_eq!(context.prefix_dictionary_count(), attached);
+    assert!(!context.has_custom_static_dictionary());
+    assert_eq!(context.source_size(), source_size);
+    assert!(context.allocated_size() >= source_size);
+
+    assert_shared_addressing(&context, source_size);
+    assert_shared_search(ctx, &context, &attachments, case.data);
+    assert_shared_compression(ctx, &mut context, &case.params, case.data, source_size);
+}
+
+/// A prefix offset and the backward distance addressing it must be inverses.
+fn assert_shared_addressing(context: &SharedContext, source_size: usize) {
+    let total = source_size as u64;
+    let max_backward = 1u64 << 20;
+
+    // Off both ends, in both directions.
+    assert_eq!(context.backward_distance(total, max_backward), None);
+    assert_eq!(context.backward_distance(total + 1, max_backward), None);
+    assert_eq!(context.dictionary_offset(max_backward, max_backward), None);
+    assert_eq!(
+        context.dictionary_offset(max_backward + total + 1, max_backward),
+        None
+    );
+    assert_eq!(context.dictionary_offset(u64::MAX, u64::MAX), None);
+
+    // The ends of the prefix, and a handful of interior addresses.
+    let probes = [0u64, 1, total / 3, total / 2, total.saturating_sub(1)];
+    for offset in probes {
+        if offset >= total {
+            continue;
+        }
+        let distance = context
+            .backward_distance(offset, max_backward)
+            .expect("inside the prefix");
+        assert!(
+            distance > max_backward,
+            "a prefix distance must clear the window"
+        );
+        assert_eq!(
+            context.dictionary_offset(distance, max_backward),
+            Some(offset),
+            "the distance mapping did not round-trip"
+        );
+    }
+}
+
+/// A reported match must really match, and must not depend on the compressor.
+fn assert_shared_search(
+    ctx: &Context,
+    context: &SharedContext,
+    attachments: &[Vec<u8>],
+    data: &[u8],
+) {
+    let flat: Vec<u8> = attachments.concat();
+
+    for start in [0usize, 1, data.len() / 3, data.len() / 2] {
+        let Some(probe) = data.get(start..) else {
+            continue;
+        };
+        let found = ctx.compressor.longest_prefix_match(context, probe);
+
+        if let Some(found) = found {
+            let offset = usize::try_from(found.dictionary_offset()).expect("a real offset");
+            assert!(found.length() > 0, "a reported match must be non-empty");
+            assert!(offset < flat.len(), "the match starts outside the prefix");
+            let available = (flat.len() - offset).min(probe.len());
+            assert!(
+                found.length() <= available,
+                "a match of {} exceeds the {available} bytes available",
+                found.length()
+            );
+            assert_eq!(
+                &flat[offset..offset + found.length()],
+                &probe[..found.length()],
+                "the reported match does not actually match"
+            );
+        }
+
+        // The search is scalar, so a compressor that resolved a different
+        // backend must reach the same answer over the same context.
+        for &level in &ctx.levels {
+            assert_eq!(
+                Brotli::from(level)
+                    .compressor()
+                    .longest_prefix_match(context, probe),
+                found,
+                "the longest prefix match depended on the compressor"
+            );
+        }
+    }
+}
+
+/// An empty context compresses ordinarily; a non-empty one is refused.
+fn assert_shared_compression(
+    ctx: &Context,
+    context: &mut SharedContext,
+    params: &CompressParams,
+    data: &[u8],
+    source_size: usize,
+) {
+    let params = *params;
+    let bound = ctx
+        .compressor
+        .calculate_shared_bound(&params, context, data.len())
+        .expect("bound overflowed");
+    assert_eq!(
+        bound,
+        ctx.compressor
+            .calculate_bound(&params, data.len())
+            .expect("bound overflowed")
+    );
+
+    let outcome = ctx.compressor.compress_shared(params, context, data);
+    if source_size == 0 {
+        let compressed = outcome.expect("an empty context must compress");
+        assert!(compressed.len() <= bound, "output exceeded the bound");
+        assert_eq!(
+            compressed,
+            ctx.compressor
+                .compress(params, data)
+                .expect("compression failed"),
+            "an empty context changed the stream"
+        );
+        assert_round_trip(data, &compressed);
+
+        let mut buffer = vec![0u8; bound];
+        let written = ctx
+            .compressor
+            .compress_shared_to_slice(params, context, data, &mut buffer)
+            .expect("an empty context must compress into a bounded slice");
+        assert_eq!(&buffer[..written], compressed.as_slice());
+        return;
+    }
+
+    let quality = usize::from(params.quality());
+    assert!(
+        matches!(
+            outcome,
+            Err(BrotliCompressError::Shared(
+                SharedBrotliError::UnsupportedSharedContextForQuality { quality: reported }
+            )) if reported == quality
+        ),
+        "an attached dictionary was not refused at quality {quality}"
     );
 }

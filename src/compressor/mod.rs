@@ -11,7 +11,9 @@ pub mod writer;
 
 use crate::Brotli;
 use crate::compressor::reader::CompressorReader;
-use crate::compressor::shared::SharedBrotliError;
+use crate::compressor::shared::{
+    PrefixMatch, SharedBrotliError, SharedContext, SharedContextBuilder,
+};
 use crate::compressor::writer::CompressorWriter;
 use fearless_simd::Level;
 use std::io::{Read, Write};
@@ -165,6 +167,216 @@ impl Compressor {
         reader: T,
     ) -> CompressorReader<T> {
         CompressorReader::new(reader, self.level, params)
+    }
+
+    /// Starts building a shared context for `max_quality` and every quality below it.
+    ///
+    /// The context that comes out is the caller's: it owns its dictionary
+    /// bytes, it is passed to the shared entry points by exclusive borrow, and
+    /// nothing in this crate keeps a second handle on it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::Brotli;
+    /// use mbrotli::compressor::QualityLevel;
+    ///
+    /// let compressor = Brotli::default().compressor();
+    /// let context = compressor
+    ///     .shared_context_builder(QualityLevel::Q5)
+    ///     .add_prefix_dictionary(b"common response prefix".to_vec())
+    ///     .prepare()?;
+    ///
+    /// assert_eq!(context.prefix_dictionary_count(), 1);
+    /// # Ok::<(), mbrotli::compressor::BrotliCompressError>(())
+    /// ```
+    pub fn shared_context_builder(&self, max_quality: QualityLevel) -> SharedContextBuilder {
+        SharedContextBuilder::new(max_quality)
+    }
+
+    /// Returns an upper bound on the compressed size of a shared call.
+    ///
+    /// Takes the context by shared reference, because a bound activates
+    /// nothing and changes nothing. The number is the ordinary
+    /// [`Compressor::calculate_bound`]: an attached dictionary only ever adds
+    /// places a match may come from, so it can shorten a stream but never
+    /// lengthen one, and it changes no header or parameter the bound counts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrotliCompressError::Shared`] when the context was prepared
+    /// for a lower quality than `params` asks for, and
+    /// [`BrotliCompressError::BoundOverflow`] when the bound does not fit in a
+    /// `usize`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::Brotli;
+    /// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
+    ///
+    /// let compressor = Brotli::default().compressor();
+    /// let context = compressor.shared_context_builder(QualityLevel::Q5).prepare()?;
+    /// let params = CompressParams::new(QualityLevel::Q5, WindowBits::DEFAULT);
+    ///
+    /// assert_eq!(
+    ///     compressor.calculate_shared_bound(&params, &context, 4096)?,
+    ///     compressor.calculate_bound(&params, 4096)?
+    /// );
+    /// # Ok::<(), mbrotli::compressor::BrotliCompressError>(())
+    /// ```
+    pub fn calculate_shared_bound(
+        &self,
+        params: &CompressParams,
+        context: &SharedContext,
+        input_size: usize,
+    ) -> BrotliResult<usize> {
+        context.check_quality(params.quality())?;
+        self.calculate_bound(params, input_size)
+    }
+
+    /// Compresses `src` against `context` into a freshly allocated stream.
+    ///
+    /// The context is borrowed exclusively for the call and returned to its
+    /// idle reusable state before this method comes back, whether it succeeded
+    /// or failed. Nothing about the context is written into the stream: a
+    /// decoder has to be given the same dictionary bytes, in the same order,
+    /// out of band.
+    ///
+    /// An empty context produces exactly the bytes [`Compressor::compress`]
+    /// produces for the same parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrotliCompressError::Shared`] when the context was prepared
+    /// for a lower quality than `params` asks for, or when the quality cannot
+    /// compress against an attached dictionary yet — which is currently every
+    /// quality, so a non-empty context is refused rather than ignored. Also
+    /// propagates [`BrotliCompressError::UnsupportedQuality`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::Brotli;
+    /// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
+    ///
+    /// let compressor = Brotli::default().compressor();
+    /// let mut context = compressor.shared_context_builder(QualityLevel::Q5).prepare()?;
+    /// let params = CompressParams::new(QualityLevel::Q5, WindowBits::DEFAULT);
+    ///
+    /// assert_eq!(
+    ///     compressor.compress_shared(params, &mut context, b"payload payload")?,
+    ///     compressor.compress(params, b"payload payload")?
+    /// );
+    /// # Ok::<(), mbrotli::compressor::BrotliCompressError>(())
+    /// ```
+    pub fn compress_shared(
+        &self,
+        params: CompressParams,
+        context: &mut SharedContext,
+        src: &[u8],
+    ) -> BrotliResult<Vec<u8>> {
+        context.check_quality(params.quality())?;
+        let mut output = Vec::with_capacity(self.calculate_bound(&params, src.len())?);
+        core::driver::compress_shared_to_vec(
+            self.level,
+            &params,
+            context.inner(),
+            src,
+            &mut output,
+        )?;
+        Ok(output)
+    }
+
+    /// Compresses `src` against `context` into `dst`.
+    ///
+    /// Size `dst` with [`Compressor::calculate_shared_bound`]. On
+    /// [`BrotliCompressError::OutputTooSmall`] the contents of `dst` are
+    /// unspecified and no successful truncated stream is reported, exactly as
+    /// for [`Compressor::compress_to_slice`]; the context still returns to its
+    /// idle reusable state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrotliCompressError::OutputTooSmall`] when `dst` cannot hold
+    /// the whole stream, and the same shared-context errors as
+    /// [`Compressor::compress_shared`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::Brotli;
+    /// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
+    ///
+    /// let compressor = Brotli::default().compressor();
+    /// let mut context = compressor.shared_context_builder(QualityLevel::Q5).prepare()?;
+    /// let params = CompressParams::new(QualityLevel::Q5, WindowBits::DEFAULT);
+    /// let mut buffer = vec![0u8; compressor.calculate_shared_bound(&params, &context, 5)?];
+    /// let written = compressor.compress_shared_to_slice(params, &mut context, b"aaaaa", &mut buffer)?;
+    ///
+    /// assert_eq!(&buffer[..written], compressor.compress(params, b"aaaaa")?.as_slice());
+    /// # Ok::<(), mbrotli::compressor::BrotliCompressError>(())
+    /// ```
+    pub fn compress_shared_to_slice(
+        &self,
+        params: CompressParams,
+        context: &mut SharedContext,
+        src: &[u8],
+        dst: &mut [u8],
+    ) -> BrotliResult<usize> {
+        context.check_quality(params.quality())?;
+        core::driver::compress_shared_to_slice(self.level, &params, context.inner(), src, dst)
+    }
+
+    /// Returns the longest match `context` offers at the start of `input`.
+    ///
+    /// This is the prefix search the encoders will run at every input position
+    /// once they consult attached dictionaries; run directly, it answers how
+    /// well a candidate dictionary actually covers a corpus, which is the
+    /// question worth asking before shipping one.
+    ///
+    /// The result is deterministic: attachments are searched oldest first,
+    /// each attachment's bucket chain newest first, and only a strictly longer
+    /// match displaces the incumbent. A match may begin in one attachment and
+    /// continue into the next, because the attachments are one logical byte
+    /// sequence. The scan itself is scalar, so the answer does not depend on
+    /// which backend this compressor resolved; it lives here rather than on
+    /// the context so that a vectorised scan can be dispatched from the level
+    /// this type already holds, without moving the method.
+    ///
+    /// Returns `None` when nothing matched, and when `input` is shorter than
+    /// the eight bytes the prepared index is keyed on.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::Brotli;
+    /// use mbrotli::compressor::QualityLevel;
+    ///
+    /// let compressor = Brotli::default().compressor();
+    /// let context = compressor
+    ///     .shared_context_builder(QualityLevel::Q5)
+    ///     .add_prefix_dictionary(b"HTTP/1.1 200 OK\r\nContent-Type: ".to_vec())
+    ///     .prepare()?;
+    ///
+    /// let found = compressor
+    ///     .longest_prefix_match(&context, b"Content-Type: text/html")
+    ///     .expect("the dictionary covers the header");
+    /// assert_eq!(found.length(), 14);
+    ///
+    /// assert!(compressor.longest_prefix_match(&context, b"nothing alike").is_none());
+    /// assert!(compressor.longest_prefix_match(&context, b"HTTP").is_none());
+    /// # Ok::<(), mbrotli::compressor::BrotliCompressError>(())
+    /// ```
+    pub fn longest_prefix_match(
+        &self,
+        context: &SharedContext,
+        input: &[u8],
+    ) -> Option<PrefixMatch> {
+        context
+            .inner()
+            .longest_prefix_match(input)
+            .map(PrefixMatch::from)
     }
 }
 

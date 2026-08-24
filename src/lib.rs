@@ -51,11 +51,48 @@
 //!
 //! Qualities 0 and 1 report
 //! [`SharedBrotliError::UnsupportedLargeWindow`] rather than dropping the
-//! request. The rest of RFC 9841 — shared dictionaries and the framing
-//! container — is not implemented.
+//! request.
+//!
+//! # Shared dictionaries
+//!
+//! RFC 9841 also lets a caller attach up to fifteen LZ77 prefix dictionaries in
+//! front of a stream. [`SharedContext`] is the caller-owned object that holds
+//! them and the indexes prepared over them: build it once, keep it, and hand it
+//! to a compression call by exclusive borrow. It contains no `Arc`, no lock and
+//! no interior mutability, so it is an ordinary owned value that happens to be
+//! expensive to build.
+//!
+//! ```
+//! use mbrotli::Brotli;
+//! use mbrotli::compressor::QualityLevel;
+//!
+//! let compressor = Brotli::default().compressor();
+//! let context = compressor
+//!     .shared_context_builder(QualityLevel::Q5)
+//!     .add_prefix_dictionary(b"HTTP/1.1 200 OK\r\nContent-Type: ".to_vec())
+//!     .prepare()?;
+//!
+//! // How much of an input the dictionary actually covers.
+//! let found = compressor
+//!     .longest_prefix_match(&context, b"Content-Type: text/html")
+//!     .expect("the header is in the dictionary");
+//! assert_eq!(found.length(), 14);
+//! # Ok::<(), mbrotli::compressor::BrotliCompressError>(())
+//! ```
+//!
+//! **No encoder consults an attached dictionary yet.** Until one does,
+//! [`Compressor::compress_shared`] refuses a non-empty context with
+//! [`SharedBrotliError::UnsupportedSharedContextForQuality`] rather than
+//! emitting a stream that quietly ignored it; an *empty* context produces
+//! exactly the bytes [`Compressor::compress`] does. Serialized shared
+//! dictionaries and the framing container are not implemented.
 //!
 //! [RFC 9841]: https://www.rfc-editor.org/rfc/rfc9841.html
 //! [`SharedBrotliError::UnsupportedLargeWindow`]: compressor::shared::SharedBrotliError::UnsupportedLargeWindow
+//! [`SharedBrotliError::UnsupportedSharedContextForQuality`]: compressor::shared::SharedBrotliError::UnsupportedSharedContextForQuality
+//! [`SharedContext`]: compressor::shared::SharedContext
+//! [`Compressor::compress_shared`]: compressor::Compressor::compress_shared
+//! [`Compressor::compress`]: compressor::Compressor::compress
 //!
 //! Qualities 4 and 5 pick a different match finder for inputs of a mebibyte or
 //! more. The one-shot entry points know the input length and pass it on; the

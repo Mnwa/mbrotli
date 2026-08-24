@@ -23,6 +23,11 @@ asserts, on every corpus, on every run.
   the wider header is never inferred. Declaring a wide window allocates
   nothing: the encoder keeps at most 30 bits of history whatever the header
   says.
+- **RFC 9841 shared contexts, without shared ownership.** `SharedContext` owns
+  its dictionary bytes outright — no `Arc`, no `Mutex`, no atomic, no global
+  cache — and is handed to a call by `&mut`, so the borrow checker is what
+  guarantees one context backs one session. Its prepared index is byte-identical
+  to the reference's, entry for entry.
 
 ## Status
 
@@ -34,9 +39,10 @@ asserts, on every corpus, on every run.
 | One-shot and streaming APIs | implemented |
 | Mode, block size, size hint, distance layout, context modelling | implemented |
 | RFC 9841 Large Window (qualities 3–11) | implemented — qualities 0 and 1 report `UnsupportedLargeWindow` |
-| RFC 9841 shared dictionaries and framing container | not implemented |
-| Large window (`lgwin > 24`) | not supported |
-| Compound and custom dictionaries | not supported; the built-in static dictionary is used |
+| RFC 9841 shared context: prefix dictionaries, prepared indexes, addressing, search | implemented |
+| RFC 9841 shared dictionaries used by an encoder | not implemented — refused with `UnsupportedSharedContextForQuality`, never ignored |
+| RFC 9841 serialized dictionaries and framing container | not implemented |
+| Custom static dictionaries | not supported; the built-in static dictionary is used |
 
 ### Quality guide
 
@@ -223,10 +229,11 @@ cargo llvm-cov --package mbrotli --all-features --summary-only
 | [`architecture/fast-encoder.md`](architecture/fast-encoder.md) | Quality 0 and 1 core: scans, bitstream, dispatch, specialisation |
 | [`architecture/greedy-encoder.md`](architecture/greedy-encoder.md) | Quality 3 to 9 core: hasher plan, commands, greedy meta-blocks |
 | [`architecture/hq-encoder.md`](architecture/hq-encoder.md) | Quality 10 and 11 core: binary tree, Zopfli search, clustering, numerical determinism |
-| [`architecture/shared-brotli.md`](architecture/shared-brotli.md) | RFC 9841: Large Window selection, declared window versus retained history, the widened distance alphabet |
+| [`architecture/shared-brotli.md`](architecture/shared-brotli.md) | RFC 9841: Large Window selection, declared window versus retained history, the widened distance alphabet, the shared context and its prefix search |
 | [`docs/rfc9841_api_binding.md`](docs/rfc9841_api_binding.md) | How RFC 9841 maps onto the existing API, symbol by symbol |
 | [`docs/rfc9841_interop_decisions.md`](docs/rfc9841_interop_decisions.md) | Every ambiguity in RFC 9841 and which reading this encoder implements |
 | [`docs/rfc9841_wire_map.md`](docs/rfc9841_wire_map.md) | Every RFC 9841 field written, its width, its validation and its implementing function |
+| [`docs/rfc9841_context_lifecycle.md`](docs/rfc9841_context_lifecycle.md) | Who owns a `SharedContext`, what a call does to it, and what reuse guarantees |
 | [`docs/rfc9841_security.md`](docs/rfc9841_security.md) | What an attacker can influence through RFC 9841, and what is done about it |
 | [`docs/rfc9841_benchmarks.md`](docs/rfc9841_benchmarks.md) | Evidence that Large Window support did not slow ordinary compression |
 | [`docs/q6_q9_api_binding.md`](docs/q6_q9_api_binding.md) | How qualities 6–9 map onto the greedy encoder |

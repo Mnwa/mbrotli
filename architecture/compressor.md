@@ -13,9 +13,11 @@ The subsystem is a three-layer funnel:
 1. **Level layer** — `Brotli` resolves the SIMD instruction set once, at
    construction time, and carries it as a `Copy` value.
 2. **API layer** — `Compressor` pairs that level with per-call
-   `CompressParams` and exposes four entry points: bound calculation,
-   one-shot to a `Vec`, one-shot into a caller slice, and the two streaming
-   adapters.
+   `CompressParams` and exposes bound calculation, one-shot to a `Vec`,
+   one-shot into a caller slice, and the two streaming adapters — plus the
+   RFC 9841 shared-context entry points that mirror the first three and take a
+   caller-owned `SharedContext` as a separate argument. Those are described in
+   [shared-brotli.md](shared-brotli.md).
 3. **Core layer** — private `compressor::core` modules own the algorithms:
    `core::bound` computes the compressed-size upper bound, `core::driver`
    routes a quality to an encoder and owns what both encoders share,
@@ -38,6 +40,7 @@ graph LR
     params["CompressParams<br/>{ quality, lgwin, ... }"]
 
     oneshot["compress / compress_to_slice"]
+    sharedone["compress_shared / compress_shared_to_slice<br/>(see shared-brotli.md)"]
     rd["CompressorReader<br/>{ reader, level, params, encoder }"]
     wr["CompressorWriter<br/>{ writer, level, params, encoder }"]
     bound["core::bound::bound(&params, input_size)"]
@@ -49,6 +52,7 @@ graph LR
     detect --> brotli
     brotli -->|"From&lt;Brotli&gt;"| compressor
     compressor --> oneshot
+    compressor --> sharedone
     compressor -->|compress_reader| rd
     compressor -->|compress_writer| wr
     params --> oneshot
@@ -56,6 +60,8 @@ graph LR
     params --> wr
     oneshot --> bound
     oneshot --> driver
+    sharedone --> bound
+    sharedone --> driver
     rd --> driver
     wr --> driver
     driver -->|"quality 0, 1"| fast
@@ -78,6 +84,11 @@ classDiagram
         +compress_to_slice(params, src, dst) BrotliResult~usize~
         +compress_writer(params, w) CompressorWriter
         +compress_reader(params, r) CompressorReader
+        +shared_context_builder(quality) SharedContextBuilder
+        +calculate_shared_bound(params, &ctx, usize) BrotliResult~usize~
+        +compress_shared(params, &mut ctx, src) BrotliResult~Vec~u8~~
+        +compress_shared_to_slice(params, &mut ctx, src, dst) BrotliResult~usize~
+        +longest_prefix_match(&ctx, src) Option~PrefixMatch~
     }
     class CompressParams {
         -QualityLevel quality

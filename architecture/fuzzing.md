@@ -64,7 +64,7 @@ persistent mode needs no reset hook and `fuzz_with_reset!` is not used.
 
 ## Input model
 
-Three input shapes exist. All cap the payload at `MAX_PAYLOAD` (128 KiB) by
+Five input shapes exist. All cap the payload at `MAX_PAYLOAD` (128 KiB) by
 truncation rather than rejection, so an oversized input still contributes the
 structure its prefix carries.
 
@@ -92,6 +92,11 @@ flowchart TD
     shape -->|"large window"| lw["large_window: 1 byte, then decode_case"]
     lw --> lwn["byte 0 — declared window b mod 70<br/>reaches below 10 and above 62, both illegal"]
     lw --> lwr["remainder — a whole decode_case input,<br/>so quality and distance layout still vary"]
+
+    shape -->|"shared context"| sc["shared_context: 2 bytes, then decode_case"]
+    sc --> scn["byte 0 — attachments b mod 18<br/>reaches 16 and 17, both past the format's limit"]
+    sc --> scs["byte 1 — every fourth value squeezes<br/>SharedContextLimits to an impossible budget"]
+    sc --> scr["remainder — a whole decode_case input;<br/>its payload is cut into the attachments<br/>and then matched against them"]
 ```
 
 `decode_case` is closed over the legal domain by construction: its window index
@@ -127,6 +132,7 @@ conversions and the unimplemented-quality path.
 | `output_capacity` | header | exactly sized `dst` accepted, one byte short reported as `OutputTooSmall` |
 | `parameter_parsing` | numeric | `TryFrom` contracts hold; unimplemented qualities reported by all four entry points |
 | `large_window` | large window | `WindowBits::large` contract holds; qualities 0 and 1 refuse rather than dropping the request; bound, determinism, backend identity; C decoder round-trip up to 30 declared bits, and above it the stream differs from the 30-bit stream only in the six header bits |
+| `shared_context` | shared context | preparation is a transaction — a count or limit refusal yields no context; the accessors agree with what was attached; a reported prefix match really matches those bytes and fits inside both sides; the offset-to-distance mapping round-trips and saturates at both ends; the match does not depend on which backend the compressor resolved; an empty context emits exactly what `compress` emits and round-trips; a non-empty one is refused with `UnsupportedSharedContextForQuality` rather than ignored |
 
 The oracles are layered rather than independent: `differential_c` is the
 strongest (byte identity with the reference), `params_roundtrip` and the
@@ -205,6 +211,11 @@ vendored submodule at `brotli-ffi/vendor/brotli/tests/testdata`, and
 unminimised original alongside as `seeds/*.raw`. `seeds/generic` is the raw
 test data (24 files, minimised to 21); `seeds/params` is the same files behind
 a parameter header (114, minimised to 47 — most headers reach the same code);
+`seeds/shared_context` is each parameter seed behind two more bytes, at four
+attachment counts (0, 1, 15, 16 — the empty-context path, one dictionary, the
+format's limit and one past it) crossed with a generous and an impossible
+budget.
+
 `seeds/large_window` is each parameter seed behind one more byte, at four
 declared windows — the floor, the default, the widest the pinned C decoder
 reads, and the widest the format allows.

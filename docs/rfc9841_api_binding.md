@@ -22,6 +22,40 @@ one quality needs" and is unrelated. The public module is
 `SharedCompressOptions` does not exist and will not: every shared entry point
 takes `CompressParams` and the context as separate arguments.
 
+## Divergence: limits are a value with accessors, not public fields
+
+Section 12.3 sketches `SharedContextLimits` as a struct with six public fields.
+This crate keeps the fields private behind `Default`, `with_*` setters and
+getters, matching `CompressParams` and every other parameter type here. Public
+fields would make adding the remaining three limits a breaking change, which is
+the wrong trade for a type whose whole purpose is to grow as more of RFC 9841
+lands.
+
+Three of the six exist today, because three is what something checks:
+`max_total_source_bytes`, `max_prefix_bytes` and `max_allocated_bytes`.
+`max_transformed_word_bytes` and `max_trie_nodes` land with the serialized
+dictionary; `max_reusable_workspace_bytes` lands with the reusable encoder
+workspace. A limit that nothing enforces would be a promise the code does not
+keep.
+
+## Extension: the prefix search is reachable before the encoders use it
+
+`Compressor::longest_prefix_match`, `PrefixMatch`,
+`SharedContext::backward_distance` and `SharedContext::dictionary_offset` are
+not in the specification. They are here because Milestone 2 requires a
+"scalar prefix match oracle" and "virtual concatenation addressing", and this
+repository's completion checks run `clippy -D warnings` and forbid `#[allow]`:
+code with no consumer cannot land. The encoders become that consumer in
+Milestone 3; until then these four read-only entry points are, and they are
+useful in their own right — `longest_prefix_match` answers how well a candidate
+dictionary actually covers a corpus, which is the question worth asking before
+shipping one, and the two mapping functions are the RFC's own distance
+arithmetic, which a decoder-side fixture needs.
+
+They are additive, take `&SharedContext`, mutate nothing, and expose no `core`
+type: `PrefixMatch` is a public `Copy` value built from the private one by
+`From`.
+
 ## Divergence: one window type, not two
 
 Sections 2.1, 4.2, 5.1, 11.1, 54 and 55 of the specification require a separate
@@ -93,23 +127,49 @@ still passes.
 | Writer adapter | `mbrotli::compressor::writer::CompressorWriter` | unchanged, still infallible to construct | owns the sink |
 | Reader adapter | `mbrotli::compressor::reader::CompressorReader` | unchanged, still infallible to construct | owns the source |
 | Error type | `mbrotli::compressor::BrotliCompressError` | added `Shared(#[from] SharedBrotliError)`, `#[error(transparent)]` | public, `#[non_exhaustive]` |
-| Shared error | `mbrotli::compressor::shared::SharedBrotliError` (new) | public, `#[non_exhaustive]`; variants are added as they become reachable | value |
+| Shared error | `mbrotli::compressor::shared::SharedBrotliError` | public, `#[non_exhaustive]`; gained `TooManyPrefixDictionaries`, `DictionaryTooLarge`, `SharedContextTooLarge`, `SharedContextQualityMismatch` and `UnsupportedSharedContextForQuality`; variants are still added only as they become reachable | value |
 | Fast matchers | `compressor::core::fast::q0`, `compressor::core::fast::q1` | not extended | — |
-| Quick / chain / bucket matchers | `compressor::core::greedy::hashers::{QuickMatcher, ChainMatcher, BucketMatcher, MatchFinder}` | not extended | context workspace, once shared contexts exist |
-| H10 matcher | `compressor::core::hq::h10::BinaryTreeMatcher` | not extended | context workspace, once shared contexts exist |
+| Quick / chain / bucket matchers | `compressor::core::greedy::hashers::{QuickMatcher, ChainMatcher, BucketMatcher, MatchFinder}` | not extended | context workspace, once the encoders consult a context |
+| H10 matcher | `compressor::core::hq::h10::BinaryTreeMatcher` | not extended | context workspace, once the encoders consult a context |
 | Static dictionary | `compressor::core::shared::dictionary` | not extended | built-in RFC 7932 data only |
-| Shared context | — | **not implemented** | caller-owned `&mut SharedContext` when it lands |
+| Shared context | `mbrotli::compressor::shared::SharedContext` (new) | owns `SharedDictionaryData` and `PreparedDictionaryIndexes` plus the prepared `QualityLevel`; `Send + Sync` by its fields alone, no `Arc`, no lock, no atomic, no interior mutability | caller-owned; borrowed `&mut` per call |
+| Context builder | `mbrotli::compressor::shared::SharedContextBuilder` (new) | consuming builder; `add_prefix_dictionary<B: Into<Box<[u8]>>>`, `with_limits`, `prepare`; call order is prefix order | owns `Vec<Box<[u8]>>` until `prepare` moves it |
+| Context limits | `mbrotli::compressor::shared::SharedContextLimits` (new) | `Copy` value with `Default`, three `with_*` setters and three getters; see the divergence above | `Copy`, inside the builder |
+| Attachment list | `compressor::core::rfc9841::prefix::PrefixSources` (new) | `Box<[Box<[u8]>]>` plus a `Box<[u64]>` cumulative offset table; `locate`, `run_from`, `address_of`, `distance_of`, `match_length` | owned by the context, immutable |
+| Prefix limit | `prefix::MAX_PREFIX_DICTIONARIES` (15), `MAX_PREFIX_SEGMENT_BYTES` (`2^31 - 1`) | ports `SHARED_BROTLI_MAX_COMPOUND_DICTS`; the segment cap is this port's, replacing the reference's unchecked `u32` truncation of `source_size` | constants |
+| Prepared index | `compressor::core::rfc9841::prepared::PreparedPrefix` (new) | ports `CreatePreparedDictionary`; three boxed tables instead of one flat allocation carved by pointer arithmetic, and offsets instead of a retained source pointer | one per attachment, immutable |
+| Candidate walk | `prepared::Candidates` | ports the chain half of `FindCompoundDictionaryMatch`; yields source offsets newest first | borrows the index |
+| Prefix match scan | `compressor::core::rfc9841::prefix::common_prefix_len` (new) | its own scalar whole-word scan, deliberately *not* the encoders' vector kernel: reusing that meant refactoring it, which cost about 6% of quality 1 (see `rfc9841_benchmarks.md`), and Section 42.3 lists this kernel as one to profile before vectorising | pure |
+| Context state | `compressor::core::rfc9841::context::SharedContextInner` (new) | dictionaries plus indexes; **no mutable third part yet** — see the context lifecycle document | owned by `SharedContext` |
+| Context limits (internal) | `context::Budget` | flat `Copy` mirror of the public limits, so no accessor is called inside a check loop | value |
+| Shared bound | `Compressor::calculate_shared_bound` (new) | validates the prepared quality, then delegates to `calculate_bound`; takes `&SharedContext`, activates nothing | pure |
+| Shared one-shot | `Compressor::compress_shared`, `compress_shared_to_slice` (new) | validate, then route an empty context to the ordinary driver and refuse a non-empty one | call-scoped |
+| Shared validation | `compressor::core::driver::check_shared`, `check_quality_implemented`, `check_shared_context` (new) | Section 21.1's order, minus the context-quality step the public layer owns | call-scoped |
+| Prefix search | `Compressor::longest_prefix_match`, `shared::PrefixMatch` (new) | see the extension note above | read-only |
+| Prepared-index oracle | `mbrotli_shim_prepare_dictionary` in `brotli-ffi/shim/` (new) | exposes `CreatePreparedDictionary` and copies its three tables out for the differential test | test-only |
+| Streaming shared adapters | — | **not implemented** | `SharedCompressorWriter`, `SharedCompressorReader` land with the encoder integration |
+| Prefix matching in the encoders | — | **not implemented**; refused with `UnsupportedSharedContextForQuality`, never ignored | — |
 | Serialized dictionary | — | **not implemented** | — |
 | Canonical / reversed varints | — | **not implemented** | lands with its first consumer, see below |
 | Framing container | — | **not implemented** | — |
 
 ## No shared ownership anywhere
 
-Nothing added by this change introduces `Arc`, `Rc`, `Mutex`, `RwLock`, an
-atomic, a global cache, or interior mutability. `WindowBits` is a `Copy`
-newtype over a two-byte private enum inside a `Copy` `CompressParams`;
-`ResolvedWindow` is a `Copy` value resolved once per session and read from
-there. There is no `SharedCompressOptions` and no context handle to clone.
+Nothing here introduces `Arc`, `Rc`, `Mutex`, `RwLock`, an atomic, a global
+cache, or interior mutability. `WindowBits` is a `Copy` newtype over a two-byte
+private enum inside a `Copy` `CompressParams`; `ResolvedWindow` is a `Copy`
+value resolved once per session and read from there. There is no
+`SharedCompressOptions` and no context handle to clone.
+
+`SharedContext` owns its dictionary bytes as `Box<[u8]>` and its indexes as
+`Box<[u32]>`, `Box<[u16]>` and `Box<[PreparedPrefix]>` — every collection that
+has stopped growing is boxed rather than a `Vec`, so the capacity word is gone
+and `push` is not reachable on something documented as immutable. The only
+`Vec` is the builder's attachment list, which is the only collection that
+grows. `SharedContext` is `Send` and `Sync` because its fields are, not because
+anything asserted it; a caller who wants one context on several threads writes
+the `Arc<Mutex<_>>` themselves, and the crate neither creates it nor knows
+about it.
 
 ## Why the bound did not change
 
@@ -131,12 +191,9 @@ structural and boundary corpora at three qualities and four declared windows.
 
 ## Deliverables that are deferred
 
-Section 53 of the implementation specification lists five documents. Four exist:
-this one, `rfc9841_interop_decisions.md`, `rfc9841_wire_map.md` and
-`rfc9841_security.md`. `rfc9841_context_lifecycle.md` does not, because the
-mutable `SharedContext` whose lifecycle it would describe is not implemented;
-writing it now would describe intended behaviour as if it were real, which the
-repository's architecture rules forbid. It lands with the context.
+Section 53 of the implementation specification lists five documents. All five
+now exist: this one, `rfc9841_interop_decisions.md`, `rfc9841_wire_map.md`,
+`rfc9841_security.md` and `rfc9841_context_lifecycle.md`.
 
 ## Deferred: varints
 

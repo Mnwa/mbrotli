@@ -179,3 +179,69 @@ no observable meaning in it.
 **Scope.** The shortcut applies to `compress` and `compress_to_slice`. A
 streaming adapter that is finished without any input goes through the ordinary
 encoder and does emit the requested header.
+
+## D6 — A prefix match may cross a seam; a prefix *candidate* may not (checked 2026-08-24)
+
+RFC 9841 Section 3 allows a copy to begin in the attached LZ77 prefix and
+continue past its end, into the stream's own output history — the attachments
+and the stream form one virtual byte sequence. Section 13.4 of the
+implementation specification requires the match-length oracle to model exactly
+that.
+
+The pinned C encoder does **not**. `FindCompoundDictionaryMatch` and
+`FindAllCompoundDictionaryMatches` (`c/enc/hash.h`) both compute
+`limit = source_size - offset` and cap the match there, where `source_size` is
+the size of the *one chunk* the candidate came from. Each attached chunk is
+searched independently, so a match neither runs into the next chunk nor into
+the ring buffer. The comment above `FindAllCompoundDictionaryMatches` says so:
+"when seamless dictionary-ring-buffer copies are implemented, don't forget to
+add proper guards".
+
+**Decision.** Implement the RFC's virtual concatenation in
+`PrefixSources::match_length`, which is the oracle Section 14.5 specifies: it
+walks from a logical address to the end of its segment, into every following
+segment, and then into the stream history it is given. The encoders are not
+wired to it yet, so nothing this crate emits differs from the reference today.
+
+**Consequence for Milestone 3.** When the match finders start consulting a
+context, byte-for-byte C parity and the RFC's seamless copies are not the same
+behaviour, and the difference is observable in the emitted commands. The
+compatibility profile will have to cap a candidate's match at the end of its
+own attachment, which `PrefixSources` supports because it exposes the segment a
+logical address falls in. That choice belongs to the milestone that emits the
+commands, not to this one.
+
+**What is *not* a divergence.** The byte that *starts* a match must still be an
+indexed position, so its own eight hashed bytes have to lie inside one
+attachment: a position within seven bytes of an attachment's end is never a
+candidate. That is the reference's behaviour and this port's, and
+`context::a_search_crosses_the_seam_between_attachments` pins it.
+
+**Revisit when** the encoders consult a context, or when an accepted erratum
+changes what Section 3 permits.
+
+## D7 — One prepared index per attachment, not one per quality family (checked 2026-08-24)
+
+Section 14.3 of the implementation specification allows preparation to build
+separate views per quality family — fast fragment paths, quick matchers,
+extensive greedy matchers, and the Zopfli all-match search — and asks that
+q11-heavy structures not be built when `max_quality` is lower.
+
+**Decision.** Build exactly one index per attachment, whatever `max_quality`
+says, because that is what the reference does: `CreatePreparedDictionary`
+produces a single `PreparedDictionary` per chunk, and both
+`FindCompoundDictionaryMatch` (the greedy families) and
+`FindAllCompoundDictionaryMatches` (the Zopfli search) walk that same
+structure. There is no q11-heavy structure to skip.
+
+**Consequence.** `max_quality` is recorded and validated — a context prepared
+for q5 is refused at q9 rather than silently under-serving it — but it does not
+change what is built, which
+`shared_context::preparation_does_not_depend_on_the_quality_it_was_prepared_for`
+pins. The validation exists because Section 6.3 requires the refusal, and
+because a later change that *does* specialise must not silently start serving a
+quality it did not prepare for.
+
+**Revisit when** profiling shows a family-specific index earns its memory, or
+when the serialized dictionary adds structures that a low `max_quality`
+genuinely does not need.

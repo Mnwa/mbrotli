@@ -15,6 +15,7 @@ use fearless_simd::Level;
 use super::fast::FastEncoder;
 use super::greedy::encoder::GreedyEncoder;
 use super::hq::encoder::HqEncoder;
+use super::rfc9841::context::SharedContextInner;
 use crate::compressor::shared::SharedBrotliError;
 use crate::compressor::{BrotliCompressError, BrotliResult, CompressParams, QualityLevel};
 
@@ -119,6 +120,91 @@ const fn check_large_window(params: &CompressParams) -> BrotliResult<()> {
         QualityLevel::Q2 => Err(BrotliCompressError::UnsupportedQuality(2)),
         _ => Ok(()),
     }
+}
+
+/// Rejects a quality no encoder in this crate implements.
+///
+/// The ordinary entry points learn this from `Encoder::new`, which has to
+/// build an encoder to find out. The shared entry points need the answer
+/// before they touch the context, because a call that cannot compress at all
+/// must not report a context problem instead.
+const fn check_quality_implemented(params: &CompressParams) -> BrotliResult<()> {
+    match params.quality() {
+        QualityLevel::Q2 => Err(BrotliCompressError::UnsupportedQuality(2)),
+        _ => Ok(()),
+    }
+}
+
+/// Rejects an attached dictionary at a quality that cannot consult one.
+///
+/// Today that is every quality: no match finder reads a prefix dictionary yet.
+/// Refusing is what Section 19.6 of the implementation specification requires
+/// — a stream compressed without the dictionary it was given decodes perfectly
+/// well, so silently ignoring one would be invisible until a decoder that does
+/// attach it produces the wrong bytes.
+fn check_shared_context(params: &CompressParams, context: &SharedContextInner) -> BrotliResult<()> {
+    if context.is_empty() {
+        return Ok(());
+    }
+    Err(BrotliCompressError::Shared(
+        SharedBrotliError::UnsupportedSharedContextForQuality {
+            quality: usize::from(params.quality()),
+        },
+    ))
+}
+
+/// Runs the validation every shared entry point shares.
+///
+/// The order is the one Section 21.1 of the implementation specification
+/// fixes. Its second step — the context's own prepared quality — is checked by
+/// the public entry point before this is called, because only that layer knows
+/// what the context was prepared for; the rest is here: quality support, then
+/// the window syntax, then the shared path itself. All of it runs before any
+/// input is consumed, so a rejected call leaves the context exactly as it was
+/// found — which is trivially true today, because nothing in a context is
+/// stream state a call could disturb.
+fn check_shared(params: &CompressParams, context: &SharedContextInner) -> BrotliResult<()> {
+    check_quality_implemented(params)?;
+    check_large_window(params)?;
+    check_shared_context(params, context)
+}
+
+/// Compresses `src` against a shared context, appending the stream to `out`.
+///
+/// An empty context produces exactly the bytes [`compress_to_vec`] would, and
+/// takes the same path to them: there is no wrapper, no extra allocation and
+/// no second decision about the window.
+///
+/// # Errors
+///
+/// Propagates the shared validation above, then everything
+/// [`compress_to_vec`] can report.
+pub(crate) fn compress_shared_to_vec(
+    level: Level,
+    params: &CompressParams,
+    context: &SharedContextInner,
+    src: &[u8],
+    out: &mut Vec<u8>,
+) -> BrotliResult<()> {
+    check_shared(params, context)?;
+    compress_to_vec(level, params, src, out)
+}
+
+/// Compresses `src` against a shared context, writing into `dst`.
+///
+/// # Errors
+///
+/// Propagates the shared validation above, then everything
+/// [`compress_to_slice`] can report.
+pub(crate) fn compress_shared_to_slice(
+    level: Level,
+    params: &CompressParams,
+    context: &SharedContextInner,
+    src: &[u8],
+    dst: &mut [u8],
+) -> BrotliResult<usize> {
+    check_shared(params, context)?;
+    compress_to_slice(level, params, src, dst)
 }
 
 /// Upper bound the reference one-shot API enforces on its own output.

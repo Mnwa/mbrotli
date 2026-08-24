@@ -67,6 +67,34 @@ Both quantities reach the meta-block header through
 `core::shared::bitstream`, which writes `alphabet_size_max` as the alphabet a
 decoder must assume and uses `alphabet_size_limit` to size the block encoder.
 
+## Implemented: nothing at all, for the shared context
+
+`SharedContext` is the largest RFC 9841 feature in this crate that writes
+**zero** wire fields, and that is the format's design rather than an omission.
+An attached LZ77 prefix dictionary is out-of-band: it is not embedded, not
+named, not hashed and not length-prefixed in the stream. A decoder is given the
+same bytes in the same order by the same channel that agreed on them, and a
+stream compressed against one is a perfectly ordinary Brotli stream whose
+backward distances happen to reach past the sliding window.
+
+That is exactly why the reference table below has no rows for it, and why
+`shared_context::an_empty_context_compresses_exactly_as_the_ordinary_call_does`
+can assert byte equality with the ordinary entry point: with nothing attached,
+there is no distance past the window, so there is nothing to distinguish the
+two streams.
+
+The distances that *would* reach the prefix are defined, and the arithmetic is
+implemented and tested, even though no encoder emits one yet:
+
+| Quantity | Value | Implemented by |
+| --- | --- | --- |
+| Ordinary history | distances `1..=M`, `M` the largest the window expresses | unchanged |
+| Prefix bytes | distances `(M + 1)..=(M + D)`, `D` the total prefix length | `PrefixSources::address_of` / `distance_of`, public as `SharedContext::dictionary_offset` / `backward_distance` |
+| Static dictionary | distances beyond `M + D` | unchanged; `D` is zero today in every emitted stream |
+
+All of it is checked `u64` arithmetic that returns `None` rather than wrapping
+at either end.
+
 ## Implemented: validation rules
 
 | Rule | Where | On failure |
@@ -75,6 +103,8 @@ decoder must assume and uses `alphabet_size_limit` to size the block encoder.
 | Large window requires quality 3 or above | `core::driver::check_large_window`, `FastEncoder::new` | `SharedBrotliError::UnsupportedLargeWindow` |
 | `10 <= WBITS <= 24` for the RFC 7932 header | `WindowBits::standard` | `ParseWindowBitsError::{LowerBound, UpperBound}` |
 | Large window at quality 2 | `core::driver::check_large_window` | `BrotliCompressError::UnsupportedQuality(2)` |
+| At most 15 attached prefix dictionaries | `SharedContextInner::new` | `SharedBrotliError::TooManyPrefixDictionaries` |
+| An attached dictionary at a quality that cannot use one | `core::driver::check_shared_context` | `SharedBrotliError::UnsupportedSharedContextForQuality` |
 | Emitted distance never exceeds the declared window | by construction: retained history is `min(WBITS, 30)` bits, so the largest distance is `2^min(WBITS,30) - 16` | — |
 | The usable distance alphabet fits a 544-symbol histogram | `distance_code_limit`, asserted over every legal `(NPOSTFIX, NDIRECT)` pair | — |
 

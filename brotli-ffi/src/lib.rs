@@ -298,6 +298,32 @@ unsafe extern "C" {
         matches: *mut c_uint,
     ) -> c_int;
 
+    /// Builds the prepared index for one LZ77 prefix dictionary.
+    ///
+    /// Wraps the encoder-internal `CreatePreparedDictionary` through this
+    /// crate's own shim, copying the three tables out of the flat allocation
+    /// the reference carves them from. Returns [`BROTLI_TRUE`] when the index
+    /// was built and every table fitted `capacity`, and [`BROTLI_FALSE`]
+    /// otherwise; the shape is reported either way, so a caller can size its
+    /// buffers from a first call.
+    ///
+    /// # Safety
+    ///
+    /// `source` must be readable for `source_size` bytes, the three shape
+    /// pointers must be writable, and each of `slot_offsets`, `heads` and
+    /// `items` must be writable for `capacity` elements of its own type.
+    pub fn mbrotli_shim_prepare_dictionary(
+        source: *const u8,
+        source_size: usize,
+        capacity: usize,
+        out_bucket_bits: *mut c_uint,
+        out_slot_bits: *mut c_uint,
+        out_num_items: *mut c_uint,
+        out_slot_offsets: *mut c_uint,
+        out_heads: *mut u16,
+        out_items: *mut c_uint,
+    ) -> c_int;
+
     /// Splits a command stream into literal, command and distance partitions.
     ///
     /// Wraps the encoder-internal `BrotliSplitBlock` through this crate's own
