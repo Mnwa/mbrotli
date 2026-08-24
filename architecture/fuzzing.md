@@ -19,7 +19,7 @@ The package is split so that the AFL dependency stops at the binary layer:
 ```mermaid
 graph TD
     subgraph engine["Engine layer (depends on afl)"]
-        bins["src/bin/ — eleven afl::fuzz! adapters"]
+        bins["src/bin/ — seventeen afl::fuzz! adapters"]
     end
 
     subgraph neutral["Engine-neutral layer (no afl dependency)"]
@@ -110,6 +110,12 @@ conversions and the unimplemented-quality path.
 | `q3_roundtrip` | payload | same, at quality 3 |
 | `q4_roundtrip` | payload | same, at quality 4 |
 | `q5_roundtrip` | payload | same, at quality 5 |
+| `q6_roundtrip` | payload | same, at quality 6 |
+| `q7_roundtrip` | payload | same, at quality 7 |
+| `q8_roundtrip` | payload | same, at quality 8 |
+| `q9_roundtrip` | payload | same, at quality 9 |
+| `q10_roundtrip` | payload | same, at quality 10 |
+| `q11_roundtrip` | payload | same, at quality 11 |
 | `params_roundtrip` | header | bound, determinism across two runs, round-trip, over every legal setting |
 | `simd_equivalence` | header | every distinct host backend emits identical bytes |
 | `differential_c` | header | byte identity with Google Brotli v1.2.0 configured with the same quality, window, mode, block size, size hint, distance layout and context setting |
@@ -220,11 +226,12 @@ sets are identical; the corpus takes under two seconds instead of minutes.
   including a 12 MiB case.
 - **No CI fuzzing.** The repository has no CI configuration at all, so neither
   a bounded smoke campaign nor the regression replay runs automatically.
-- **The regression corpora for the greedy targets are seeded, not found.**
-  `q3_roundtrip`, `q4_roundtrip` and `q5_roundtrip` start from the same
-  boundary cases as `q0_roundtrip`; nothing has crashed yet to replace them.
-- **Only smoke campaigns have been run.** The most recent, after the greedy
-  qualities were added, was thirty to forty-five seconds per target on
+- **The regression corpora for every quality target above one are seeded, not
+  found.** `q3_roundtrip` through `q11_roundtrip` start from the same boundary
+  cases as `q0_roundtrip`; nothing has crashed yet to replace them.
+- **Only smoke campaigns have been run,** and none since qualities six to
+  eleven were added, so the figures below predate more than half the targets.
+  The most recent was thirty to forty-five seconds per target on
   `aarch64-apple-darwin` over the unminimised parameter corpus:
   `differential_c` 650 new corpus items and 21.7% coverage,
   `simd_equivalence` 736 and 33.5%, `streaming_equivalence` 607 and 20.6%,

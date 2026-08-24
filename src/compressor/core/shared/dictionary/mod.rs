@@ -10,16 +10,27 @@
 //! that applies the transform, so the transform table itself never has to be
 //! carried: the encoder only computes which transform id a given prefix cut
 //! corresponds to.
+//!
+//! Two searches live here. [`search`] is the shallow probe the greedy
+//! qualities use, which asks for one best match; [`all_matches::find_all`] is
+//! the exhaustive one qualities ten and eleven use, which reports the best word
+//! at every length so the dynamic program can price them all.
 
-use super::score::{SearchResult, backward_reference_score};
+pub(crate) mod all_matches;
+
 use crate::compressor::core::shared::constants::HASH_MUL32;
+use crate::compressor::core::shared::score::{SearchResult, backward_reference_score};
+
+/// Longest match the static dictionary can produce
+/// (`BROTLI_MAX_STATIC_DICTIONARY_MATCH_LEN`).
+pub(crate) const MAX_STATIC_DICTIONARY_MATCH_LEN: usize = 37;
 
 /// Word data of the built-in dictionary (`kBrotliDictionaryData`).
 ///
 /// Extracted verbatim from `c/common/dictionary_inc.h` of the pinned
 /// reference; Google distributes it under the MIT licence, see
 /// `brotli-ffi/vendor/brotli/LICENSE`.
-static WORDS: &[u8; 122_784] = include_bytes!("words.bin");
+pub(super) static WORDS: &[u8; 122_784] = include_bytes!("words.bin");
 
 /// Hash table over four-byte word prefixes (`kStaticDictionaryHashWords`).
 ///
@@ -34,25 +45,25 @@ static HASH_LENGTHS: &[u8; NUM_HASH_BUCKETS] = include_bytes!("hash_lengths.bin"
 const NUM_HASH_BUCKETS: usize = 32_768;
 
 /// Where the words of each length start inside [`WORDS`].
-const OFFSETS_BY_LENGTH: [u32; 32] = [
+pub(super) const OFFSETS_BY_LENGTH: [u32; 32] = [
     0, 0, 0, 0, 0, 4096, 9216, 21504, 35840, 44032, 53248, 63488, 74752, 87040, 93696, 100_864,
     104_704, 106_752, 108_928, 113_536, 115_968, 118_528, 119_872, 121_280, 122_016, 122_784,
     122_784, 122_784, 122_784, 122_784, 122_784, 122_784,
 ];
 
 /// Base-2 logarithm of how many words of each length the dictionary holds.
-const SIZE_BITS_BY_LENGTH: [u8; 32] = [
+pub(super) const SIZE_BITS_BY_LENGTH: [u8; 32] = [
     0, 0, 0, 0, 10, 10, 11, 11, 10, 10, 10, 10, 10, 9, 9, 8, 7, 7, 8, 7, 7, 6, 6, 5, 5, 0, 0, 0, 0,
     0, 0, 0,
 ];
 
 /// How many prefix cuts have a dedicated transform (`kCutoffTransformsCount`).
-const CUTOFF_TRANSFORMS_COUNT: usize = 10;
+pub(super) const CUTOFF_TRANSFORMS_COUNT: usize = 10;
 
 /// Packed transform id per prefix cut (`kCutoffTransforms`).
 ///
 /// Six bits per cut, cut zero in the low bits.
-const CUTOFF_TRANSFORMS: u64 = 0x071B_520A_DA2D_3200;
+pub(super) const CUTOFF_TRANSFORMS: u64 = 0x071B_520A_DA2D_3200;
 
 /// Returns the dictionary hash of the four bytes at the start of `data`.
 ///
@@ -73,7 +84,7 @@ fn hash14(data: &[u8]) -> usize {
 /// the reference's word-at-a-time loop would not pay for its setup here, and
 /// the result has to be the exact first mismatch either way.
 #[inline(always)]
-fn common_prefix_len(left: &[u8], right: &[u8], limit: usize) -> usize {
+pub(super) fn common_prefix_len(left: &[u8], right: &[u8], limit: usize) -> usize {
     left.iter()
         .zip(right)
         .take(limit)

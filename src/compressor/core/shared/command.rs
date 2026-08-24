@@ -5,9 +5,9 @@
 //! will be written with rather than the raw lengths, because the meta-block
 //! builder histograms the codes long before the bit writer sees them.
 
-use super::params::{DistanceParams, NUM_DISTANCE_SHORT_CODES};
-use super::tables::{COPY_BASE, COPY_EXTRA, INS_BASE, INS_EXTRA};
-use crate::compressor::core::shared::fast_log::log2_floor_non_zero;
+use super::distance::{DistanceParams, NUM_DISTANCE_SHORT_CODES};
+use super::fast_log::log2_floor_non_zero;
+use super::format::{COPY_BASE, COPY_EXTRA, INS_BASE, INS_EXTRA};
 
 /// Mask of the copy length inside [`Command::copy_len`].
 const COPY_LEN_MASK: u32 = 0x1FF_FFFF;
@@ -260,6 +260,71 @@ impl Command {
             insnumextra + COPY_EXTRA[copycode as usize],
             (copyextraval << insnumextra) | insextraval,
         )
+    }
+}
+
+/// Grows the last command over input that continues its copy.
+///
+/// Mirrors `ExtendLastCommand` of `c/enc/encode.c`. When a block boundary falls
+/// in the middle of a repeat, the bytes after it would otherwise start a fresh
+/// command; extending the previous one instead costs nothing and saves a
+/// command. Every quality above one does this, so it belongs beside the command
+/// rather than in one encoder.
+///
+/// `span` is the stretch the search is about to process; the bytes absorbed
+/// here are removed from its front.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors ExtendLastCommand, whose parameters are all needed"
+)]
+pub(crate) fn extend_last_command(
+    command: &mut Command,
+    lgwin: usize,
+    dist: &DistanceParams,
+    last_distance: i32,
+    ringbuffer: &[u8],
+    mask: usize,
+    last_processed_pos: u64,
+    span: &mut super::ringbuffer::BlockSpan,
+) {
+    let max_backward_distance = (1u64 << lgwin) - 16;
+    let last_copy_len = u64::from(command.copy_len());
+    let last_processed_pos = last_processed_pos - last_copy_len;
+    let max_distance = last_processed_pos.min(max_backward_distance);
+    let cmd_dist = u64::from(last_distance as u32);
+    let distance_code = command.restore_distance_code(dist);
+
+    if u64::from(distance_code) < u64::from(NUM_DISTANCE_SHORT_CODES)
+        || u64::from(distance_code) - u64::from(NUM_DISTANCE_SHORT_CODES - 1) == cmd_dist
+    {
+        if cmd_dist <= max_distance {
+            while span.bytes != 0 {
+                let here = usize::try_from(u64::from(span.position)).unwrap_or(0);
+                let there = usize::try_from(u64::from(span.position) - cmd_dist).unwrap_or(0);
+                let Some(&current) = ringbuffer.get(here & mask) else {
+                    break;
+                };
+                let Some(&previous) = ringbuffer.get(there & mask) else {
+                    break;
+                };
+                if current != previous {
+                    break;
+                }
+                command.copy_len += 1;
+                span.bytes -= 1;
+                span.position += 1;
+            }
+        }
+        // The copy length changed, so the command symbol has to be recomputed.
+        // `ExtendLastCommand` reads the length-code delta as an unsigned field
+        // here, which agrees with the signed reading everywhere it can occur:
+        // only a dictionary match sets it, and never to a negative value.
+        command.cmd_prefix = length_code(
+            command.insert_len as usize,
+            (command.copy_len & COPY_LEN_MASK) as usize
+                + (command.copy_len >> COPY_LEN_CODE_SHIFT) as usize,
+            command.distance_code() == 0,
+        );
     }
 }
 

@@ -4,30 +4,34 @@
 //! `MakeUncompressedStream` from `c/enc/encode.c` of the pinned reference
 //! (`google/brotli` v1.2.0, commit `028fb5a`).
 //!
-//! Two encoder families live below this module: the fast one for qualities
-//! zero and one, and the greedy one for qualities three to five. Everything
-//! they share — the empty-input shortcut, the final fallback to an
-//! uncompressed stream — belongs here rather than in either of them.
+//! Three encoder families live below this module: the fast one for qualities
+//! zero and one, the greedy one for qualities three to nine, and the
+//! high-quality one for qualities ten and eleven. Everything they share — the
+//! empty-input shortcut, the final fallback to an uncompressed stream —
+//! belongs here rather than in any of them.
 
 use fearless_simd::Level;
 
 use super::fast::FastEncoder;
 use super::greedy::encoder::GreedyEncoder;
+use super::hq::encoder::HqEncoder;
 use crate::compressor::{BrotliCompressError, BrotliResult, CompressParams};
 
 /// The encoder a quality routes to.
 pub(crate) enum Encoder {
     /// Quality 0 and 1: one fragment at a time, static or per-fragment codes.
     Fast(FastEncoder),
-    /// Quality 3, 4 and 5: greedy references over a sliding window.
+    /// Qualities 3 to 9: greedy references over a sliding window.
     Greedy(Box<GreedyEncoder>),
+    /// Qualities 10 and 11: Zopfli references and high-quality meta-blocks.
+    Hq(Box<HqEncoder>),
 }
 
 impl Encoder {
     /// Creates the encoder `params` asks for.
     ///
-    /// `size_hint` is the total input size when it is known; qualities four and
-    /// five choose a different match finder above one mebibyte.
+    /// `size_hint` is the total input size when it is known; qualities four
+    /// and above choose a different match finder above one mebibyte.
     ///
     /// # Errors
     ///
@@ -39,17 +43,19 @@ impl Encoder {
         size_hint: usize,
     ) -> BrotliResult<Self> {
         match FastEncoder::new(level, params) {
-            Ok(encoder) => Ok(Self::Fast(encoder)),
-            Err(BrotliCompressError::UnsupportedQuality(_)) => {
-                // An explicit hint always wins; the fallback is what the
-                // one-shot entry points know and the streaming ones do not.
-                let size_hint = params.size_hint().unwrap_or(size_hint);
-                Ok(Self::Greedy(Box::new(GreedyEncoder::new(
-                    level, params, size_hint,
-                )?)))
-            }
-            Err(error) => Err(error),
+            Ok(encoder) => return Ok(Self::Fast(encoder)),
+            Err(BrotliCompressError::UnsupportedQuality(_)) => {}
+            Err(error) => return Err(error),
         }
+        // An explicit hint always wins; the fallback is what the one-shot entry
+        // points know and the streaming ones do not.
+        let size_hint = params.size_hint().unwrap_or(size_hint);
+        match GreedyEncoder::new(level, params, size_hint) {
+            Ok(encoder) => return Ok(Self::Greedy(Box::new(encoder))),
+            Err(BrotliCompressError::UnsupportedQuality(_)) => {}
+            Err(error) => return Err(error),
+        }
+        Ok(Self::Hq(Box::new(HqEncoder::new(level, params)?)))
     }
 
     /// Returns the largest input one [`Encoder::encode_block`] call accepts.
@@ -57,6 +63,7 @@ impl Encoder {
         match self {
             Self::Fast(encoder) => encoder.block_size_limit(),
             Self::Greedy(encoder) => encoder.block_size_limit(),
+            Self::Hq(encoder) => encoder.block_size_limit(),
         }
     }
 
@@ -65,13 +72,14 @@ impl Encoder {
         match self {
             Self::Fast(encoder) => encoder.is_finished(),
             Self::Greedy(encoder) => encoder.is_finished(),
+            Self::Hq(encoder) => encoder.is_finished(),
         }
     }
 
     /// Compresses one block and returns the bytes it completed.
     ///
-    /// The result may be empty: the greedy encoder buffers input until a
-    /// meta-block is worth emitting.
+    /// The result may be empty: the greedy and high-quality encoders buffer
+    /// input until a meta-block is worth emitting.
     ///
     /// # Errors
     ///
@@ -80,6 +88,7 @@ impl Encoder {
         match self {
             Self::Fast(encoder) => encoder.encode_block(input, is_last),
             Self::Greedy(encoder) => encoder.encode_block(input, is_last),
+            Self::Hq(encoder) => encoder.encode_block(input, is_last),
         }
     }
 }
@@ -288,12 +297,18 @@ mod tests {
     }
 
     /// Every quality this crate implements.
-    const IMPLEMENTED: [QualityLevel; 5] = [
+    const IMPLEMENTED: [QualityLevel; 11] = [
         QualityLevel::Q0,
         QualityLevel::Q1,
         QualityLevel::Q3,
         QualityLevel::Q4,
         QualityLevel::Q5,
+        QualityLevel::Q6,
+        QualityLevel::Q7,
+        QualityLevel::Q8,
+        QualityLevel::Q9,
+        QualityLevel::Q10,
+        QualityLevel::Q11,
     ];
 
     #[test]
@@ -303,7 +318,17 @@ mod tests {
             let encoder = Encoder::new(level, &params(quality, 22), 0).expect("routed");
             match (quality, encoder) {
                 (QualityLevel::Q0 | QualityLevel::Q1, Encoder::Fast(_)) => {}
-                (QualityLevel::Q3 | QualityLevel::Q4 | QualityLevel::Q5, Encoder::Greedy(_)) => {}
+                (
+                    QualityLevel::Q3
+                    | QualityLevel::Q4
+                    | QualityLevel::Q5
+                    | QualityLevel::Q6
+                    | QualityLevel::Q7
+                    | QualityLevel::Q8
+                    | QualityLevel::Q9,
+                    Encoder::Greedy(_),
+                ) => {}
+                (QualityLevel::Q10 | QualityLevel::Q11, Encoder::Hq(_)) => {}
                 (quality, _) => panic!("quality {quality:?} routed to the wrong encoder"),
             }
         }
@@ -313,13 +338,13 @@ mod tests {
     fn unsupported_qualities_are_rejected_before_any_output() {
         let level = Level::new();
         let mut out = Vec::new();
-        for quality in [QualityLevel::Q2, QualityLevel::Q6, QualityLevel::Q11] {
-            assert!(matches!(
-                compress_to_vec(level, &params(quality, 22), b"data", &mut out),
-                Err(BrotliCompressError::UnsupportedQuality(_))
-            ));
-            assert!(out.is_empty());
-        }
+        // Quality two is the only one the format defines that no encoder here
+        // implements.
+        assert!(matches!(
+            compress_to_vec(level, &params(QualityLevel::Q2, 22), b"data", &mut out),
+            Err(BrotliCompressError::UnsupportedQuality(2))
+        ));
+        assert!(out.is_empty());
     }
 
     #[test]

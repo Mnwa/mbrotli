@@ -41,14 +41,10 @@ fn parameters_report_what_they_were_built_with() {
 
 #[test]
 fn quality_levels_round_trip_through_their_numeric_value() {
-    for value in [0usize, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11] {
+    for value in 0usize..=11 {
         let quality = QualityLevel::try_from(value).expect("valid quality");
         assert_eq!(usize::from(quality), value);
     }
-    assert!(matches!(
-        QualityLevel::try_from(10),
-        Err(ParseQualityLevelError::Unrepresentable)
-    ));
     assert!(matches!(
         QualityLevel::try_from(12),
         Err(ParseQualityLevelError::UpperBound)
@@ -66,11 +62,6 @@ fn error_messages_describe_what_went_wrong() {
         ParseQualityLevelError::UpperBound
             .to_string()
             .contains("11")
-    );
-    assert!(
-        ParseQualityLevelError::Unrepresentable
-            .to_string()
-            .contains("10")
     );
     assert!(ParseWindowBitsError::LowerBound.to_string().contains("10"));
     assert!(ParseWindowBitsError::UpperBound.to_string().contains("24"));
@@ -158,16 +149,18 @@ fn the_slice_entry_point_reports_a_buffer_that_is_one_byte_short() {
 #[test]
 fn unsupported_qualities_are_reported_by_every_entry_point() {
     let compressor = Brotli::default().compressor();
-    let parameters = params(QualityLevel::Q9, 22);
+    // Quality two is the only quality the format defines that no encoder here
+    // implements.
+    let parameters = params(QualityLevel::Q2, 22);
     let mut buffer = [0u8; 64];
 
     assert!(matches!(
         compressor.compress(parameters, b"data"),
-        Err(BrotliCompressError::UnsupportedQuality(9))
+        Err(BrotliCompressError::UnsupportedQuality(2))
     ));
     assert!(matches!(
         compressor.compress_to_slice(parameters, b"data", &mut buffer),
-        Err(BrotliCompressError::UnsupportedQuality(9))
+        Err(BrotliCompressError::UnsupportedQuality(2))
     ));
 
     let mut sink = compressor.compress_writer(parameters, Vec::new());

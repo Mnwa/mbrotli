@@ -1,11 +1,17 @@
 //! Scoring of backward references.
 //!
 //! Ports the scoring block of `c/enc/hash.h` from the pinned reference
-//! (`google/brotli` v1.2.0, commit `028fb5a`). Every comparison the match
-//! finder makes goes through these integers, so an "equivalent" floating-point
-//! estimate would change which match is chosen and therefore the output.
+//! (`google/brotli` v1.2.0, commit `028fb5a`). Every comparison the greedy
+//! match finders make goes through these integers, so an "equivalent"
+//! floating-point estimate would change which match is chosen and therefore the
+//! output.
+//!
+//! This lives beside the static dictionary rather than inside `core::greedy`
+//! because the dictionary probe scores its own candidates, and the dictionary is
+//! shared. Qualities ten and eleven never use it: they price candidates in `f32`
+//! through [`crate::compressor::core::hq::cost`] instead.
 
-use crate::compressor::core::shared::fast_log::log2_floor_non_zero;
+use super::fast_log::log2_floor_non_zero;
 
 /// Score credited per byte of a copy (`BROTLI_LITERAL_BYTE_SCORE`).
 const LITERAL_BYTE_SCORE: usize = 135;

@@ -13,19 +13,21 @@
 
 use fearless_simd::{Level, dispatch};
 
-use super::backward_references::{
-    BlockSpan, ReferenceState, Window, create_backward_references, extend_last_command,
-};
-use super::bitstream::{MetaBlockWriter, store_uncompressed_meta_block};
-use super::command::Command;
+use super::backward_references::{ReferenceState, create_backward_references};
 use super::context_model::decide_over_literal_context_modeling;
-use super::hashers::{DistanceCache, MatchFinder};
-use super::histogram::{HistogramLiteral, bits_entropy};
-use super::metablock::{build_meta_block_greedy, optimize_histograms};
+use super::hashers::{DistanceCache, MatchFinder, NUM_REMEMBERED_DISTANCES, with_matcher};
+use super::metablock::build_meta_block_greedy;
 use super::params::{GreedyParams, MAX_NUM_DELAYED_SYMBOLS};
-use super::ringbuffer::{RingBuffer, wrap_position};
 use crate::compressor::core::shared::bits::BitWriter;
+use crate::compressor::core::shared::bitstream::{MetaBlockWriter, store_uncompressed_meta_block};
+use crate::compressor::core::shared::command::Command;
+use crate::compressor::core::shared::command::extend_last_command;
 use crate::compressor::core::shared::constants::{OUTPUT_RESERVE_CONST, OUTPUT_SLACK};
+use crate::compressor::core::shared::format::ContextMode;
+use crate::compressor::core::shared::histogram::{HistogramLiteral, bits_entropy};
+use crate::compressor::core::shared::metablock::optimize_histograms;
+use crate::compressor::core::shared::ringbuffer::{BlockSpan, Window};
+use crate::compressor::core::shared::ringbuffer::{RingBuffer, wrap_position};
 use crate::compressor::{BrotliCompressError, BrotliResult, CompressParams};
 
 /// Stride the compressibility check samples literals at (`kSampleRate`).
@@ -49,7 +51,7 @@ pub(crate) struct GreedyEncoder {
     last_flush_pos: u64,
     commands: Vec<Command>,
     references: ReferenceState,
-    saved_dist_cache: DistanceCache,
+    saved_dist_cache: [i32; NUM_REMEMBERED_DISTANCES],
     prev_byte: u8,
     prev_byte2: u8,
     last_bytes: u16,
@@ -79,14 +81,14 @@ impl GreedyEncoder {
         Ok(Self {
             level,
             params: resolved,
-            ringbuffer: RingBuffer::new(&resolved),
+            ringbuffer: RingBuffer::new(resolved.rb_bits(), resolved.lgblock),
             matcher: MatchFinder::from(resolved.hasher),
             is_prepared: false,
             input_pos: 0,
             last_processed_pos: 0,
             last_flush_pos: 0,
             commands: Vec::new(),
-            saved_dist_cache: references.dist_cache,
+            saved_dist_cache: remembered(&references.dist_cache),
             references,
             prev_byte: 0,
             prev_byte2: 0,
@@ -209,20 +211,9 @@ impl GreedyEncoder {
             data: ringbuffer.buffer(),
             mask: ringbuffer.mask(),
         };
-        dispatch!(*level, simd => match matcher {
-            MatchFinder::H3(finder) => create_backward_references(
-                simd, finder, params, window, span, references, commands),
-            MatchFinder::H4(finder) => create_backward_references(
-                simd, finder, params, window, span, references, commands),
-            MatchFinder::H54(finder) => create_backward_references(
-                simd, finder, params, window, span, references, commands),
-            MatchFinder::H40(finder) => create_backward_references(
-                simd, finder, params, window, span, references, commands),
-            MatchFinder::H5(finder) => create_backward_references(
-                simd, finder, params, window, span, references, commands),
-            MatchFinder::H6(finder) => create_backward_references(
-                simd, finder, params, window, span, references, commands),
-        });
+        dispatch!(*level, simd => with_matcher!(matcher, |finder| create_backward_references(
+            simd, finder, params, window, span, references, commands
+        )));
     }
 
     /// Processes the accumulated input, emitting a meta-block if one is due.
@@ -280,9 +271,11 @@ impl GreedyEncoder {
                 };
                 extend_last_command(
                     command,
-                    params,
-                    &references.dist_cache,
-                    window,
+                    params.lgwin,
+                    &params.dist,
+                    references.dist_cache[0],
+                    window.data,
+                    window.mask,
                     *last_processed_pos,
                     &mut span,
                 );
@@ -361,7 +354,7 @@ impl GreedyEncoder {
         }
         self.commands.clear();
         self.references.num_literals = 0;
-        self.saved_dist_cache = self.references.dist_cache;
+        self.saved_dist_cache = remembered(&self.references.dist_cache);
         self.output_len = complete;
         self.finished = is_last;
         Ok(())
@@ -424,8 +417,10 @@ impl GreedyEncoder {
             commands.len(),
         ) {
             // The distance cache was updated for commands that are now
-            // discarded, so it has to be restored.
-            references.dist_cache = *saved_dist_cache;
+            // discarded, so it has to be restored. Only the four remembered
+            // entries are saved: the derived ones are rebuilt from them before
+            // the next search reads them.
+            references.dist_cache[..NUM_REMEMBERED_DISTANCES].copy_from_slice(saved_dist_cache);
             store_uncompressed_meta_block(
                 is_last,
                 data,
@@ -452,6 +447,7 @@ impl GreedyEncoder {
                 mask,
                 params.quality.models_literal_contexts()
                     && !params.disable_literal_context_modeling,
+                params.quality.hq_context_modeling(),
                 params.size_hint,
             );
             let mut mb = build_meta_block_greedy(
@@ -472,6 +468,9 @@ impl GreedyEncoder {
                 *prev_byte,
                 *prev_byte2,
                 is_last,
+                // Qualities below ten always model literal contexts as UTF-8;
+                // `ChooseContextMode` cannot reach `CONTEXT_SIGNED` here.
+                ContextMode::Utf8,
                 &params.dist,
                 commands,
                 &mb,
@@ -492,7 +491,7 @@ impl GreedyEncoder {
 
         if bytes + 4 < (w.position() >> 3) {
             // Compressing made it bigger; store the bytes as they are.
-            references.dist_cache = *saved_dist_cache;
+            references.dist_cache[..NUM_REMEMBERED_DISTANCES].copy_from_slice(saved_dist_cache);
             w.rewind(saved_last_bytes_bits);
             w.set_byte(0, saved_last_bytes as u8);
             w.set_byte(1, (saved_last_bytes >> 8) as u8);
@@ -511,6 +510,15 @@ impl GreedyEncoder {
         }
         Ok(position)
     }
+}
+
+/// Returns the four distance-cache entries that survive a meta-block.
+///
+/// Mirrors `saved_dist_cache_`, which the reference declares four wide even
+/// though the live cache is sixteen: the rest are derived again by
+/// `PrepareDistanceCache` before any search reads them.
+const fn remembered(cache: &DistanceCache) -> [i32; NUM_REMEMBERED_DISTANCES] {
+    [cache[0], cache[1], cache[2], cache[3]]
 }
 
 /// Encodes the stream header for a window size.

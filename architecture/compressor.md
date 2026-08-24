@@ -1,10 +1,10 @@
 # Compressor Subsystem
 
 Scope: `src/lib.rs`, `src/compressor/`, and the private `src/compressor/core/`
-tree, excluding the two encoder cores themselves, which have their own
-specifications in [fast-encoder.md](fast-encoder.md) and
-[greedy-encoder.md](greedy-encoder.md). This document describes the code as it
-stands; the [Known gaps](#known-gaps) section lists what is not implemented.
+tree, excluding the three encoder cores themselves, which have their own
+specifications in [fast-encoder.md](fast-encoder.md),
+[greedy-encoder.md](greedy-encoder.md) and [hq-encoder.md](hq-encoder.md).
+This document describes the code as it stands; the [Known gaps](#known-gaps) section lists what is not implemented.
 
 ## 1. Core mechanics
 
@@ -19,9 +19,10 @@ The subsystem is a three-layer funnel:
 3. **Core layer** — private `compressor::core` modules own the algorithms:
    `core::bound` computes the compressed-size upper bound, `core::driver`
    routes a quality to an encoder and owns what both encoders share,
-   `core::shared` holds the primitives they both use, `core::fast` owns the
-   quality 0 and 1 encoders, and `core::greedy` owns the quality 3, 4 and 5
-   encoder. Each encoder performs the single runtime SIMD dispatch itself.
+   `core::shared` holds the primitives they all use, `core::fast` owns the
+   quality 0 and 1 encoders, `core::greedy` owns the quality 3 to 9 encoder,
+   and `core::hq` owns the quality 10 and 11 encoder. Each encoder performs the
+   single runtime SIMD dispatch itself.
 
 SIMD selection is hoisted out of every inner loop: it is decided once in
 `Brotli::default()` and then threaded, by value, into whatever implementation
@@ -43,6 +44,7 @@ graph LR
     driver["core::driver::Encoder<br/>(quality routing)"]
     fast["core::fast<br/>(FastEncoder, dispatch)"]
     greedy["core::greedy<br/>(GreedyEncoder, dispatch)"]
+    hq["core::hq<br/>(HqEncoder, dispatch)"]
 
     detect --> brotli
     brotli -->|"From&lt;Brotli&gt;"| compressor
@@ -57,7 +59,8 @@ graph LR
     rd --> driver
     wr --> driver
     driver -->|"quality 0, 1"| fast
-    driver -->|"quality 3, 4, 5"| greedy
+    driver -->|"quality 3 to 9"| greedy
+    driver -->|"quality 10, 11"| hq
 ```
 
 ### 1.2. Type relationships
@@ -112,12 +115,13 @@ classDiagram
         +DEFAULT = 22
     }
     class QualityLevel {
-        <<enum Q0..Q9, Q11>>
+        <<enum Q0..Q11>>
     }
     class Encoder {
         <<private enum>>
         Fast(FastEncoder)
         Greedy(GreedyEncoder)
+        Hq(HqEncoder)
         +block_size_limit() usize
         +is_finished() bool
         +encode_block(input, is_last) BrotliResult~&[u8]~
@@ -136,6 +140,15 @@ classDiagram
         -MatchFinder matcher
         +encode_block(input, is_last) BrotliResult~&[u8]~
     }
+    class HqEncoder {
+        <<private>>
+        -Level level
+        -HqParams params
+        -RingBuffer ringbuffer
+        -BinaryTreeMatcher matcher
+        -ZopfliWorkspace workspace
+        +encode_block(input, is_last) BrotliResult~&[u8]~
+    }
 
     Brotli --> Compressor : From
     Compressor --> CompressParams : uses
@@ -147,6 +160,7 @@ classDiagram
     Compressor ..> Encoder : drives
     Encoder *-- FastEncoder
     Encoder *-- GreedyEncoder
+    Encoder *-- HqEncoder
     CompressorReader *-- Encoder
     CompressorWriter *-- Encoder
 ```
@@ -175,9 +189,11 @@ Quality routing happens once, when a `core::driver::Encoder` is built:
 flowchart TD
     q["CompressParams::quality()"] --> fast{"0 or 1?"}
     fast -->|yes| f["Encoder::Fast(FastEncoder)"]
-    fast -->|no| greedy{"3, 4 or 5?"}
+    fast -->|no| greedy{"3 to 9?"}
     greedy -->|yes| g["Encoder::Greedy(GreedyEncoder)"]
-    greedy -->|no| err["BrotliCompressError::UnsupportedQuality"]
+    greedy -->|no| hq{"10 or 11?"}
+    hq -->|yes| h["Encoder::Hq(HqEncoder)"]
+    hq -->|no| err["BrotliCompressError::UnsupportedQuality<br/>(quality 2 only)"]
 ```
 
 ### 1.4. The size hint
@@ -328,18 +344,26 @@ graph LR
 | `tests/streaming.rs` | Chunk-size independence, writer/reader agreement, one-shot equivalence. |
 | `tests/randomized.rs` | Seeded property tests mixing literal runs, back-references and noise. |
 | `tests/greedy_qualities.rs` | Byte identity for every parameter the greedy qualities react to: window, mode, size hint, block size, distance layout, context modelling. |
+| Unit tests in `core::hq` and `core::shared::dictionary` | Layer-by-layer differential tests against four encoder-internal C functions, reached through `brotli-ffi/shim/`; see [hq-encoder.md](hq-encoder.md) §10. |
+
+Qualities ten and eleven are capped at 64 KiB in the sweeps that exist to cover
+input shapes, because their search costs about a hundred times what quality
+nine's does in a debug build. The multi-fragment and streaming tests run them
+unbounded; see [hq-encoder.md](hq-encoder.md) §10.1 for what that gives up.
 | `fuzz/afl/` | AFL targets for the same oracles plus parameter rejection, seeded from the vendored Brotli test data; see [fuzzing.md](fuzzing.md). |
 
 ## Known gaps
 
-- **Qualities 2 and 6 through 11 are not implemented.** `compress` returns
-  `BrotliCompressError::UnsupportedQuality` for them. `QualityLevel` has
-  no `Q10` variant, and `TryFrom<usize>` reports 10 as unrepresentable.
+- **Quality 2 is not implemented.** It is the only quality the format defines
+  that has no encoder here; `compress` returns
+  `BrotliCompressError::UnsupportedQuality(2)`. The reference reaches it through
+  the two-pass fragment compressor with static entropy codes, which is a fourth
+  encoder core rather than a variant of any of the three that exist.
 - **No decoder.** Round-trip verification uses Google's C decoder from the
   `google-brotli-ffi` workspace crate.
 - **No large-window support.** `WindowBits` stops at 24 and no encoder sets the
   large-window bit, so the reference's `H35`, `H55` and `H65` match finders are
-  unreachable.
+  unreachable and the extended distance alphabet is never built.
 - **No compound or custom dictionary.** Only Brotli's built-in static
   dictionary is used; the reference gates the others behind its experimental
   flag.

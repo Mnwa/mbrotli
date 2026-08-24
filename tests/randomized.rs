@@ -8,7 +8,8 @@ mod support;
 
 use mbrotli::Brotli;
 use support::{
-    IMPLEMENTED_QUALITIES, Rng, c_compress, c_decompress, host_levels, params, quality_number,
+    IMPLEMENTED_QUALITIES, Rng, c_compress, c_decompress, host_levels, params, prefix_for,
+    quality_number,
 };
 
 /// Builds one pseudo-random input from a mixture of shapes.
@@ -74,9 +75,10 @@ fn random_inputs_match_the_c_encoder_and_round_trip() {
         let data = generate(&mut rng, 300_000);
         let lgwin = 10 + (rng.next_u64() as usize) % 15;
         for quality in IMPLEMENTED_QUALITIES {
-            let expected = c_compress(quality_number(quality), lgwin as i32, &data);
+            let data = prefix_for(quality, &data);
+            let expected = c_compress(quality_number(quality), lgwin as i32, data);
             let actual = compressor
-                .compress(params(quality, lgwin), &data)
+                .compress(params(quality, lgwin), data)
                 .expect("compression failed");
             assert_eq!(
                 actual,
@@ -100,11 +102,12 @@ fn random_inputs_agree_across_backends() {
         let data = generate(&mut rng, 200_000);
         let lgwin = 10 + (rng.next_u64() as usize) % 15;
         for quality in IMPLEMENTED_QUALITIES {
+            let data = prefix_for(quality, &data);
             let mut reference: Option<Vec<u8>> = None;
             for &(level_name, level) in &levels {
                 let actual = Brotli::from(level)
                     .compressor()
-                    .compress(params(quality, lgwin), &data)
+                    .compress(params(quality, lgwin), data)
                     .expect("compression failed");
                 match &reference {
                     None => reference = Some(actual),
@@ -126,9 +129,10 @@ fn short_random_inputs_match_the_c_encoder() {
         let data = generate(&mut rng, 512);
         let lgwin = 10 + (rng.next_u64() as usize) % 15;
         for quality in IMPLEMENTED_QUALITIES {
-            let expected = c_compress(quality_number(quality), lgwin as i32, &data);
+            let data = prefix_for(quality, &data);
+            let expected = c_compress(quality_number(quality), lgwin as i32, data);
             let actual = compressor
-                .compress(params(quality, lgwin), &data)
+                .compress(params(quality, lgwin), data)
                 .expect("compression failed");
             assert_eq!(
                 actual,

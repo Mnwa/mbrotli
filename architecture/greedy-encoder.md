@@ -1,13 +1,14 @@
-# Greedy Encoder Core (qualities 3, 4 and 5)
+# Greedy Encoder Core (qualities 3 to 9)
 
 Scope: `src/compressor/core/greedy/`. This document describes the code as it
 stands; the [Known gaps](#known-gaps) section lists what is not implemented.
 
-The reference this port follows is `google/brotli` v1.2.0, commit `028fb5a`,
-compiled without `BROTLI_MAX_SIMD_QUALITY`. That build is the pinned semantic
-profile: it is what selects the untagged `H5` and `H6` match finders at quality
-five rather than the tagged `H58` and `H68`, and it is what the differential
-tests compare against byte for byte.
+The reference this port follows is `google/brotli` v1.2.0, commit `028fb5a`.
+On the platforms this crate targets that build defines `BROTLI_MAX_SIMD_QUALITY`
+and therefore selects the *tagged* `H58` and `H68` match finders at qualities
+five and six. This port builds only the untagged `H5` and `H6`, because the two
+pairs are byte-for-byte equivalent — see [§2.2](#22-the-tagged-matchers) — and
+the differential tests check that equivalence against the real library.
 
 ## 1. Core mechanics
 
@@ -32,21 +33,23 @@ graph TD
     subgraph greedy["compressor::core::greedy"]
         enc["encoder<br/>(GreedyEncoder, dispatch)"]
         params["params<br/>(GreedyParams, HasherPlan)"]
-        rb["ringbuffer<br/>(RingBuffer)"]
-        hash["hashers<br/>(H3, H4, H54, H40, H5, H6)"]
-        dict["dictionary<br/>(static words + hash)"]
+        hash["hashers<br/>(H3, H4, H54, H40/41/42, H5, H6)"]
         refs["backward_references<br/>(greedy search)"]
-        cmd["command<br/>(Command, prefix codes)"]
         score["score<br/>(reference scoring)"]
         ctx["context_model<br/>(literal contexts)"]
-        mb["metablock<br/>(MetaBlockSplit)"]
-        split["split<br/>(block splitters)"]
-        histo["histogram<br/>(counts, entropy, RLE)"]
-        bs["bitstream<br/>(MetaBlockWriter)"]
-        tables["tables<br/>(context LUT, prefix ranges)"]
+        mb["metablock<br/>(greedy builder)"]
+        split["split<br/>(greedy block splitters)"]
     end
 
     subgraph shared["compressor::core::shared"]
+        rb["ringbuffer<br/>(RingBuffer)"]
+        dict["dictionary<br/>(static words + hash)"]
+        cmd["command<br/>(Command, prefix codes)"]
+        histo["histogram<br/>(counts, entropy, RLE)"]
+        mbs["metablock<br/>(MetaBlockSplit)"]
+        bsplit["block_split<br/>(BlockSplit)"]
+        bs["bitstream<br/>(MetaBlockWriter)"]
+        tables["format<br/>(context LUTs, prefix ranges)"]
         bits["bits (BitWriter)"]
         huff["huffman"]
         ml["match_len"]
@@ -68,7 +71,11 @@ graph TD
     hash --> score
     mb --> split
     mb --> histo
+    mb --> mbs
     split --> histo
+    split --> bsplit
+    mbs --> bsplit
+    bs --> mbs
     bs --> huff
     bs --> bits
     bs --> tables
@@ -77,27 +84,38 @@ graph TD
     histo --> log
     cmd --> tables
 
-    classDef privateNode fill:#f6e8c3,stroke:#8a6d3b;
-    class enc,params,rb,hash,dict,refs,cmd,score,ctx,mb,split,histo,bs,tables privateNode;
+    classDef greedyNode fill:#f6e8c3,stroke:#8a6d3b;
+    class enc,params,hash,refs,score,ctx,mb,split greedyNode;
+    classDef sharedNode fill:#e8f0f6,stroke:#3a6d8a;
+    class rb,dict,cmd,histo,mbs,bsplit,bs,tables,bits,huff,ml,log sharedNode;
 ```
+
+The shaded modules on the right are shared with the high-quality encoder; see
+[hq-encoder.md](hq-encoder.md).
 
 ### 1.1. What each quality adds
 
-| Feature | q3 | q4 | q5 |
-| --- | :-: | :-: | :-: |
-| Default `lgblock` | 14 | 16 | 16 |
-| Input block | 16 KiB | 64 KiB | 64 KiB |
-| Block splitting | no | yes | yes |
-| Non-zero distance parameters | no | yes | yes |
-| Histogram optimisation | no | yes | yes |
-| Extensive delayed search | no | no | yes |
-| Literal context modelling | no | no | yes |
-| Match finder | `H3` | `H4` / `H54` | `H40` / `H5` / `H6` |
-| Meta-block storage | trivial | greedy split | greedy split |
+| Feature | q3 | q4 | q5 | q6 | q7 | q8 | q9 |
+| --- | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
+| Default `lgblock` | 14 | 16 | 16 | 16 | 16 | 16 | `min(18, lgwin)` |
+| Block splitting | no | yes | yes | yes | yes | yes | yes |
+| Non-zero distance parameters | no | yes | yes | yes | yes | yes | yes |
+| Histogram optimisation | no | yes | yes | yes | yes | yes | yes |
+| Extensive delayed search | no | no | yes | yes | yes | yes | yes |
+| Literal context modelling | no | no | yes | yes | yes | yes | yes |
+| Three-context model eligible | no | no | no | no | yes | yes | yes |
+| Sparse-search threshold | 64 | 64 | 64 | 64 | 64 | 64 | 512 |
+| Bucket candidates | — | — | 16 | 32 | 64 | 128 | 256 |
+| Cached distances probed | 4 | 4 | 4 | 4 | 10 | 10 | 16 |
+| Small-window matcher | — | — | `H40` | `H40` | `H41` | `H41` | `H42` |
+| Chain hops | — | — | 16 | 32 | 56 | 112 | 224 |
+| Meta-block storage | trivial | greedy split | greedy split | greedy split | greedy split | greedy split | greedy split |
 
 Quality three is not "quality four with fewer candidates": it stores a
 meta-block through a different, simpler path, and it flushes on a symbol count
-rather than on a block-splitting decision.
+rather than on a block-splitting decision. From quality five upwards the shape
+of the search is fixed and only its depth changes — which is why one code path
+serves all five.
 
 ## 2. Parameter resolution and the hasher plan
 
@@ -112,30 +130,70 @@ flowchart TD
     plan -->|4| q4{"size_hint >= 1 MiB?"}
     q4 -->|no| h4["H4"]
     q4 -->|yes| h54["H54"]
-    plan -->|5| q5{"lgwin <= 16?"}
-    q5 -->|yes| h40["H40"]
+    plan -->|5 to 9| q5{"lgwin <= 16?"}
+    q5 -->|yes| chain["forgetful chain<br/>H40 / H41 / H42"]
     q5 -->|no| big{"size_hint >= 1 MiB<br/>and lgwin >= 19?"}
     big -->|yes| h6["H6"]
     big -->|no| h5["H5"]
 
     classDef fixed fill:#d9ead3,stroke:#38761d;
-    class h3,h4,h54,h40,h5,h6 fixed;
+    class h3,h4,h54,chain,h5,h6 fixed;
 ```
+
+The depth of whichever matcher is chosen then follows the quality: the bucket
+matchers take `block_bits = quality - 1`, and the chain matchers take
+`max_hops = (quality > 6 ? 7 : 8) << (quality - 4)`.
 
 | Plan | Hash bytes | Bucket bits | Slots per bucket | Static dictionary |
 | --- | --: | --: | --- | --- |
 | `H3` | 5 | 16 | 1 sweep slot | no |
 | `H4` | 5 | 17 | 4 sweep slots | yes, shallow |
 | `H54` | 7 | 20 | 4 sweep slots | no |
-| `H40` | 4 | 15 | forgetful chain, 16 hops | yes |
-| `H5` | 4 | 14 | 16 | yes |
-| `H6` | 8 | 15 | 16 | yes |
+| `H40` / `H41` | 4 | 15 | forgetful chain, one 65,536-slot bank | yes |
+| `H42` | 4 | 15 | forgetful chain, 512 banks of 512 | yes |
+| `H5` | 4 | 14 (q5, q6) or 15 | `1 << (quality - 1)` | yes |
+| `H6` | 8 | 15 | `1 << (quality - 1)` | yes |
 
 Each plan is a distinct Rust type — `QuickMatcher<BUCKET_BITS, SWEEP_BITS,
 HASH_LEN, USE_DICTIONARY>`, `BucketMatcher<HASH64, BUCKET_BITS>` or
-`ChainMatcher` — so the bucket geometry is a compile-time constant inside the
-probe loop. The `MatchFinder` enum that selects between them is matched once
-per input block, never per candidate.
+`ChainMatcher<NUM_BANKS, BANK_BITS>` — so the hash width and the table size are
+compile-time constants inside the probe loop. The `MatchFinder` enum that
+selects between them is matched once per input block, never per candidate.
+
+The candidate depth, the chain depth and the number of cached distances are
+ordinary fields rather than const generics. They only bound loops, and turning
+five bucket depths into five monomorphisations would cost far more instruction
+cache than the bound is worth.
+
+### 2.2. The tagged matchers
+
+The reference builds `H58` and `H68` in place of `H5` and `H6` whenever
+`BROTLI_MAX_SIMD_QUALITY` is defined, which on GCC and Clang covers quality six.
+Those variants store a one-byte tag beside every position and iterate only the
+slots whose tag matches. This port does not build them, because they cannot
+produce a different stream:
+
+- They select the same bucket. The tagged `HashBytes` keeps eight more low bits,
+  which the key shifts straight back off.
+- They walk the bucket newest to oldest, as the untagged loop does.
+- A tag is a function of the hashed bytes, so two positions whose first four
+  bytes agree always share a tag. A slot the tag mask drops therefore differs in
+  those four bytes — and a candidate that differs there can never reach the
+  reference's `len >= 4` acceptance test.
+- Both stop at the first candidate beyond `max_backward`, and positions grow
+  monotonically along the ring, so both stop having seen the same prefix.
+
+The accepted-match sets coincide. `tests/differential_c.rs` checks the
+consequence directly: qualities six and seven are compared against a C library
+that really is using the tagged matchers.
+
+### 2.3. The distance cache
+
+Qualities seven and above probe more than the four remembered distances. The
+extra entries are near misses derived from the two freshest ones — one, two and
+three either side — which `prepare_distance_cache` fills whenever the remembered
+four change. Only those four survive a meta-block; the rest are rebuilt before
+any search reads them, which is why `saved_dist_cache` is four wide.
 
 The distance alphabet is resolved in the same pass: font mode asks for one
 postfix bit and twelve direct codes, every other mode uses what the caller
@@ -283,13 +341,13 @@ change across all of them.
 
 ### 5.2. Literal context modelling
 
-Only quality five reaches this, and only when the meta-block is at least
+Only quality five and above reach this, and only when the meta-block is at least
 sixty-four bytes long. The decision samples sixty-four byte strides every four
 kibibytes:
 
 ```mermaid
 flowchart TD
-    start["meta-block"] --> gate{"quality 5, enabled,<br/>length >= 64?"}
+    start["meta-block"] --> gate{"quality >= 5, enabled,<br/>length >= 64?"}
     gate -->|no| one["one context"]
     gate -->|yes| complex{"size hint >= 1 MiB?"}
     complex -->|yes| try13["sample 13-context map<br/>over the top five bits"]
@@ -403,10 +461,13 @@ sized by the same `2 * bytes + 503` reservation the reference uses.
 
 - **Large-window brotli is unreachable.** `WindowBits` stops at 24, so the
   reference's `H35`, `H55` and `H65` composite match finders are never built.
-- **The tagged `H58` and `H68` match finders are not built.** The pinned C
-  baseline compiles without `BROTLI_MAX_SIMD_QUALITY` and therefore selects
-  `H5` and `H6`; a build that selected the tagged pair would need its own
-  differential baseline.
+- **The tagged `H58` and `H68` match finders are not built.** They are
+  byte-for-byte equivalent to `H5` and `H6` — see
+  [§2.2](#22-the-tagged-matchers) — so building them would add a second code
+  path that cannot produce a different stream. The one thing this gives up is
+  the tag mask itself, which is the reference's main SIMD opportunity on this
+  path and would be worth revisiting if profiling shows the candidate loop
+  dominating.
 - **No compound or custom dictionary.** Only the built-in static dictionary is
   used, matching the reference's non-experimental build.
 - **No stream offset.** The reference parameter that starts a stream at a

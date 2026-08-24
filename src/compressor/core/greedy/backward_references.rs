@@ -13,11 +13,13 @@
 
 use fearless_simd::Simd;
 
-use super::command::Command;
-use super::hashers::{DistanceCache, MatchQuery, Matcher};
-use super::params::{GreedyParams, NUM_DISTANCE_SHORT_CODES};
-use super::score::{MIN_SCORE, SearchResult};
-use crate::compressor::core::greedy::dictionary::DictionaryStats;
+use super::hashers::{DistanceCache, MatchQuery, Matcher, prepare_distance_cache};
+use super::params::GreedyParams;
+use crate::compressor::core::shared::command::Command;
+use crate::compressor::core::shared::dictionary::DictionaryStats;
+use crate::compressor::core::shared::distance::NUM_DISTANCE_SHORT_CODES;
+use crate::compressor::core::shared::ringbuffer::{BlockSpan, Window};
+use crate::compressor::core::shared::score::{MIN_SCORE, SearchResult};
 
 /// Score a delayed match has to beat the current one by (`cost_diff_lazy`).
 const COST_DIFF_LAZY: usize = 175;
@@ -60,24 +62,6 @@ pub(crate) fn compute_distance_code(
         }
     }
     distance + NUM_DISTANCE_SHORT_CODES as usize - 1
-}
-
-/// The window a search runs over.
-#[derive(Copy, Clone)]
-pub(crate) struct Window<'a> {
-    /// The ring buffer holding the input seen so far.
-    pub(crate) data: &'a [u8],
-    /// Mask that turns an absolute position into a buffer index.
-    pub(crate) mask: usize,
-}
-
-/// The stretch of input one call processes.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BlockSpan {
-    /// Wrapped position the stretch starts at.
-    pub(crate) position: u32,
-    /// Number of bytes in the stretch.
-    pub(crate) bytes: u32,
 }
 
 /// State the reference search carries between input blocks.
@@ -136,6 +120,10 @@ pub(crate) fn create_backward_references<S: Simd, M: Matcher>(
     let window = params.random_heuristics_window_size();
     let mut apply_random_heuristics = position + window;
     let extensive = params.quality.extensive_reference_search();
+    // The derived cache entries are a function of the four remembered ones, so
+    // they are refreshed here and again whenever a command changes them.
+    let last_distances = matcher.last_distances_to_check();
+    prepare_distance_cache(&mut state.dist_cache, last_distances);
 
     while position + M::HASH_TYPE_LENGTH < pos_end {
         let mut max_length = pos_end - position;
@@ -240,6 +228,7 @@ pub(crate) fn create_backward_references<S: Simd, M: Matcher>(
             state.dist_cache[2] = state.dist_cache[1];
             state.dist_cache[1] = state.dist_cache[0];
             state.dist_cache[0] = sr.distance as i32;
+            prepare_distance_cache(&mut state.dist_cache, last_distances);
         }
         commands.push(Command::new(
             &params.dist,
@@ -266,70 +255,12 @@ pub(crate) fn create_backward_references<S: Simd, M: Matcher>(
     state.last_insert_len = insert_length;
 }
 
-/// Grows the last command over input that continues its copy.
-///
-/// Mirrors `ExtendLastCommand`. When a block boundary falls in the middle of a
-/// repeat, the bytes after it would otherwise start a fresh command; extending
-/// the previous one instead costs nothing and saves a command.
-///
-/// Returns the number of bytes the command absorbed.
-pub(crate) fn extend_last_command(
-    command: &mut Command,
-    params: &GreedyParams,
-    dist_cache: &DistanceCache,
-    window: Window<'_>,
-    last_processed_pos: u64,
-    span: &mut BlockSpan,
-) {
-    let Window {
-        data: ringbuffer,
-        mask,
-    } = window;
-    let max_backward_distance = (1u64 << params.lgwin) - 16;
-    let last_copy_len = u64::from(command.copy_len());
-    let last_processed_pos = last_processed_pos - last_copy_len;
-    let max_distance = last_processed_pos.min(max_backward_distance);
-    let cmd_dist = u64::from(dist_cache[0] as u32);
-    let distance_code = command.restore_distance_code(&params.dist);
-
-    if u64::from(distance_code) < u64::from(NUM_DISTANCE_SHORT_CODES)
-        || u64::from(distance_code) - u64::from(NUM_DISTANCE_SHORT_CODES - 1) == cmd_dist
-    {
-        if cmd_dist <= max_distance {
-            while span.bytes != 0 {
-                let here = usize::try_from(u64::from(span.position)).unwrap_or(0);
-                let there = usize::try_from(u64::from(span.position) - cmd_dist).unwrap_or(0);
-                let Some(&current) = ringbuffer.get(here & mask) else {
-                    break;
-                };
-                let Some(&previous) = ringbuffer.get(there & mask) else {
-                    break;
-                };
-                if current != previous {
-                    break;
-                }
-                command.copy_len += 1;
-                span.bytes -= 1;
-                span.position += 1;
-            }
-        }
-        // The copy length changed, so the command symbol has to be recomputed.
-        // `ExtendLastCommand` reads the length-code delta as an unsigned field
-        // here, which agrees with the signed reading everywhere it can occur:
-        // only a dictionary match sets it, and never to a negative value.
-        command.cmd_prefix = super::command::length_code(
-            command.insert_len as usize,
-            (command.copy_len & 0x1FF_FFFF) as usize + (command.copy_len >> 25) as usize,
-            command.distance_code() == 0,
-        );
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compressor::core::greedy::hashers::INITIAL_DISTANCE_CACHE;
-    use crate::compressor::core::greedy::hashers::QuickMatcher;
+    use crate::compressor::core::greedy::hashers::{
+        INITIAL_DISTANCE_CACHE, NUM_REMEMBERED_DISTANCES, QuickMatcher,
+    };
     use crate::compressor::core::greedy::params::GreedyQuality;
     use crate::compressor::{CompressParams, QualityLevel, WindowBits};
     use fearless_simd::{Level, dispatch};
@@ -469,7 +400,12 @@ mod tests {
         dispatch!(level, simd => create_backward_references(
             simd, &mut matcher, &params, window, span, &mut state, &mut commands,
         ));
-        assert!(state.dist_cache.iter().all(|&distance| distance > 0));
+        // Only the four remembered entries are history; the rest stay derived.
+        assert!(
+            state.dist_cache[..NUM_REMEMBERED_DISTANCES]
+                .iter()
+                .all(|&distance| distance > 0)
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Byte-for-byte differential tests for qualities three, four and five.
+//! Byte-for-byte differential tests for qualities three to nine.
 //!
 //! Every parameter these qualities react to changes the emitted bytes, so each
 //! one is compared against the pinned C encoder configured identically. The C
@@ -144,12 +144,21 @@ fn the_size_hint_boundary_selects_the_large_match_finder() {
 }
 
 #[test]
-fn the_small_window_match_finder_is_reached_at_quality_five() {
-    // A window of sixteen bits or fewer routes quality five to the forgetful
-    // chain matcher instead of a bucketed one.
+fn the_small_window_match_finders_are_reached_from_quality_five() {
+    // A window of sixteen bits or fewer routes qualities five and up to a
+    // forgetful chain matcher instead of a bucketed one: H40 for five and six,
+    // H41 for seven and eight, H42 for nine.
     let data = text();
-    for lgwin in [10usize, 14, 16, 17] {
-        assert_matches_c("small-window", &data, Case::new(QualityLevel::Q5, lgwin));
+    for quality in [
+        QualityLevel::Q5,
+        QualityLevel::Q6,
+        QualityLevel::Q7,
+        QualityLevel::Q8,
+        QualityLevel::Q9,
+    ] {
+        for lgwin in [10usize, 14, 16, 17] {
+            assert_matches_c("small-window", &data, Case::new(quality, lgwin));
+        }
     }
 }
 
@@ -275,7 +284,7 @@ fn context_friendly() -> Vec<u8> {
 }
 
 #[test]
-fn only_quality_five_reacts_to_literal_context_modeling() {
+fn only_quality_five_and_above_react_to_literal_context_modeling() {
     let compressor = Brotli::default().compressor();
     let data = context_friendly();
     for quality in GREEDY_QUALITIES {
@@ -286,8 +295,8 @@ fn only_quality_five_reacts_to_literal_context_modeling() {
         assert_matches_c("context-off", &data, off);
         let with = compressor.compress(on.rust(), &data).expect("on");
         let without = compressor.compress(off.rust(), &data).expect("off");
-        if quality == QualityLevel::Q5 {
-            assert_ne!(with, without, "quality five ignored the setting");
+        if quality >= QualityLevel::Q5 {
+            assert_ne!(with, without, "quality {quality:?} ignored the setting");
         } else {
             assert_eq!(with, without, "quality {quality:?} honoured the setting");
         }
@@ -295,7 +304,7 @@ fn only_quality_five_reacts_to_literal_context_modeling() {
 }
 
 #[test]
-fn the_complex_context_map_is_reachable_at_quality_five() {
+fn the_complex_context_map_is_reachable_from_quality_five() {
     // The thirteen-context map needs a size hint of at least one mebibyte and
     // data whose contexts predict the next byte well.
     let compressor = Brotli::default().compressor();
@@ -305,17 +314,74 @@ fn the_complex_context_map_is_reachable_at_quality_five() {
     }
     data.truncate(2 << 20);
 
-    let mut small = Case::new(QualityLevel::Q5, 22);
-    small.size_hint = Some((1 << 20) - 1);
-    let mut large = Case::new(QualityLevel::Q5, 22);
-    large.size_hint = Some(1 << 20);
-    assert_matches_c("complex-map-below", &data, small);
-    assert_matches_c("complex-map-at", &data, large);
-    assert_ne!(
-        compressor.compress(small.rust(), &data).expect("below"),
-        compressor.compress(large.rust(), &data).expect("at"),
-        "the size hint did not change the context map"
-    );
+    for quality in [QualityLevel::Q5, QualityLevel::Q7, QualityLevel::Q9] {
+        let mut small = Case::new(quality, 22);
+        small.size_hint = Some((1 << 20) - 1);
+        let mut large = Case::new(quality, 22);
+        large.size_hint = Some(1 << 20);
+        assert_matches_c("complex-map-below", &data, small);
+        assert_matches_c("complex-map-at", &data, large);
+        assert_ne!(
+            compressor.compress(small.rust(), &data).expect("below"),
+            compressor.compress(large.rust(), &data).expect("at"),
+            "the size hint did not change the context map at {quality:?}"
+        );
+    }
+}
+
+#[test]
+fn the_three_context_model_is_reachable_from_quality_seven() {
+    // `MIN_QUALITY_FOR_HQ_CONTEXT_MODELING` is seven: below it the reference
+    // prices the continuation map out of reach, so the same data has to be
+    // modelled with at most two contexts.
+    let data = context_friendly();
+    for quality in [
+        QualityLevel::Q5,
+        QualityLevel::Q6,
+        QualityLevel::Q7,
+        QualityLevel::Q8,
+        QualityLevel::Q9,
+    ] {
+        assert_matches_c("hq-contexts", &data, Case::new(quality, 22));
+    }
+}
+
+#[test]
+fn quality_nine_defaults_to_a_larger_input_block() {
+    // `ComputeLgBlock` raises the default block to `min(18, lgwin)` at quality
+    // nine, so the meta-block boundaries move with the window.
+    let source = text();
+    let mut data = Vec::with_capacity(1 << 20);
+    while data.len() < (1 << 20) {
+        data.extend_from_slice(&source);
+    }
+    data.truncate(1 << 20);
+    for lgwin in [16usize, 17, 18, 22] {
+        assert_matches_c("q9-lgblock", &data, Case::new(QualityLevel::Q9, lgwin));
+        assert_matches_c("q8-lgblock", &data, Case::new(QualityLevel::Q8, lgwin));
+    }
+}
+
+#[test]
+fn the_sparse_search_threshold_matches_the_c_encoder_at_quality_nine() {
+    // Quality nine waits five hundred and twelve literals before it starts
+    // striding, every other quality sixty-four. Incompressible data reaches
+    // both thresholds, and the stride decides which positions are stored.
+    let mut rng = 0x0FF1_CE01u64;
+    let mut data: Vec<u8> = (0..200_000u32)
+        .map(|_| {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            (rng >> 24) as u8
+        })
+        .collect();
+    // A compressible tail gives the stored positions something to match.
+    data.extend_from_slice(&text());
+    data.extend_from_slice(&text());
+    for quality in [QualityLevel::Q8, QualityLevel::Q9] {
+        assert_matches_c("sparse-threshold", &data, Case::new(quality, 22));
+    }
 }
 
 #[test]

@@ -7,13 +7,15 @@ mod support;
 
 use mbrotli::Brotli;
 use support::{
-    IMPLEMENTED_QUALITIES, boundary_corpora, c_decompress, host_levels, params, structural_corpora,
+    IMPLEMENTED_QUALITIES, boundary_corpora, c_decompress, host_levels, params, prefix_for,
+    structural_corpora,
 };
 
 /// Compresses one input and requires the C decoder to recover it exactly.
 fn assert_round_trips(name: &str, data: &[u8], lgwin: usize) {
     let compressor = Brotli::default().compressor();
     for quality in IMPLEMENTED_QUALITIES {
+        let data = prefix_for(quality, data);
         let compressed = compressor
             .compress(params(quality, lgwin), data)
             .expect("compression failed");

@@ -28,6 +28,22 @@ fn compile_library(name: &str, directory: &str) {
     }
 }
 
+/// Compiles the test-only shim that exposes one encoder-internal function.
+///
+/// It is linked unconditionally: it is a single small translation unit, and a
+/// feature gate would make the test and non-test builds of this crate differ.
+fn compile_shim() {
+    cc::Build::new()
+        .include("vendor/brotli/c/include")
+        .include("vendor/brotli/c")
+        .include("vendor/brotli")
+        .cargo_metadata(false)
+        .warnings(false)
+        .file("shim/static_dict_probe.c")
+        .compile("mbrotli_shim");
+    println!("cargo:rerun-if-changed=shim/static_dict_probe.c");
+}
+
 fn main() {
     let target_family = env::var("CARGO_CFG_TARGET_FAMILY").unwrap_or_default();
     let output_directory = env::var("OUT_DIR").expect("OUT_DIR is not set");
@@ -35,9 +51,11 @@ fn main() {
     compile_library("brotlicommon", "vendor/brotli/c/common");
     compile_library("brotlidec", "vendor/brotli/c/dec");
     compile_library("brotlienc", "vendor/brotli/c/enc");
+    compile_shim();
 
     // Dependents precede their dependencies for single-pass static linkers.
     println!("cargo:rustc-link-search=native={output_directory}");
+    println!("cargo:rustc-link-lib=static=mbrotli_shim");
     println!("cargo:rustc-link-lib=static=brotlienc");
     println!("cargo:rustc-link-lib=static=brotlidec");
     println!("cargo:rustc-link-lib=static=brotlicommon");

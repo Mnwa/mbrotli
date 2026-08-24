@@ -1,16 +1,14 @@
-//! Quality 3, 4 and 5 encoders: greedy backward references and meta-blocks.
+//! Qualities 3 to 9: greedy backward references and greedy meta-blocks.
+//!
+//! The search here is greedy with a one-byte lazy look-ahead, and the
+//! meta-block is built in a single pass over the commands. Everything below
+//! the decisions — commands, histograms, block splits, the bit writer — lives
+//! in [`super::shared`], which the high-quality encoder uses as well.
 
 pub(crate) mod backward_references;
-pub(crate) mod bitstream;
-pub(crate) mod command;
 pub(crate) mod context_model;
-pub(crate) mod dictionary;
 pub(crate) mod encoder;
 pub(crate) mod hashers;
-pub(crate) mod histogram;
 pub(crate) mod metablock;
 pub(crate) mod params;
-pub(crate) mod ringbuffer;
-pub(crate) mod score;
 pub(crate) mod split;
-pub(crate) mod tables;

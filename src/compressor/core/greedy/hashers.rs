@@ -1,40 +1,77 @@
-//! Match finders for qualities three to five.
+//! Match finders for qualities three to nine.
 //!
 //! Ports `hash_longest_match_quickly_inc.h` (H3, H4, H54),
 //! `hash_longest_match_inc.h` (H5), `hash_longest_match64_inc.h` (H6) and
-//! `hash_forgetful_chain_inc.h` (H40) from the pinned reference
+//! `hash_forgetful_chain_inc.h` (H40, H41, H42) from the pinned reference
 //! (`google/brotli` v1.2.0, commit `028fb5a`).
 //!
 //! Which of them runs is decided once, from the caller's parameters, by
-//! [`super::params::choose_hasher`]. Each is a separate type so the bucket
-//! geometry is a compile-time constant inside the probe loop, and the enum that
-//! selects between them is matched once per block rather than once per
-//! candidate.
+//! [`super::params::choose_hasher`]. The hash width and the bucket count are
+//! compile-time constants of the matcher type, so the hash itself is a fixed
+//! shift; the candidate depth, the chain depth and the number of cached
+//! distances are ordinary fields, because they only bound loops and turning
+//! five bucket depths into five monomorphisations would cost far more
+//! instruction cache than the bound is worth.
 //!
-//! The reference extends the distance cache with near-miss variants when a
-//! matcher checks more than four cached distances. Every matcher reachable
-//! from qualities three to five checks exactly four, so the cache here is the
-//! plain four-entry one and `PrepareDistanceCache` has nothing to do.
+//! Qualities seven and up probe more than four cached distances, which is
+//! where [`prepare_distance_cache`] earns its keep: the extra entries are
+//! near misses derived from the two freshest distances.
 
 use fearless_simd::Simd;
 
-use super::dictionary::{self, DictionaryStats};
-use super::params::HasherPlan;
-use super::score::{
+use super::params::{BucketShape, ChainShape, HasherPlan};
+use crate::compressor::core::shared::constants::HASH_MUL32;
+use crate::compressor::core::shared::dictionary::{self, DictionaryStats};
+use crate::compressor::core::shared::match_len::find_match_length;
+use crate::compressor::core::shared::score::{
     SearchResult, backward_reference_penalty_using_last_distance, backward_reference_score,
     backward_reference_score_using_last_distance,
 };
-use crate::compressor::core::shared::constants::HASH_MUL32;
-use crate::compressor::core::shared::match_len::find_match_length;
 
 /// Sixty-four-bit hash multiplier (`kHashMul64`).
 const HASH_MUL64: u64 = 0x1FE3_5A7B_D357_9BD3;
 
-/// The four distances the encoder keeps as short codes.
-pub(crate) type DistanceCache = [i32; 4];
+/// The sixteen distances a search may probe (`BROTLI_NUM_DISTANCE_SHORT_CODES`).
+///
+/// Only the first four are real history; the rest are near misses derived from
+/// them by [`prepare_distance_cache`].
+pub(crate) type DistanceCache = [i32; 16];
+
+/// The four cache entries the encoder actually remembers across meta-blocks.
+pub(crate) const NUM_REMEMBERED_DISTANCES: usize = 4;
 
 /// Distance cache the reference starts every stream with.
-pub(crate) const INITIAL_DISTANCE_CACHE: DistanceCache = [4, 11, 15, 16];
+pub(crate) const INITIAL_DISTANCE_CACHE: DistanceCache =
+    [4, 11, 15, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+/// Fills the derived entries of the distance cache (`PrepareDistanceCache`).
+///
+/// A matcher that probes more than four distances also probes the values one,
+/// two and three either side of the two freshest ones. They are recomputed
+/// whenever the first four change, and left alone entirely when the matcher
+/// only looks at those four.
+#[inline]
+pub(crate) fn prepare_distance_cache(cache: &mut DistanceCache, num_distances: usize) {
+    if num_distances <= NUM_REMEMBERED_DISTANCES {
+        return;
+    }
+    let last = cache[0];
+    cache[4] = last - 1;
+    cache[5] = last + 1;
+    cache[6] = last - 2;
+    cache[7] = last + 2;
+    cache[8] = last - 3;
+    cache[9] = last + 3;
+    if num_distances > 10 {
+        let next_last = cache[1];
+        cache[10] = next_last - 1;
+        cache[11] = next_last + 1;
+        cache[12] = next_last - 2;
+        cache[13] = next_last + 2;
+        cache[14] = next_last - 3;
+        cache[15] = next_last + 3;
+    }
+}
 
 /// Reads eight little-endian bytes at `offset`, or zero past the end.
 #[inline(always)]
@@ -94,6 +131,15 @@ pub(crate) trait Matcher {
 
     /// Bytes a store needs available (`StoreLookahead`).
     const STORE_LOOKAHEAD: usize;
+
+    /// Returns how many cached distances a search probes.
+    ///
+    /// Mirrors the `NUM_LAST_DISTANCES_TO_CHECK` a matcher was instantiated
+    /// with; [`prepare_distance_cache`] needs it to decide how much of the
+    /// cache to derive.
+    fn last_distances_to_check(&self) -> usize {
+        NUM_REMEMBERED_DISTANCES
+    }
 
     /// Clears the table before the first block (`Prepare`).
     fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8]);
@@ -346,45 +392,55 @@ impl<const BUCKET_BITS: u32, const SWEEP_BITS: u32, const HASH_LEN: u32, const U
     }
 }
 
-/// Slots one bucket of the H5 and H6 matchers holds (`1 << block_bits`).
-///
-/// Quality five fixes `block_bits` at four; a higher quality would have to make
-/// this a parameter again.
-const BUCKET_BLOCK_BITS: u32 = 4;
-
-/// Number of positions one bucket remembers.
-const BUCKET_BLOCK_SIZE: usize = 1usize << BUCKET_BLOCK_BITS;
-
-/// Mask that turns a bucket counter into a slot index.
-const BUCKET_BLOCK_MASK: u16 = (BUCKET_BLOCK_SIZE - 1) as u16;
-
-/// Cached distances the bucket and chain matchers probe first.
-///
-/// Quality five fixes this at four, which is also why the distance cache never
-/// needs the reference's near-miss extension.
-const NUM_LAST_DISTANCES_TO_CHECK: usize = 4;
-
-/// Bucketed match finder keeping the last sixteen positions per hash.
+/// Bucketed match finder keeping the most recent positions per hash.
 ///
 /// `HASH64` selects the H6 variant, which hashes eight bytes instead of four
-/// and pre-filters candidates on their first four bytes.
+/// and pre-filters candidates on their first four bytes. `BUCKET_BITS` fixes
+/// the table size, and therefore the hash shift, at compile time; the bucket
+/// depth and the number of cached distances vary with quality and are fields.
+///
+/// # Equivalence with the tagged reference matchers
+///
+/// The reference builds `H58`/`H68` in place of `H5`/`H6` when
+/// `BROTLI_MAX_SIMD_QUALITY` is defined. Those variants store a one-byte tag
+/// beside every position and iterate only the slots whose tag matches the
+/// current one. They select the same bucket — the tagged `HashBytes` merely
+/// keeps eight more low bits, which the key shifts straight back off — and
+/// they walk it newest to oldest, exactly as this loop does. A tag is a
+/// function of the hashed bytes, so two positions whose first four bytes agree
+/// always share a tag; a slot the tag mask drops therefore differs in those
+/// four bytes, and a candidate that differs there can never reach the
+/// reference's `len >= 4` acceptance test. Both matchers also stop at the
+/// first candidate beyond `max_backward`, and positions grow monotonically
+/// along the ring, so both stop having seen the same prefix of candidates.
+/// The accepted-match sets coincide, and so do the streams.
 pub(crate) struct BucketMatcher<const HASH64: bool, const BUCKET_BITS: u32> {
     num: Vec<u16>,
     buckets: Vec<u32>,
+    block_bits: u32,
+    block_size: usize,
+    block_mask: u16,
+    last_distances: usize,
 }
 
 impl<const HASH64: bool, const BUCKET_BITS: u32> BucketMatcher<HASH64, BUCKET_BITS> {
     /// Number of buckets in the table.
     const BUCKET_SIZE: usize = 1usize << BUCKET_BITS;
 
-    /// Creates an empty table.
-    pub(crate) fn new() -> Self {
+    /// Creates an empty table of the shape `shape` describes.
+    pub(crate) fn new(shape: BucketShape) -> Self {
+        debug_assert_eq!(shape.bucket_bits, BUCKET_BITS);
+        let block_size = 1usize << shape.block_bits;
         Self {
             num: vec![0u16; Self::BUCKET_SIZE],
             // The reference leaves this uninitialised: a slot is only read
             // after the counter that guards it has been incremented. Zeroing
             // costs one pass and removes the question entirely.
-            buckets: vec![0u32; Self::BUCKET_SIZE * BUCKET_BLOCK_SIZE],
+            buckets: vec![0u32; Self::BUCKET_SIZE * block_size],
+            block_bits: shape.block_bits,
+            block_size,
+            block_mask: (block_size - 1) as u16,
+            last_distances: shape.last_distances,
         }
     }
 
@@ -406,6 +462,10 @@ impl<const HASH64: bool, const BUCKET_BITS: u32> Matcher for BucketMatcher<HASH6
     const HASH_TYPE_LENGTH: usize = if HASH64 { 8 } else { 4 };
     const STORE_LOOKAHEAD: usize = Self::HASH_TYPE_LENGTH;
 
+    fn last_distances_to_check(&self) -> usize {
+        self.last_distances
+    }
+
     fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8]) {
         let partial_prepare_threshold = Self::BUCKET_SIZE >> 6;
         if one_shot && input_size <= partial_prepare_threshold {
@@ -426,9 +486,9 @@ impl<const HASH64: bool, const BUCKET_BITS: u32> Matcher for BucketMatcher<HASH6
         let Some(count) = self.num.get_mut(key) else {
             return;
         };
-        let minor_ix = usize::from(*count & BUCKET_BLOCK_MASK);
+        let minor_ix = usize::from(*count & self.block_mask);
         *count = count.wrapping_add(1);
-        if let Some(slot) = self.buckets.get_mut(minor_ix + (key << BUCKET_BLOCK_BITS)) {
+        if let Some(slot) = self.buckets.get_mut(minor_ix + (key << self.block_bits)) {
             *slot = ix as u32;
         }
     }
@@ -448,12 +508,12 @@ impl<const HASH64: bool, const BUCKET_BITS: u32> Matcher for BucketMatcher<HASH6
         let mut best_score = out.score;
         let mut best_len = out.len;
         let key = Self::hash(data, cur_ix_masked);
-        let bucket_base = key << BUCKET_BLOCK_BITS;
+        let bucket_base = key << self.block_bits;
 
         out.len = 0;
         out.len_code_delta = 0;
 
-        for index in 0..NUM_LAST_DISTANCES_TO_CHECK {
+        for index in 0..self.last_distances {
             let backward = query.cache[index] as usize;
             let prev_ix = query.cur_ix.wrapping_sub(backward);
             if prev_ix >= query.cur_ix || backward > query.max_backward {
@@ -495,11 +555,11 @@ impl<const HASH64: bool, const BUCKET_BITS: u32> Matcher for BucketMatcher<HASH6
 
         let count = self.num.get(key).copied().unwrap_or(0);
         let total = usize::from(count);
-        let down = total.saturating_sub(BUCKET_BLOCK_SIZE);
+        let down = total.saturating_sub(self.block_size);
         let mut index = total;
         while index > down {
             index -= 1;
-            let slot = bucket_base + usize::from((index as u16) & BUCKET_BLOCK_MASK);
+            let slot = bucket_base + usize::from((index as u16) & self.block_mask);
             let prev_ix = self.buckets.get(slot).copied().unwrap_or(0) as usize;
             let backward = query.cur_ix - prev_ix;
             if backward > query.max_backward {
@@ -544,7 +604,7 @@ impl<const HASH64: bool, const BUCKET_BITS: u32> Matcher for BucketMatcher<HASH6
         }
 
         if let Some(counter) = self.num.get_mut(key) {
-            let slot = bucket_base + usize::from(*counter & BUCKET_BLOCK_MASK);
+            let slot = bucket_base + usize::from(*counter & self.block_mask);
             if let Some(entry) = self.buckets.get_mut(slot) {
                 *entry = query.cur_ix as u32;
             }
@@ -565,11 +625,11 @@ impl<const HASH64: bool, const BUCKET_BITS: u32> Matcher for BucketMatcher<HASH6
     }
 }
 
-/// Slots one forgetful-chain bank holds (`BANK_SIZE`).
-const CHAIN_BANK_SIZE: usize = 1 << 16;
+/// Number of buckets the forgetful chains hash into (`BUCKET_BITS` 15).
+const CHAIN_BUCKET_BITS: u32 = 15;
 
 /// Number of buckets the forgetful chain hashes into.
-const CHAIN_BUCKET_SIZE: usize = 1 << 15;
+const CHAIN_BUCKET_SIZE: usize = 1 << CHAIN_BUCKET_BITS;
 
 /// Address value that terminates a chain after its first node.
 ///
@@ -580,9 +640,6 @@ const CHAIN_EMPTY_ADDR: u32 = 0xCCCC_CCCC;
 /// Head value the partial preparation seeds a bucket with.
 const CHAIN_EMPTY_HEAD: u16 = 0xCCCC;
 
-/// Chain hops quality five follows (`max_hops`).
-const CHAIN_MAX_HOPS: usize = 16;
-
 /// One node of a forgetful chain.
 #[derive(Copy, Clone, Debug, Default)]
 struct ChainSlot {
@@ -590,41 +647,67 @@ struct ChainSlot {
     next: u16,
 }
 
-/// Forgetful-chain match finder (`HashForgetfulChain`, H40).
+/// Forgetful-chain match finder (`HashForgetfulChain`: H40, H41, H42).
 ///
-/// Chains share one storage bank, so old nodes are overwritten rather than
-/// freed and several chains may end up sharing a tail. A one-byte truncated
-/// hash rejects cached-distance candidates before they are compared.
-pub(crate) struct ChainMatcher {
+/// Chains share storage banks, so old nodes are overwritten rather than freed
+/// and several chains may end up sharing a tail. A one-byte truncated hash
+/// rejects cached-distance candidates before they are compared.
+///
+/// `NUM_BANKS` and `BANK_BITS` are compile-time because they decide the bank
+/// index arithmetic in the inner hop loop: H40 and H41 keep one bank of
+/// 65,536 slots, H42 five hundred and twelve banks of 512.
+pub(crate) struct ChainMatcher<const NUM_BANKS: usize, const BANK_BITS: u32> {
     addr: Vec<u32>,
     head: Vec<u16>,
     tiny_hash: Vec<u8>,
     slots: Vec<ChainSlot>,
-    free_slot_idx: u16,
+    // Heap-allocated rather than a `[u16; NUM_BANKS]` field: H42 needs five
+    // hundred and twelve of these, and inlining a kibibyte would make every
+    // other `MatchFinder` variant carry the same footprint.
+    free_slot_idx: Vec<u16>,
+    last_distances: usize,
+    max_hops: usize,
 }
 
-impl ChainMatcher {
-    /// Creates an empty chain table.
-    pub(crate) fn new() -> Self {
+impl<const NUM_BANKS: usize, const BANK_BITS: u32> ChainMatcher<NUM_BANKS, BANK_BITS> {
+    /// Slots one bank holds (`BANK_SIZE`).
+    const BANK_SIZE: usize = 1usize << BANK_BITS;
+
+    /// Mask that keeps a slot index inside its bank.
+    const BANK_MASK: usize = Self::BANK_SIZE - 1;
+
+    /// Mask that maps a bucket key onto a bank.
+    const BANK_SELECT: usize = NUM_BANKS - 1;
+
+    /// Creates an empty chain table of the shape `shape` describes.
+    pub(crate) fn new(shape: ChainShape) -> Self {
+        debug_assert_eq!(shape.num_banks, NUM_BANKS);
+        debug_assert_eq!(shape.bank_bits, BANK_BITS);
         Self {
             addr: vec![CHAIN_EMPTY_ADDR; CHAIN_BUCKET_SIZE],
             head: vec![0u16; CHAIN_BUCKET_SIZE],
             tiny_hash: vec![0u8; 1 << 16],
-            slots: vec![ChainSlot::default(); CHAIN_BANK_SIZE],
-            free_slot_idx: 0,
+            slots: vec![ChainSlot::default(); NUM_BANKS * Self::BANK_SIZE],
+            free_slot_idx: vec![0u16; NUM_BANKS],
+            last_distances: shape.last_distances,
+            max_hops: shape.max_hops,
         }
     }
 
     /// Returns the bucket of the bytes at `offset` (`HashBytes`).
     #[inline(always)]
     fn hash(data: &[u8], offset: usize) -> usize {
-        (read_u32(data, offset).wrapping_mul(HASH_MUL32) >> (32 - 15)) as usize
+        (read_u32(data, offset).wrapping_mul(HASH_MUL32) >> (32 - CHAIN_BUCKET_BITS)) as usize
     }
 }
 
-impl Matcher for ChainMatcher {
+impl<const NUM_BANKS: usize, const BANK_BITS: u32> Matcher for ChainMatcher<NUM_BANKS, BANK_BITS> {
     const HASH_TYPE_LENGTH: usize = 4;
     const STORE_LOOKAHEAD: usize = 4;
+
+    fn last_distances_to_check(&self) -> usize {
+        self.last_distances
+    }
 
     fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8]) {
         let partial_prepare_threshold = CHAIN_BUCKET_SIZE >> 6;
@@ -643,14 +726,19 @@ impl Matcher for ChainMatcher {
             self.head.fill(0);
         }
         self.tiny_hash.fill(0);
-        self.free_slot_idx = 0;
+        self.free_slot_idx.fill(0);
     }
 
     #[inline(always)]
     fn store(&mut self, data: &[u8], mask: usize, ix: usize) {
         let key = Self::hash(data, ix & mask);
-        let idx = usize::from(self.free_slot_idx) & (CHAIN_BANK_SIZE - 1);
-        self.free_slot_idx = self.free_slot_idx.wrapping_add(1);
+        let bank = key & Self::BANK_SELECT;
+        let free = self.free_slot_idx.get_mut(bank).map_or(0u16, |slot| {
+            let current = *slot;
+            *slot = current.wrapping_add(1);
+            current
+        });
+        let idx = usize::from(free) & Self::BANK_MASK;
         let previous = self.addr.get(key).copied().unwrap_or(CHAIN_EMPTY_ADDR);
         let delta = ix.wrapping_sub(previous as usize);
         if let Some(slot) = self.tiny_hash.get_mut(ix as u16 as usize) {
@@ -658,7 +746,7 @@ impl Matcher for ChainMatcher {
         }
         let delta = if delta > 0xFFFF { 0xFFFF } else { delta as u16 };
         let head = self.head.get(key).copied().unwrap_or(0);
-        if let Some(slot) = self.slots.get_mut(idx) {
+        if let Some(slot) = self.slots.get_mut(bank * Self::BANK_SIZE + idx) {
             slot.delta = delta;
             slot.next = head;
         }
@@ -690,7 +778,7 @@ impl Matcher for ChainMatcher {
         out.len = 0;
         out.len_code_delta = 0;
 
-        for index in 0..NUM_LAST_DISTANCES_TO_CHECK {
+        for index in 0..self.last_distances {
             let backward = query.cache[index] as usize;
             let prev_ix = query.cur_ix.wrapping_sub(backward);
             // Distance code zero is worth trying even for a two-byte match, so
@@ -730,19 +818,25 @@ impl Matcher for ChainMatcher {
             best_len = 3;
         }
 
+        let bank = key & Self::BANK_SELECT;
+        let bank_base = bank * Self::BANK_SIZE;
         let mut backward = 0usize;
         let mut delta = query
             .cur_ix
             .wrapping_sub(self.addr.get(key).copied().unwrap_or(CHAIN_EMPTY_ADDR) as usize);
         let mut slot = usize::from(self.head.get(key).copied().unwrap_or(0));
-        for _ in 0..CHAIN_MAX_HOPS {
+        for _ in 0..self.max_hops {
             let last = slot;
             backward = backward.wrapping_add(delta);
             if backward > query.max_backward {
                 break;
             }
             let prev_ix = (query.cur_ix.wrapping_sub(backward)) & mask;
-            let node = self.slots.get(last).copied().unwrap_or_default();
+            let node = self
+                .slots
+                .get(bank_base + (last & Self::BANK_MASK))
+                .copied()
+                .unwrap_or_default();
             slot = usize::from(node.next);
             delta = usize::from(node.delta);
             if cur_ix_masked + best_len > mask
@@ -781,6 +875,10 @@ impl Matcher for ChainMatcher {
 }
 
 /// The match finder a stream is using, chosen once from its parameters.
+///
+/// The tagged reference matchers `H58` and `H68` are not separate variants:
+/// they are byte-for-byte equivalent to `H5` and `H6`, as argued on
+/// [`BucketMatcher`].
 pub(crate) enum MatchFinder {
     /// Quality 3.
     H3(QuickMatcher<16, 1, 5, false>),
@@ -788,11 +886,15 @@ pub(crate) enum MatchFinder {
     H4(QuickMatcher<17, 2, 5, true>),
     /// Quality 4, large inputs.
     H54(QuickMatcher<20, 2, 7, false>),
-    /// Quality 5, small windows.
-    H40(ChainMatcher),
-    /// Quality 5, ordinary inputs.
-    H5(BucketMatcher<false, 14>),
-    /// Quality 5, large inputs and wide windows.
+    /// Qualities 5 to 8, small windows: `H40` and `H41`.
+    H40(ChainMatcher<1, 16>),
+    /// Quality 9, small windows: `H42`.
+    H42(ChainMatcher<512, 9>),
+    /// Qualities 5 and 6, ordinary inputs: fourteen bucket bits.
+    H5Narrow(BucketMatcher<false, 14>),
+    /// Qualities 7 to 9, ordinary inputs: fifteen bucket bits.
+    H5Wide(BucketMatcher<false, 15>),
+    /// Qualities 5 to 9, large inputs and wide windows.
     H6(BucketMatcher<true, 15>),
 }
 
@@ -803,24 +905,50 @@ impl From<HasherPlan> for MatchFinder {
             HasherPlan::H3 => Self::H3(QuickMatcher::new()),
             HasherPlan::H4 => Self::H4(QuickMatcher::new()),
             HasherPlan::H54 => Self::H54(QuickMatcher::new()),
-            HasherPlan::H40 => Self::H40(ChainMatcher::new()),
-            HasherPlan::H5 { .. } => Self::H5(BucketMatcher::new()),
-            HasherPlan::H6 { .. } => Self::H6(BucketMatcher::new()),
+            HasherPlan::Chain(shape) => {
+                if shape.num_banks == 1 {
+                    Self::H40(ChainMatcher::new(shape))
+                } else {
+                    Self::H42(ChainMatcher::new(shape))
+                }
+            }
+            HasherPlan::H5(shape) => {
+                if shape.bucket_bits == 14 {
+                    Self::H5Narrow(BucketMatcher::new(shape))
+                } else {
+                    Self::H5Wide(BucketMatcher::new(shape))
+                }
+            }
+            HasherPlan::H6(shape) => Self::H6(BucketMatcher::new(shape)),
         }
     }
 }
 
+/// Runs `body` on whichever concrete matcher `finder` holds.
+///
+/// The dispatch happens once per block; everything inside `body` is
+/// monomorphised on the matcher type it was handed.
+macro_rules! with_matcher {
+    ($finder:expr, |$matcher:ident| $body:expr) => {
+        match $finder {
+            MatchFinder::H3($matcher) => $body,
+            MatchFinder::H4($matcher) => $body,
+            MatchFinder::H54($matcher) => $body,
+            MatchFinder::H40($matcher) => $body,
+            MatchFinder::H42($matcher) => $body,
+            MatchFinder::H5Narrow($matcher) => $body,
+            MatchFinder::H5Wide($matcher) => $body,
+            MatchFinder::H6($matcher) => $body,
+        }
+    };
+}
+
+pub(crate) use with_matcher;
+
 impl MatchFinder {
     /// Clears the table before the first block of a stream (`Prepare`).
     pub(crate) fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8]) {
-        match self {
-            Self::H3(matcher) => matcher.prepare(one_shot, input_size, data),
-            Self::H4(matcher) => matcher.prepare(one_shot, input_size, data),
-            Self::H54(matcher) => matcher.prepare(one_shot, input_size, data),
-            Self::H40(matcher) => matcher.prepare(one_shot, input_size, data),
-            Self::H5(matcher) => matcher.prepare(one_shot, input_size, data),
-            Self::H6(matcher) => matcher.prepare(one_shot, input_size, data),
-        }
+        with_matcher!(self, |matcher| matcher.prepare(one_shot, input_size, data));
     }
 
     /// Records the positions spanning the previous block boundary.
@@ -831,14 +959,8 @@ impl MatchFinder {
         data: &[u8],
         mask: usize,
     ) {
-        match self {
-            Self::H3(matcher) => matcher.stitch_to_previous_block(num_bytes, position, data, mask),
-            Self::H4(matcher) => matcher.stitch_to_previous_block(num_bytes, position, data, mask),
-            Self::H54(matcher) => matcher.stitch_to_previous_block(num_bytes, position, data, mask),
-            Self::H40(matcher) => matcher.stitch_to_previous_block(num_bytes, position, data, mask),
-            Self::H5(matcher) => matcher.stitch_to_previous_block(num_bytes, position, data, mask),
-            Self::H6(matcher) => matcher.stitch_to_previous_block(num_bytes, position, data, mask),
-        }
+        with_matcher!(self, |matcher| matcher
+            .stitch_to_previous_block(num_bytes, position, data, mask));
     }
 }
 
@@ -901,6 +1023,36 @@ mod tests {
         matcher
     }
 
+    /// The bucket shape quality five resolves to.
+    const Q5_BUCKET: BucketShape = BucketShape {
+        bucket_bits: 14,
+        block_bits: 4,
+        last_distances: 4,
+    };
+
+    /// The bucket shape quality nine resolves to.
+    const Q9_BUCKET: BucketShape = BucketShape {
+        bucket_bits: 15,
+        block_bits: 8,
+        last_distances: 16,
+    };
+
+    /// The chain shape quality five resolves to.
+    const Q5_CHAIN: ChainShape = ChainShape {
+        num_banks: 1,
+        bank_bits: 16,
+        last_distances: 4,
+        max_hops: 16,
+    };
+
+    /// The chain shape quality nine resolves to.
+    const Q9_CHAIN: ChainShape = ChainShape {
+        num_banks: 512,
+        bank_bits: 9,
+        last_distances: 16,
+        max_hops: 224,
+    };
+
     #[test]
     fn the_quick_matcher_finds_a_repeat_it_has_stored() {
         let data = repeated();
@@ -927,21 +1079,74 @@ mod tests {
     fn the_bucket_matchers_find_a_repeat_they_have_stored() {
         let data = repeated();
 
-        let mut h5 = primed(BucketMatcher::<false, 14>::new(), &data);
+        let mut h5 = primed(BucketMatcher::<false, 14>::new(Q5_BUCKET), &data);
         let found = search_at(&mut h5, &data, REPEAT_AT);
         assert_eq!((found.distance, found.len), (64, 64));
 
-        let mut h6 = primed(BucketMatcher::<true, 15>::new(), &data);
+        let mut h6 = primed(
+            BucketMatcher::<true, 15>::new(BucketShape {
+                bucket_bits: 15,
+                ..Q5_BUCKET
+            }),
+            &data,
+        );
         let found = search_at(&mut h6, &data, REPEAT_AT);
+        assert_eq!((found.distance, found.len), (64, 64));
+
+        // The deepest bucket quality nine asks for finds the same repeat.
+        let mut deep = primed(BucketMatcher::<false, 15>::new(Q9_BUCKET), &data);
+        let found = search_at(&mut deep, &data, REPEAT_AT);
         assert_eq!((found.distance, found.len), (64, 64));
     }
 
     #[test]
-    fn the_chain_matcher_finds_a_repeat_it_has_stored() {
+    fn the_chain_matchers_find_a_repeat_they_have_stored() {
         let data = repeated();
-        let mut matcher = primed(ChainMatcher::new(), &data);
-        let found = search_at(&mut matcher, &data, REPEAT_AT);
+        let mut h40 = primed(ChainMatcher::<1, 16>::new(Q5_CHAIN), &data);
+        let found = search_at(&mut h40, &data, REPEAT_AT);
         assert_eq!((found.distance, found.len), (64, 64));
+
+        // H42 spreads the same chains over five hundred and twelve banks.
+        let mut h42 = primed(ChainMatcher::<512, 9>::new(Q9_CHAIN), &data);
+        let found = search_at(&mut h42, &data, REPEAT_AT);
+        assert_eq!((found.distance, found.len), (64, 64));
+    }
+
+    #[test]
+    fn the_derived_distance_cache_brackets_the_two_freshest_entries() {
+        let mut cache = INITIAL_DISTANCE_CACHE;
+        prepare_distance_cache(&mut cache, 4);
+        assert_eq!(cache[4..], [0; 12]);
+
+        prepare_distance_cache(&mut cache, 10);
+        assert_eq!(cache[4..10], [3, 5, 2, 6, 1, 7]);
+        // Nothing past the tenth entry is touched below the threshold.
+        assert_eq!(cache[10..], [0; 6]);
+
+        prepare_distance_cache(&mut cache, 16);
+        assert_eq!(cache[10..], [10, 12, 9, 13, 8, 14]);
+    }
+
+    #[test]
+    fn a_deep_bucket_remembers_more_positions_than_a_shallow_one() {
+        // Every position hashes to the same bucket, so the depth is exactly
+        // how far back a match can still be found.
+        let data = vec![b'a'; 1024];
+        for (shape, depth) in [(Q5_BUCKET, 16usize), (Q9_BUCKET, 256)] {
+            let mut matcher = BucketMatcher::<false, 15>::new(BucketShape {
+                bucket_bits: 15,
+                ..shape
+            });
+            matcher.prepare(true, data.len(), &data);
+            matcher.store_range(&data, usize::MAX, 0, 512);
+            let found = search_at(&mut matcher, &data, 512);
+            assert!(found.is_match());
+            assert!(
+                found.distance <= depth,
+                "{shape:?} reached {}",
+                found.distance
+            );
+        }
     }
 
     #[test]
@@ -949,12 +1154,12 @@ mod tests {
         // Every position hashes to the same bucket, so a store past the
         // sixteenth has to push the oldest one out.
         let data = vec![b'a'; 256];
-        let mut matcher = BucketMatcher::<false, 14>::new();
+        let mut matcher = BucketMatcher::<false, 14>::new(Q5_BUCKET);
         matcher.prepare(true, data.len(), &data);
         matcher.store_range(&data, usize::MAX, 0, 100);
         let found = search_at(&mut matcher, &data, 100);
         assert!(found.is_match());
-        assert!(found.distance <= BUCKET_BLOCK_SIZE);
+        assert!(found.distance <= 16);
     }
 
     #[test]
@@ -964,11 +1169,11 @@ mod tests {
         matcher.prepare(true, data.len(), &data);
         assert!(!search_at(&mut matcher, &data, REPEAT_AT).is_match());
 
-        let mut chain = ChainMatcher::new();
+        let mut chain = ChainMatcher::<1, 16>::new(Q5_CHAIN);
         chain.prepare(true, data.len(), &data);
         assert!(!search_at(&mut chain, &data, REPEAT_AT).is_match());
 
-        let mut bucket = BucketMatcher::<false, 14>::new();
+        let mut bucket = BucketMatcher::<false, 14>::new(Q5_BUCKET);
         bucket.prepare(true, data.len(), &data);
         assert!(!search_at(&mut bucket, &data, REPEAT_AT).is_match());
     }
@@ -981,12 +1186,12 @@ mod tests {
         matcher.prepare(false, 0, &data);
         assert!(!search_at(&mut matcher, &data, REPEAT_AT).is_match());
 
-        let mut chain = primed(ChainMatcher::new(), &data);
+        let mut chain = primed(ChainMatcher::<1, 16>::new(Q5_CHAIN), &data);
         assert!(search_at(&mut chain, &data, REPEAT_AT).is_match());
         chain.prepare(false, 0, &data);
         assert!(!search_at(&mut chain, &data, REPEAT_AT).is_match());
 
-        let mut bucket = primed(BucketMatcher::<false, 14>::new(), &data);
+        let mut bucket = primed(BucketMatcher::<false, 14>::new(Q5_BUCKET), &data);
         assert!(search_at(&mut bucket, &data, REPEAT_AT).is_match());
         bucket.prepare(false, 0, &data);
         assert!(!search_at(&mut bucket, &data, REPEAT_AT).is_match());
@@ -997,7 +1202,7 @@ mod tests {
         let data = repeated();
         let mut results = Vec::new();
         for level in [Level::new(), Level::baseline(), Level::fallback()] {
-            let mut matcher = primed(BucketMatcher::<false, 14>::new(), &data);
+            let mut matcher = primed(BucketMatcher::<false, 14>::new(Q5_BUCKET), &data);
             results.push(search_with(level, &mut matcher, &data, REPEAT_AT));
         }
         assert!(results.windows(2).all(|pair| pair[0] == pair[1]));
@@ -1050,24 +1255,45 @@ mod tests {
             MatchFinder::H54(_)
         ));
         assert!(matches!(
-            MatchFinder::from(HasherPlan::H40),
+            MatchFinder::from(HasherPlan::Chain(Q5_CHAIN)),
             MatchFinder::H40(_)
         ));
         assert!(matches!(
-            MatchFinder::from(HasherPlan::H5 {
-                bucket_bits: 14,
-                block_bits: 4,
-                last_distances: 4
-            }),
-            MatchFinder::H5(_)
+            MatchFinder::from(HasherPlan::Chain(Q9_CHAIN)),
+            MatchFinder::H42(_)
         ));
         assert!(matches!(
-            MatchFinder::from(HasherPlan::H6 {
-                bucket_bits: 15,
-                block_bits: 4,
-                last_distances: 4
-            }),
+            MatchFinder::from(HasherPlan::H5(Q5_BUCKET)),
+            MatchFinder::H5Narrow(_)
+        ));
+        assert!(matches!(
+            MatchFinder::from(HasherPlan::H5(Q9_BUCKET)),
+            MatchFinder::H5Wide(_)
+        ));
+        assert!(matches!(
+            MatchFinder::from(HasherPlan::H6(Q9_BUCKET)),
             MatchFinder::H6(_)
         ));
+    }
+
+    #[test]
+    fn a_matcher_reports_the_cached_distance_count_its_shape_asked_for() {
+        assert_eq!(
+            BucketMatcher::<false, 15>::new(Q9_BUCKET).last_distances_to_check(),
+            16
+        );
+        assert_eq!(
+            ChainMatcher::<1, 16>::new(Q5_CHAIN).last_distances_to_check(),
+            4
+        );
+        assert_eq!(
+            ChainMatcher::<512, 9>::new(Q9_CHAIN).last_distances_to_check(),
+            16
+        );
+        // The quick matchers always use the plain four.
+        assert_eq!(
+            QuickMatcher::<16, 1, 5, false>::new().last_distances_to_check(),
+            NUM_REMEMBERED_DISTANCES
+        );
     }
 }

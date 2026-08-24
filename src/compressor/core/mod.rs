@@ -8,4 +8,5 @@ pub(crate) mod bound;
 pub(crate) mod driver;
 pub(crate) mod fast;
 pub(crate) mod greedy;
+pub(crate) mod hq;
 pub(crate) mod shared;

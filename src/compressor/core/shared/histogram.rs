@@ -9,9 +9,9 @@
 //! the same `FastLog2` table, the same accumulation order, the same "at least
 //! one bit per symbol" floor.
 
-use super::params::NUM_HISTOGRAM_DISTANCE_SYMBOLS;
-use crate::compressor::core::shared::constants::{NUM_COMMAND_SYMBOLS, NUM_LITERAL_SYMBOLS};
-use crate::compressor::core::shared::fast_log::fast_log2;
+use super::constants::{NUM_COMMAND_SYMBOLS, NUM_LITERAL_SYMBOLS};
+use super::distance::NUM_HISTOGRAM_DISTANCE_SYMBOLS;
+use super::fast_log::fast_log2;
 
 /// Occurrence counts over an alphabet of `N` symbols.
 #[derive(Clone, Debug)]
@@ -20,6 +20,13 @@ pub(crate) struct Histogram<const N: usize> {
     pub(crate) data: [u32; N],
     /// Sum of [`Histogram::data`].
     pub(crate) total_count: usize,
+    /// What storing this histogram was last estimated to cost, in bits.
+    ///
+    /// Only the high-quality clusterer maintains this; every other caller
+    /// leaves it at infinity. It lives here rather than beside the clusterer
+    /// because the reference caches it on the histogram, and a merge that
+    /// reused a stale value would pick a different cluster.
+    pub(crate) bit_cost: f64,
 }
 
 impl<const N: usize> Histogram<N> {
@@ -27,6 +34,7 @@ impl<const N: usize> Histogram<N> {
     pub(crate) fn clear(&mut self) {
         self.data.fill(0);
         self.total_count = 0;
+        self.bit_cost = f64::INFINITY;
     }
 
     /// Counts one occurrence of `symbol` (`HistogramAdd`).
@@ -39,10 +47,23 @@ impl<const N: usize> Histogram<N> {
     }
 
     /// Adds every count of `other` (`HistogramAddHistogram`).
+    ///
+    /// The cached bit cost is deliberately left alone: the reference recomputes
+    /// it at the point of use rather than after every merge.
     pub(crate) fn add_histogram(&mut self, other: &Self) {
         self.total_count += other.total_count;
         for (mine, &theirs) in self.data.iter_mut().zip(other.data.iter()) {
             *mine += theirs;
+        }
+    }
+
+    /// Counts every symbol of `values` (`HistogramAddVector`).
+    pub(crate) fn add_vector<T: Copy + Into<usize>>(&mut self, values: &[T]) {
+        self.total_count += values.len();
+        for &value in values {
+            if let Some(count) = self.data.get_mut(value.into()) {
+                *count += 1;
+            }
         }
     }
 }
@@ -53,6 +74,7 @@ impl<const N: usize> Default for Histogram<N> {
         Self {
             data: [0u32; N],
             total_count: 0,
+            bit_cost: f64::INFINITY,
         }
     }
 }

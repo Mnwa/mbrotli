@@ -36,12 +36,18 @@ const LGWIN: WindowBits = WindowBits::DEFAULT;
 ///
 /// Every implemented quality is gated separately, so a gain at one may not be
 /// used to cover a loss at another.
-const QUALITIES: [QualityLevel; 5] = [
+const QUALITIES: [QualityLevel; 11] = [
     QualityLevel::Q0,
     QualityLevel::Q1,
     QualityLevel::Q3,
     QualityLevel::Q4,
     QualityLevel::Q5,
+    QualityLevel::Q6,
+    QualityLevel::Q7,
+    QualityLevel::Q8,
+    QualityLevel::Q9,
+    QualityLevel::Q10,
+    QualityLevel::Q11,
 ];
 
 /// Safe wrappers over the raw C Brotli bindings.

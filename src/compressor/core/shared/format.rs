@@ -5,12 +5,12 @@
 //! `c/enc/encode.c`. Distributed by Google under the MIT licence; see
 //! `brotli-ffi/vendor/brotli/LICENSE`.
 
-/// Context lookup table for `CONTEXT_UTF8`, the only mode these qualities use.
+/// Context lookup table for `CONTEXT_UTF8`.
 ///
 /// The context of a literal is `LUT[p1] | LUT[256 + p2]`, where `p1` and `p2`
-/// are the two preceding bytes. `ChooseContextMode` only returns
-/// `CONTEXT_SIGNED` at quality ten and above, so the other three tables of
-/// `_kBrotliContextLookupTable` are unreachable from the greedy qualities.
+/// are the two preceding bytes. `CONTEXT_LSB6` and `CONTEXT_MSB6` are the
+/// remaining two tables of `_kBrotliContextLookupTable`; no quality this
+/// encoder implements ever selects them.
 pub(crate) const CONTEXT_LUT_UTF8: [u8; 512] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     8, 12, 16, 12, 12, 20, 12, 16, 24, 28, 12, 12, 32, 12, 36, 12, 44, 44, 44, 44, 44, 44, 44, 44,
@@ -31,8 +31,72 @@ pub(crate) const CONTEXT_LUT_UTF8: [u8; 512] = [
     2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
 ];
 
-/// Numeric value of `CONTEXT_UTF8`, as written into the meta-block header.
-pub(crate) const CONTEXT_MODE_UTF8: u64 = 2;
+/// Context lookup table for `CONTEXT_SIGNED`.
+///
+/// `ChooseContextMode` picks this over [`CONTEXT_LUT_UTF8`] at quality ten and
+/// above when the block is not mostly UTF-8; it buckets the two preceding
+/// bytes by magnitude rather than by character class.
+pub(crate) const CONTEXT_LUT_SIGNED: [u8; 512] = [
+    0, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+    16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+    16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24,
+    24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24,
+    24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24,
+    24, 24, 24, 24, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
+    32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
+    32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 40, 40, 40, 40,
+    40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40,
+    40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 48, 48, 48, 48,
+    48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 56, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 7,
+];
+
+/// The literal context model a meta-block is coded with (`ContextType`).
+///
+/// The numeric values are what `BrotliStoreMetaBlock` writes into the header,
+/// so they are format, not implementation.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ContextMode {
+    /// Second-order model tuned for UTF-8 text (`CONTEXT_UTF8`).
+    #[default]
+    Utf8,
+    /// Second-order model tuned for signed integers (`CONTEXT_SIGNED`).
+    Signed,
+}
+
+impl ContextMode {
+    /// Returns the lookup table this mode computes contexts from.
+    pub(crate) const fn lut(self) -> &'static [u8; 512] {
+        match self {
+            Self::Utf8 => &CONTEXT_LUT_UTF8,
+            Self::Signed => &CONTEXT_LUT_SIGNED,
+        }
+    }
+
+    /// Returns the two-bit code the meta-block header carries.
+    pub(crate) const fn code(self) -> u64 {
+        match self {
+            Self::Utf8 => 2,
+            Self::Signed => 3,
+        }
+    }
+
+    /// Returns the context of a literal preceded by `prev1` and `prev2`.
+    ///
+    /// Mirrors `BROTLI_CONTEXT`.
+    #[inline(always)]
+    pub(crate) fn context(self, prev1: u8, prev2: u8) -> usize {
+        let lut = self.lut();
+        usize::from(lut[usize::from(prev1)] | lut[256 + usize::from(prev2)])
+    }
+}
 
 /// Number of insert-and-copy length codes (`BROTLI_NUM_INS_COPY_CODES`).
 pub(crate) const NUM_INS_COPY_CODES: usize = 24;

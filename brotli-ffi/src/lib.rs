@@ -28,6 +28,14 @@ pub const BROTLI_MAX_QUALITY: c_int = 11;
 pub const BROTLI_DEFAULT_QUALITY: c_int = 11;
 pub const BROTLI_DEFAULT_WINDOW: c_int = 22;
 
+/// Longest match the static dictionary can produce
+/// (`BROTLI_MAX_STATIC_DICTIONARY_MATCH_LEN`).
+pub const BROTLI_MAX_STATIC_DICTIONARY_MATCH_LEN: usize = 37;
+
+/// Value marking an empty slot in a static-dictionary match table
+/// (`kInvalidMatch`).
+pub const BROTLI_INVALID_MATCH: c_uint = 0x0FFF_FFFF;
+
 pub const SHARED_BROTLI_MIN_DICTIONARY_WORD_LENGTH: usize = 4;
 pub const SHARED_BROTLI_MAX_DICTIONARY_WORD_LENGTH: usize = 31;
 pub const SHARED_BROTLI_NUM_DICTIONARY_CONTEXTS: usize = 64;
@@ -270,6 +278,129 @@ pub struct BrotliSharedDictionary {
 }
 
 unsafe extern "C" {
+    /// Reports every static-dictionary word matching at the start of `data`.
+    ///
+    /// Wraps the encoder-internal `BrotliFindAllStaticDictionaryMatches`
+    /// through this crate's own shim, which supplies the encoder dictionary
+    /// the public API does not expose. `matches` must be
+    /// [`BROTLI_MAX_STATIC_DICTIONARY_MATCH_LEN`] + 1 long and pre-filled with
+    /// [`BROTLI_INVALID_MATCH`]; on return each entry is the best word found at
+    /// that match length, packed as `(distance << 5) | length_code`.
+    ///
+    /// # Safety
+    ///
+    /// `data` must be readable for `max_length` bytes and `matches` writable
+    /// for [`BROTLI_MAX_STATIC_DICTIONARY_MATCH_LEN`] + 1 elements.
+    pub fn mbrotli_shim_find_all_static_dictionary_matches(
+        data: *const u8,
+        min_length: usize,
+        max_length: usize,
+        matches: *mut c_uint,
+    ) -> c_int;
+
+    /// Splits a command stream into literal, command and distance partitions.
+    ///
+    /// Wraps the encoder-internal `BrotliSplitBlock` through this crate's own
+    /// shim. `commands` must point at an array laid out like the encoder's
+    /// `Command`, and each of the three output triples must have room for
+    /// `capacity` blocks; the reported block counts may exceed `capacity`, in
+    /// which case only the first `capacity` were written.
+    ///
+    /// # Safety
+    ///
+    /// Every pointer must be valid for the length it is passed with, and
+    /// `data` must be readable at every index the commands reach under `mask`.
+    pub fn mbrotli_shim_split_block(
+        quality: c_int,
+        lgwin: c_int,
+        commands: *const u8,
+        num_commands: usize,
+        data: *const u8,
+        pos: usize,
+        mask: usize,
+        capacity: usize,
+        literal_types: *mut u8,
+        literal_lengths: *mut c_uint,
+        literal_num_types: *mut usize,
+        literal_blocks: *mut usize,
+        command_types: *mut u8,
+        command_lengths: *mut c_uint,
+        command_num_types: *mut usize,
+        command_blocks: *mut usize,
+        distance_types: *mut u8,
+        distance_lengths: *mut c_uint,
+        distance_num_types: *mut usize,
+        distance_blocks: *mut usize,
+    );
+
+    /// Builds a high-quality meta-block over a caller-supplied command stream.
+    ///
+    /// Wraps the encoder-internal `BrotliBuildMetaBlock` through this crate's
+    /// own shim: it chooses the distance alphabet, splits the three symbol
+    /// streams and clusters their histograms, reporting the shape of the
+    /// result. `commands` is rewritten in place when the alphabet changes, as
+    /// the encoder does. `context_mode` is the numeric `ContextType`.
+    ///
+    /// # Safety
+    ///
+    /// Every pointer must be valid for the length it is passed with; `data`
+    /// must be readable at every index the commands reach under `mask`, and the
+    /// two context-map buffers must have room for `capacity` entries.
+    pub fn mbrotli_shim_build_meta_block(
+        quality: c_int,
+        lgwin: c_int,
+        context_mode: c_int,
+        disable_literal_context_modeling: c_int,
+        data: *mut u8,
+        pos: usize,
+        mask: usize,
+        prev_byte: u8,
+        prev_byte2: u8,
+        commands: *mut u8,
+        num_commands: usize,
+        capacity: usize,
+        out_npostfix: *mut c_uint,
+        out_ndirect: *mut c_uint,
+        literal_num_types: *mut usize,
+        command_num_types: *mut usize,
+        distance_num_types: *mut usize,
+        literal_histograms: *mut usize,
+        command_histograms: *mut usize,
+        distance_histograms: *mut usize,
+        literal_context_map: *mut c_uint,
+        literal_context_map_size: *mut usize,
+        distance_context_map: *mut c_uint,
+        distance_context_map_size: *mut usize,
+    );
+
+    /// Runs the Zopfli backward-reference search over one block.
+    ///
+    /// Wraps the encoder-internal `BrotliCreateZopfliBackwardReferences` and
+    /// `BrotliCreateHqZopfliBackwardReferences` through this crate's own shim,
+    /// with the binary-tree hasher set up as a first block. Returns the number
+    /// of commands written; `dist_cache`, `last_insert_len` and `num_literals`
+    /// are updated in place, as the encoder's own state would be.
+    ///
+    /// # Safety
+    ///
+    /// `ringbuffer` must be readable for every index the search reaches under
+    /// `ringbuffer_mask`, `dist_cache` must hold four entries, and `commands`
+    /// must have room for `capacity` entries laid out like the encoder's
+    /// `Command`.
+    pub fn mbrotli_shim_zopfli_references(
+        quality: c_int,
+        lgwin: c_int,
+        ringbuffer: *const u8,
+        ringbuffer_mask: usize,
+        position: usize,
+        num_bytes: usize,
+        dist_cache: *mut c_int,
+        last_insert_len: *mut usize,
+        num_literals: *mut usize,
+        commands: *mut u8,
+        capacity: usize,
+    ) -> usize;
+
     pub fn BrotliSharedDictionaryCreateInstance(
         alloc_func: brotli_alloc_func,
         free_func: brotli_free_func,

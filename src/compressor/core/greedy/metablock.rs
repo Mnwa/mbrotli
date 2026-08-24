@@ -8,20 +8,12 @@
 //! deliberately does not, which is what keeps it fast. Everything a meta-block
 //! needs is produced in one pass over the commands.
 
-use super::command::Command;
 use super::context_model::{ContextModel, context};
-use super::histogram::{
-    HistogramCommand, HistogramDistance, HistogramLiteral, optimize_huffman_counts_for_rle,
-};
-use super::params::NUM_HISTOGRAM_DISTANCE_SYMBOLS;
-use super::split::{BlockSplit, BlockSplitter, ContextBlockSplitter};
+use super::split::{BlockSplitter, ContextBlockSplitter};
+use crate::compressor::core::shared::command::Command;
 use crate::compressor::core::shared::constants::{NUM_COMMAND_SYMBOLS, NUM_LITERAL_SYMBOLS};
-
-/// Bits of literal context the format allows (`BROTLI_LITERAL_CONTEXT_BITS`).
-pub(crate) const LITERAL_CONTEXT_BITS: usize = 6;
-
-/// Bits of distance context the format allows (`BROTLI_DISTANCE_CONTEXT_BITS`).
-pub(crate) const DISTANCE_CONTEXT_BITS: usize = 2;
+use crate::compressor::core::shared::distance::NUM_HISTOGRAM_DISTANCE_SYMBOLS;
+use crate::compressor::core::shared::metablock::{LITERAL_CONTEXT_BITS, MetaBlockSplit};
 
 /// Smallest literal block, and the threshold a new literal type has to beat.
 const LITERAL_MIN_BLOCK: usize = 512;
@@ -42,27 +34,6 @@ const DISTANCE_SPLIT_THRESHOLD: f64 = 100.0;
 /// occur while the distance parameters are still the defaults, and the
 /// reference measures exactly those.
 const DISTANCE_SPLIT_ALPHABET: usize = 64;
-
-/// Everything the bit writer needs about how a meta-block is organised.
-#[derive(Default)]
-pub(crate) struct MetaBlockSplit {
-    /// Blocks of the literal stream.
-    pub(crate) literal_split: BlockSplit,
-    /// Blocks of the command stream.
-    pub(crate) command_split: BlockSplit,
-    /// Blocks of the distance stream.
-    pub(crate) distance_split: BlockSplit,
-    /// Context to histogram map for literals, empty when there is none.
-    pub(crate) literal_context_map: Vec<u32>,
-    /// Context to histogram map for distances, empty when there is none.
-    pub(crate) distance_context_map: Vec<u32>,
-    /// Literal histograms, one per context of each block type.
-    pub(crate) literal_histograms: Vec<HistogramLiteral>,
-    /// Command histograms, one per block type.
-    pub(crate) command_histograms: Vec<HistogramCommand>,
-    /// Distance histograms, one per block type.
-    pub(crate) distance_histograms: Vec<HistogramDistance>,
-}
 
 /// Expands a static context map to one entry per block type and context.
 ///
@@ -196,36 +167,12 @@ pub(crate) fn build_meta_block_greedy(
     mb
 }
 
-/// Rounds every histogram so its prefix code codes well by run length.
-///
-/// Mirrors `BrotliOptimizeHistograms`, which qualities four and up apply before
-/// the codes are built.
-pub(crate) fn optimize_histograms(num_distance_codes: usize, mb: &mut MetaBlockSplit) {
-    let mut good_for_rle = [0u8; NUM_COMMAND_SYMBOLS];
-    for histogram in &mut mb.literal_histograms {
-        optimize_huffman_counts_for_rle(
-            NUM_LITERAL_SYMBOLS,
-            &mut histogram.data,
-            &mut good_for_rle,
-        );
-    }
-    for histogram in &mut mb.command_histograms {
-        optimize_huffman_counts_for_rle(
-            NUM_COMMAND_SYMBOLS,
-            &mut histogram.data,
-            &mut good_for_rle,
-        );
-    }
-    for histogram in &mut mb.distance_histograms {
-        optimize_huffman_counts_for_rle(num_distance_codes, &mut histogram.data, &mut good_for_rle);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compressor::core::greedy::params::DistanceParams;
-    use crate::compressor::core::greedy::tables::STATIC_CONTEXT_MAP_SIMPLE_UTF8;
+    use crate::compressor::core::shared::distance::DistanceParams;
+    use crate::compressor::core::shared::format::STATIC_CONTEXT_MAP_SIMPLE_UTF8;
+    use crate::compressor::core::shared::metablock::optimize_histograms;
 
     /// Builds commands that just insert `data` with no copies.
     fn literal_commands(data: &[u8]) -> Vec<Command> {

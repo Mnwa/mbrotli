@@ -845,6 +845,7 @@ pub enum QualityLevel {
     Q7,
     Q8,
     Q9,
+    Q10,
     Q11,
 }
 
@@ -871,6 +872,7 @@ impl From<QualityLevel> for usize {
             QualityLevel::Q7 => 7,
             QualityLevel::Q8 => 8,
             QualityLevel::Q9 => 9,
+            QualityLevel::Q10 => 10,
             QualityLevel::Q11 => 11,
         }
     }
@@ -883,9 +885,7 @@ impl TryFrom<usize> for QualityLevel {
     ///
     /// # Errors
     ///
-    /// Returns [`ParseQualityLevelError::UpperBound`] above 11 and
-    /// [`ParseQualityLevelError::Unrepresentable`] for 10, which this API does
-    /// not model.
+    /// Returns [`ParseQualityLevelError::UpperBound`] above 11.
     ///
     /// # Examples
     ///
@@ -894,13 +894,10 @@ impl TryFrom<usize> for QualityLevel {
     ///
     /// assert_eq!(usize::from(QualityLevel::try_from(0)?), 0);
     /// assert_eq!(usize::from(QualityLevel::try_from(11)?), 11);
+    /// assert_eq!(usize::from(QualityLevel::try_from(10)?), 10);
     /// assert!(matches!(
     ///     QualityLevel::try_from(12),
     ///     Err(ParseQualityLevelError::UpperBound)
-    /// ));
-    /// assert!(matches!(
-    ///     QualityLevel::try_from(10),
-    ///     Err(ParseQualityLevelError::Unrepresentable)
     /// ));
     /// # Ok::<(), ParseQualityLevelError>(())
     /// ```
@@ -916,7 +913,7 @@ impl TryFrom<usize> for QualityLevel {
             7 => Ok(Self::Q7),
             8 => Ok(Self::Q8),
             9 => Ok(Self::Q9),
-            10 => Err(ParseQualityLevelError::Unrepresentable),
+            10 => Ok(Self::Q10),
             11 => Ok(Self::Q11),
             _ => Err(ParseQualityLevelError::UpperBound),
         }
@@ -931,8 +928,6 @@ pub enum ParseQualityLevelError {
     LowerBound,
     #[error("Quality level should be less than or equal to 11")]
     UpperBound,
-    #[error("Quality level 10 is not represented by this API")]
-    Unrepresentable,
 }
 
 /// Error returned by the compression entry points.

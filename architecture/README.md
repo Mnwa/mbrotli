@@ -11,7 +11,8 @@ error propagation, with Mermaid diagrams for the mechanics it describes.
 | --- | --- |
 | [compressor.md](compressor.md) | Compressor subsystem: SIMD level detection and hand-off, parameter and bound types, quality routing, one-shot and streaming compression paths, error model, verification topology, and current implementation gaps. |
 | [fast-encoder.md](fast-encoder.md) | Quality 0 and quality 1 encoder core: module map, workspace ownership, fragment lifecycle, the two scan state machines, bitstream layer, SIMD dispatch points, and table-bit specialisation. |
-| [greedy-encoder.md](greedy-encoder.md) | Quality 3, 4 and 5 encoder core: parameter resolution and the deterministic hasher plan, ring buffer layout, greedy and lazy command generation, meta-block splitting and context modelling, the static dictionary, and the single SIMD dispatch. |
+| [greedy-encoder.md](greedy-encoder.md) | Quality 3 to 9 encoder core: parameter resolution and the deterministic hasher plan, greedy and lazy command generation, the bucket and forgetful-chain match finders, meta-block splitting and context modelling, and the single SIMD dispatch. |
+| [hq-encoder.md](hq-encoder.md) | Quality 10 and 11 encoder core: the binary-tree match finder, the Zopfli dynamic program and its numerical-determinism contract, the high-quality block splitter and histogram clustering, and the layer-by-layer differential harness. |
 | [fuzzing.md](fuzzing.md) | AFL fuzzing subsystem: package isolation, the engine-neutral target layer, input model and payload cap, the eleven targets and their oracles, backend deduplication, and the crash-to-regression lifecycle. |
 
 ## Module map
@@ -29,13 +30,16 @@ graph TD
         core["compressor::core"]
         bound["core::bound<br/>(compressed-size bound)"]
         driver["core::driver<br/>(quality routing, one-shot entry points)"]
-        shared["core::shared<br/>(bits, huffman, match_len,<br/>fast_log, tables, constants)"]
+        shared["core::shared<br/>(bits, huffman, match_len, fast_log,<br/>command, histogram, ringbuffer, dictionary,<br/>block_split, metablock, bitstream,<br/>distance, format, bit_cost)"]
         fast["core::fast<br/>(FastEncoder, SIMD dispatch)"]
         q0["fast::q0<br/>(one-pass encoder)"]
         q1["fast::q1<br/>(two-pass encoder)"]
         greedy["core::greedy<br/>(GreedyEncoder, SIMD dispatch)"]
-        gsearch["greedy::hashers,<br/>backward_references, dictionary"]
-        gblock["greedy::metablock, split,<br/>context_model, bitstream"]
+        gsearch["greedy::hashers,<br/>backward_references, score"]
+        gblock["greedy::metablock, split,<br/>context_model"]
+        hq["core::hq<br/>(HqEncoder, SIMD dispatch)"]
+        hsearch["hq::h10, zopfli,<br/>cost, nodes, literal_cost"]
+        hblock["hq::metablock,<br/>block_splitter, cluster"]
     end
 
     subgraph external["Workspace / dependencies"]
@@ -51,14 +55,19 @@ graph TD
     core --> driver
     driver --> fast
     driver --> greedy
+    driver --> hq
     fast --> q0
     fast --> q1
     greedy --> gsearch
     greedy --> gblock
+    hq --> hsearch
+    hq --> hblock
     q0 --> shared
     q1 --> shared
     gsearch --> shared
     gblock --> shared
+    hsearch --> shared
+    hblock --> shared
     lib --> simd
     comp --> simd
     reader --> simd
@@ -66,7 +75,7 @@ graph TD
     ffi -.->|benches and tests| comp
 
     classDef privateNode fill:#f6e8c3,stroke:#8a6d3b;
-    class core,bound,driver,shared,fast,q0,q1,greedy,gsearch,gblock privateNode;
+    class core,bound,driver,shared,fast,q0,q1,greedy,gsearch,gblock,hq,hsearch,hblock privateNode;
 ```
 
 `core` and everything below it are private: no `core` type, SIMD type detail,
@@ -80,12 +89,13 @@ the ergonomic surface; `core` owns the algorithms.
 | `src/lib.rs` | Crate root; `Brotli` entry point and SIMD level detection. |
 | `src/compressor/` | Public compressor API, parameters, error types. |
 | `src/compressor/core/` | Private implementation modules: bound, quality routing. |
-| `src/compressor/core/shared/` | Primitives every quality shares: bit writer, Huffman builders, match-length scan, reference logarithms, format constants and entropy tables. |
+| `src/compressor/core/shared/` | Everything more than one quality needs: the bit writer, Huffman builders, match-length scan and reference logarithms, plus the shape of a compressed meta-block — commands, histograms, block splits, the distance alphabet, context modes, the ring buffer, the static dictionary and the meta-block writer. |
 | `src/compressor/core/fast/` | Quality 0 and quality 1 encoders and their SIMD dispatch. |
-| `src/compressor/core/greedy/` | Quality 3, 4 and 5 encoder: ring buffer, match finders, static dictionary, meta-block builder, bitstream writer and its SIMD dispatch. |
+| `src/compressor/core/greedy/` | Quality 3 to 9 encoder: match finders, greedy backward-reference search, greedy meta-block builder and its SIMD dispatch. |
+| `src/compressor/core/hq/` | Quality 10 and 11 encoder: binary-tree match finder, Zopfli dynamic program, high-quality block splitter and meta-block builder, and its SIMD dispatch. |
 | `docs/` | Port documentation: API binding, design, reference differences, benchmark report. |
 | `fuzz/afl/` | AFL fuzz targets and their regression corpus, excluded from the workspace. |
-| `brotli-ffi/` | Workspace crate binding Google's C Brotli; `vendor/` is upstream source and is not hand-edited. |
+| `brotli-ffi/` | Workspace crate binding Google's C Brotli; `vendor/` is upstream source and is not hand-edited, and `shim/` exposes four encoder-internal functions the differential tests compare against. |
 | `examples/` | Runnable example mirroring the README, so the documented usage stays compiled. |
 | `benches/` | Criterion benchmarks comparing this crate with the C implementation. |
 | `tests/` | Integration tests over the public API. |

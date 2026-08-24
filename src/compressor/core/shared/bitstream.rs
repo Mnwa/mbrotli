@@ -10,18 +10,15 @@
 //! small alphabet, how the context map is run-length coded, and how block
 //! switches are encoded.
 
+use super::bits::BitWriter;
+use super::block_split::{BlockSplit, MAX_NUMBER_OF_BLOCK_TYPES};
 use super::command::Command;
+use super::constants::{NUM_COMMAND_SYMBOLS, NUM_LITERAL_SYMBOLS};
+use super::distance::{DistanceParams, MAX_SIMPLE_DISTANCE_ALPHABET_SIZE};
+use super::fast_log::log2_floor_non_zero;
+use super::format::{ContextMode, NUM_BLOCK_LEN_SYMBOLS, PREFIX_CODE_RANGES};
+use super::huffman::{HuffmanNode, build_and_store_huffman_tree, tree_capacity};
 use super::metablock::{DISTANCE_CONTEXT_BITS, LITERAL_CONTEXT_BITS, MetaBlockSplit};
-use super::params::{DistanceParams, MAX_SIMPLE_DISTANCE_ALPHABET_SIZE};
-use super::split::{BlockSplit, MAX_NUMBER_OF_BLOCK_TYPES};
-use super::tables::{CONTEXT_MODE_UTF8, NUM_BLOCK_LEN_SYMBOLS, PREFIX_CODE_RANGES};
-use crate::compressor::core::greedy::context_model::context;
-use crate::compressor::core::shared::bits::BitWriter;
-use crate::compressor::core::shared::constants::{NUM_COMMAND_SYMBOLS, NUM_LITERAL_SYMBOLS};
-use crate::compressor::core::shared::fast_log::log2_floor_non_zero;
-use crate::compressor::core::shared::huffman::{
-    HuffmanNode, build_and_store_huffman_tree, tree_capacity,
-};
 
 /// Nodes a prefix-code build over the largest alphabet needs.
 const MAX_HUFFMAN_TREE_SIZE: usize = tree_capacity(NUM_COMMAND_SYMBOLS);
@@ -617,6 +614,7 @@ impl MetaBlockWriter {
         prev_byte: u8,
         prev_byte2: u8,
         is_last: bool,
+        context_mode: ContextMode,
         dist: &DistanceParams,
         commands: &[Command],
         mb: &MetaBlockSplit,
@@ -639,7 +637,7 @@ impl MetaBlockWriter {
         w.write(2, u64::from(dist.postfix_bits));
         w.write(4, u64::from(dist.num_direct >> dist.postfix_bits));
         for _ in 0..mb.literal_split.num_types {
-            w.write(2, CONTEXT_MODE_UTF8);
+            w.write(2, context_mode.code());
         }
 
         if mb.literal_context_map.is_empty() {
@@ -714,7 +712,7 @@ impl MetaBlockWriter {
                     let literal = input.get(pos & mask).copied().unwrap_or(0);
                     literal_enc.store_symbol_with_context(
                         usize::from(literal),
-                        context(prev_byte, prev_byte2),
+                        context_mode.context(prev_byte, prev_byte2),
                         &mb.literal_context_map,
                         LITERAL_CONTEXT_BITS,
                         w,

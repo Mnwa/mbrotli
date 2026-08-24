@@ -23,8 +23,8 @@ asserts, on every corpus, on every run.
 
 | Feature | State |
 | --- | --- |
-| Quality 0, 1, 3, 4, 5 | implemented, byte-identical to the reference |
-| Quality 2, 6–11 | not implemented — reported as `UnsupportedQuality` |
+| Quality 0, 1, 3–11 | implemented, byte-identical to the reference |
+| Quality 2 | not implemented — reported as `UnsupportedQuality` |
 | Decoder | not implemented |
 | One-shot and streaming APIs | implemented |
 | Mode, block size, size hint, distance layout, context modelling | implemented |
@@ -40,6 +40,9 @@ asserts, on every corpus, on every run.
 | 3 | Greedy matching, one prefix code per stream |
 | 4 | Adds block splitting, histogram optimisation, distance parameters |
 | 5 | Adds an extensive delayed search and literal context modelling |
+| 6–9 | Deepens the search: 32 to 256 bucket candidates, 4 to 16 cached distances, and from 7 the three-context literal model |
+| 10 | Replaces greedy matching with a Zopfli search over every match a binary tree can find, and clusters histograms into real context maps |
+| 11 | The same, searching harder and re-pricing everything from the commands its first pass produced — slowest, smallest output |
 
 ## Usage
 
@@ -100,7 +103,7 @@ cargo run --example compress
 | `Brotli` | Entry point; resolves the SIMD level once |
 | `Compressor` | Compression entry points, bound to a level |
 | `CompressParams` | Every encoder parameter, `Copy`, built by chained `with_*` |
-| `QualityLevel` | Closed enum, `Q0`–`Q9` and `Q11` |
+| `QualityLevel` | Closed enum, `Q0`–`Q11` |
 | `WindowBits` | Validated newtype over `10..=24` |
 | `BlockBits` | Validated newtype over `16..=24` |
 | `CompressMode` | `Generic`, `Text`, `Font` |
@@ -128,6 +131,11 @@ shape. **The greedy qualities are not there yet**: they run at roughly 0.77× to
 initialisation costs the reference skips. Where the time goes, what has been
 tried and what would close the gap are all in
 [`docs/q3_q5_benchmarks.md`](docs/q3_q5_benchmarks.md).
+
+**Qualities 6 to 11 have not been benchmarked yet.** Their compressed size is
+exactly the reference's, because their output is byte-identical, but no
+throughput measurement has been taken and no performance claim is made for
+them. `benches/compress.rs` covers them; the numbers are simply not in yet.
 
 Per-case numbers, confidence intervals, the machine manifests and the raw
 Criterion logs are in [`docs/q0_q1_benchmarks.md`](docs/q0_q1_benchmarks.md)
@@ -191,7 +199,8 @@ cargo llvm-cov --package mbrotli --all-features --summary-only
 | `src/compressor/` | Public API, parameters, error types |
 | `src/compressor/core/shared/` | Bit writer, Huffman builders, match-length scan, format constants |
 | `src/compressor/core/fast/` | Quality 0 and 1 encoders and their SIMD dispatch |
-| `src/compressor/core/greedy/` | Quality 3, 4 and 5 encoder: ring buffer, match finders, meta-blocks |
+| `src/compressor/core/greedy/` | Quality 3 to 9 encoder: match finders, greedy search, greedy meta-blocks |
+| `src/compressor/core/hq/` | Quality 10 and 11 encoder: binary-tree matcher, Zopfli search, high-quality meta-blocks |
 | `brotli-ffi/` | Bindings to Google's C Brotli; `vendor/` is upstream source and is not hand-edited |
 | `architecture/` | Always-current description of what the code does |
 | `docs/` | Port record: API binding, design, reference differences, benchmarks, CI |
@@ -205,7 +214,11 @@ cargo llvm-cov --package mbrotli --all-features --summary-only
 | [`architecture/README.md`](architecture/README.md) | Index and module map |
 | [`architecture/compressor.md`](architecture/compressor.md) | API layer, streaming state machines, error model |
 | [`architecture/fast-encoder.md`](architecture/fast-encoder.md) | Quality 0 and 1 core: scans, bitstream, dispatch, specialisation |
-| [`architecture/greedy-encoder.md`](architecture/greedy-encoder.md) | Quality 3, 4 and 5 core: hasher plan, ring buffer, commands, meta-blocks |
+| [`architecture/greedy-encoder.md`](architecture/greedy-encoder.md) | Quality 3 to 9 core: hasher plan, commands, greedy meta-blocks |
+| [`architecture/hq-encoder.md`](architecture/hq-encoder.md) | Quality 10 and 11 core: binary tree, Zopfli search, clustering, numerical determinism |
+| [`docs/q6_q9_api_binding.md`](docs/q6_q9_api_binding.md) | How qualities 6–9 map onto the greedy encoder |
+| [`docs/q10_q11_api_binding.md`](docs/q10_q11_api_binding.md) | How the high-quality encoder maps onto the existing API, and the one public change |
+| [`docs/q6_q11_reference_differences.md`](docs/q6_q11_reference_differences.md) | Every divergence from the reference in the q6–q11 port, and the quirks reproduced on purpose |
 | [`docs/q0_q1_api_binding.md`](docs/q0_q1_api_binding.md) | How the port maps onto the existing API, and what changed |
 | [`docs/q0_q1_design.md`](docs/q0_q1_design.md) | Design record and the reasoning behind it |
 | [`docs/q0_q1_reference_differences.md`](docs/q0_q1_reference_differences.md) | Every divergence from the reference, including the quirks reproduced on purpose |

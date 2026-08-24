@@ -11,8 +11,6 @@
 //! first tail byte until a lap writes over it. Reproducing the same filler is
 //! what makes the encoder deterministic on data it never actually copied.
 
-use super::params::GreedyParams;
-
 /// Bytes of margin past the window, so eight-byte loads always have data.
 const SLACK_FOR_EIGHT_BYTE_HASHING: usize = 7;
 
@@ -21,6 +19,24 @@ const HEAD_ROOM: usize = 2;
 
 /// Sentinel the reference leaves at the first tail byte.
 const TAIL_SENTINEL: u8 = 241;
+
+/// The window a search runs over.
+#[derive(Copy, Clone)]
+pub(crate) struct Window<'a> {
+    /// The ring buffer holding the input seen so far.
+    pub(crate) data: &'a [u8],
+    /// Mask that turns an absolute position into a buffer index.
+    pub(crate) mask: usize,
+}
+
+/// The stretch of input one call processes.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BlockSpan {
+    /// Wrapped position the stretch starts at.
+    pub(crate) position: u32,
+    /// Number of bytes in the stretch.
+    pub(crate) bytes: u32,
+}
 
 /// Circular window holding the input the encoder can still refer back to.
 pub(crate) struct RingBuffer {
@@ -34,10 +50,13 @@ pub(crate) struct RingBuffer {
 }
 
 impl RingBuffer {
-    /// Creates an empty window sized by `params` (`RingBufferSetup`).
-    pub(crate) fn new(params: &GreedyParams) -> Self {
-        let size = 1usize << params.rb_bits();
-        let tail_size = 1usize << params.lgblock;
+    /// Creates an empty window of `1 << rb_bits` bytes (`RingBufferSetup`).
+    ///
+    /// `lgblock` sizes the tail: the copy of the window head that lets a match
+    /// finder read a whole word past the wrap point without a branch.
+    pub(crate) fn new(rb_bits: usize, lgblock: usize) -> Self {
+        let size = 1usize << rb_bits;
+        let tail_size = 1usize << lgblock;
         Self {
             size,
             mask: size - 1,
@@ -212,18 +231,10 @@ pub(crate) const fn wrap_position(position: u64) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compressor::{BlockBits, CompressParams, QualityLevel, WindowBits};
 
-    fn params(lgwin: usize, lgblock: usize) -> CompressParams {
-        let lgwin = WindowBits::try_from(lgwin).unwrap_or(WindowBits::DEFAULT);
-        let lgblock = BlockBits::try_from(lgblock).ok();
-        CompressParams::new(QualityLevel::Q5, lgwin).with_block_bits(lgblock)
-    }
-
+    /// Builds a window the way `ComputeRbBits` would for `lgwin` and `lgblock`.
     fn ring(lgwin: usize, lgblock: usize) -> RingBuffer {
-        let params = params(lgwin, lgblock);
-        let resolved = super::GreedyParams::new(&params, 0).expect("supported quality");
-        RingBuffer::new(&resolved)
+        RingBuffer::new(1 + lgwin.max(lgblock), lgblock)
     }
 
     #[test]

@@ -10,38 +10,12 @@
 //! decision is a comparison of estimated entropies, so the arithmetic and the
 //! order of the comparisons are part of the format contract.
 
-use super::histogram::{Histogram, HistogramLiteral, bits_entropy};
-use super::tables::MAX_STATIC_CONTEXTS;
-
-/// Largest number of block types a meta-block may use.
-pub(crate) const MAX_NUMBER_OF_BLOCK_TYPES: usize = 256;
+use crate::compressor::core::shared::block_split::{BlockSplit, MAX_NUMBER_OF_BLOCK_TYPES};
+use crate::compressor::core::shared::format::MAX_STATIC_CONTEXTS;
+use crate::compressor::core::shared::histogram::{Histogram, HistogramLiteral, bits_entropy};
 
 /// How much better the second-last block has to look to be reused.
 const SECOND_LAST_ADVANTAGE: f64 = 20.0;
-
-/// The block boundaries and types one symbol stream was split into.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct BlockSplit {
-    /// Number of distinct block types.
-    pub(crate) num_types: usize,
-    /// Number of blocks.
-    pub(crate) num_blocks: usize,
-    /// Type of each block.
-    pub(crate) types: Vec<u8>,
-    /// Length of each block, in symbols.
-    pub(crate) lengths: Vec<u32>,
-}
-
-impl BlockSplit {
-    /// Sizes the type and length arrays for at most `max_num_blocks` blocks.
-    fn reserve(&mut self, max_num_blocks: usize) {
-        self.types.clear();
-        self.lengths.clear();
-        self.types.resize(max_num_blocks, 0);
-        self.lengths.resize(max_num_blocks, 0);
-        self.num_blocks = max_num_blocks;
-    }
-}
 
 /// Greedy splitter for one symbol stream (`BlockSplitter`).
 pub(crate) struct BlockSplitter<const N: usize> {

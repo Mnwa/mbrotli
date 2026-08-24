@@ -6,15 +6,15 @@
 //!
 //! Context modelling costs the decoder time, so the encoder only turns it on
 //! when sampling the data says it will pay for itself. Quality five is the
-//! first quality that considers it at all, and it is deliberately barred from
-//! the three-context model, which the reference reserves for quality seven and
-//! above.
+//! first quality that considers it at all; qualities five and six are barred
+//! from the three-context model, which the reference reserves for quality
+//! seven and above.
 
-use super::tables::{
+use crate::compressor::core::shared::fast_log::fast_log2;
+use crate::compressor::core::shared::format::{
     CONTEXT_LUT_UTF8, MAX_STATIC_CONTEXTS, STATIC_CONTEXT_MAP_COMPLEX_UTF8,
     STATIC_CONTEXT_MAP_CONTINUATION, STATIC_CONTEXT_MAP_SIMPLE_UTF8,
 };
-use crate::compressor::core::shared::fast_log::fast_log2;
 
 /// Shortest meta-block that is worth analysing at all.
 const MIN_ANALYSED_LENGTH: usize = 64;
@@ -43,7 +43,7 @@ pub(crate) fn context(prev1: u8, prev2: u8) -> usize {
 /// Returns the Shannon entropy of `population`, in bits times the total count.
 ///
 /// Mirrors `EstimateEntropy`. This is the plain Shannon measure rather than
-/// [`super::histogram::bits_entropy`]: the prefix that a context predicts is
+/// [`crate::compressor::core::shared::histogram::bits_entropy`]: the prefix that a context predicts is
 /// coded together with the rest of the byte, so the "at least one bit per
 /// symbol" floor does not apply.
 fn estimate_entropy(population: &[u32]) -> f64 {
@@ -76,12 +76,11 @@ impl ContextModel {
 
 /// Chooses between one, two and three contexts from a bigram histogram.
 ///
-/// Mirrors `ChooseContextMap`. Quality five is below
-/// `MIN_QUALITY_FOR_HQ_CONTEXT_MODELING`, so the three-context option is priced
-/// out of reach rather than compared honestly — the reference does this because
-/// three context models cost more to decode than they are worth at this
-/// quality.
-fn choose_context_map(bigram_histo: &[u32; 9]) -> ContextModel {
+/// Mirrors `ChooseContextMap`. Below `MIN_QUALITY_FOR_HQ_CONTEXT_MODELING` the
+/// caller passes `hq == false`, and the three-context option is priced out of
+/// reach rather than compared honestly — the reference does this because three
+/// context models cost more to decode than they are worth at those qualities.
+fn choose_context_map(bigram_histo: &[u32; 9], hq: bool) -> ContextModel {
     let mut monogram_histo = [0u32; 3];
     let mut two_prefix_histo = [0u32; 6];
     for (index, &count) in bigram_histo.iter().enumerate() {
@@ -107,9 +106,11 @@ fn choose_context_map(bigram_histo: &[u32; 9]) -> ContextModel {
     entropy[2] *= entropy[0];
     entropy[3] *= entropy[0];
 
-    // Three context models are slower to decode; at this quality they are
-    // deliberately made ineligible.
-    entropy[3] = entropy[1] * 10.0;
+    if !hq {
+        // Three context models are slower to decode; below quality seven they
+        // are deliberately made ineligible.
+        entropy[3] = entropy[1] * 10.0;
+    }
 
     if entropy[1] - entropy[2] < MIN_SAVINGS && entropy[1] - entropy[3] < MIN_SAVINGS {
         ContextModel::SINGLE
@@ -198,6 +199,7 @@ pub(crate) fn decide_over_literal_context_modeling(
     length: usize,
     mask: usize,
     models_contexts: bool,
+    hq_contexts: bool,
     size_hint: usize,
 ) -> ContextModel {
     if !models_contexts || length < MIN_ANALYSED_LENGTH {
@@ -224,7 +226,7 @@ pub(crate) fn decide_over_literal_context_modeling(
         }
         start_pos += STRIDE_STEP;
     }
-    choose_context_map(&bigram_prefix_histo)
+    choose_context_map(&bigram_prefix_histo, hq_contexts)
 }
 
 #[cfg(test)]
@@ -252,7 +254,7 @@ mod tests {
     fn modelling_is_off_below_the_minimum_length() {
         let data = vec![b'a'; 63];
         assert_eq!(
-            decide_over_literal_context_modeling(&data, 0, 63, usize::MAX, true, 0),
+            decide_over_literal_context_modeling(&data, 0, 63, usize::MAX, true, false, 0),
             ContextModel::SINGLE
         );
     }
@@ -261,7 +263,15 @@ mod tests {
     fn modelling_is_off_when_the_caller_disabled_it() {
         let data: Vec<u8> = (0..40_000u32).map(|i| (i % 251) as u8).collect();
         assert_eq!(
-            decide_over_literal_context_modeling(&data, 0, data.len(), usize::MAX, false, 1 << 21),
+            decide_over_literal_context_modeling(
+                &data,
+                0,
+                data.len(),
+                usize::MAX,
+                false,
+                false,
+                1 << 21
+            ),
             ContextModel::SINGLE
         );
     }
@@ -269,7 +279,8 @@ mod tests {
     #[test]
     fn uniform_bytes_do_not_earn_a_context_model() {
         let data = vec![b'a'; 40_000];
-        let model = decide_over_literal_context_modeling(&data, 0, data.len(), usize::MAX, true, 0);
+        let model =
+            decide_over_literal_context_modeling(&data, 0, data.len(), usize::MAX, true, false, 0);
         assert_eq!(model, ContextModel::SINGLE);
     }
 
@@ -281,13 +292,14 @@ mod tests {
         while data.len() < 40_000 {
             data.extend_from_slice("añbñcñdñ".as_bytes());
         }
-        let model = decide_over_literal_context_modeling(&data, 0, data.len(), usize::MAX, true, 0);
+        let model =
+            decide_over_literal_context_modeling(&data, 0, data.len(), usize::MAX, true, false, 0);
         assert!(model.num_contexts > 1, "model was {model:?}");
         assert!(model.map.is_some());
     }
 
     #[test]
-    fn the_three_context_model_is_never_chosen_at_this_quality() {
+    fn the_three_context_model_is_never_chosen_below_quality_seven() {
         // `entropy[3]` is priced out, so the continuation map can only be
         // selected through the `entropy[2] - entropy[3] >= 0.02` branch, which
         // needs the two-context estimate to be worse than ten times the
@@ -302,8 +314,15 @@ mod tests {
                 rng ^= rng << 17;
                 data.push((rng >> 24) as u8);
             }
-            let model =
-                decide_over_literal_context_modeling(&data, 0, data.len(), usize::MAX, true, 0);
+            let model = decide_over_literal_context_modeling(
+                &data,
+                0,
+                data.len(),
+                usize::MAX,
+                true,
+                false,
+                0,
+            );
             assert_ne!(model.num_contexts, 3, "the continuation map was selected");
         }
     }
@@ -315,7 +334,7 @@ mod tests {
             data.extend_from_slice(b"The quick brown fox jumps over the lazy dog. ");
         }
         let without =
-            decide_over_literal_context_modeling(&data, 0, data.len(), usize::MAX, true, 0);
+            decide_over_literal_context_modeling(&data, 0, data.len(), usize::MAX, true, false, 0);
         assert_ne!(without.num_contexts, MAX_STATIC_CONTEXTS);
 
         let with = decide_over_literal_context_modeling(
@@ -324,6 +343,7 @@ mod tests {
             data.len(),
             usize::MAX,
             true,
+            false,
             COMPLEX_MAP_SIZE_HINT,
         );
         assert_eq!(with.num_contexts, MAX_STATIC_CONTEXTS);
@@ -346,9 +366,30 @@ mod tests {
             data.len(),
             usize::MAX,
             true,
+            false,
             COMPLEX_MAP_SIZE_HINT,
         );
         assert_ne!(model.num_contexts, MAX_STATIC_CONTEXTS);
+    }
+
+    #[test]
+    fn quality_seven_prices_three_contexts_honestly() {
+        // A histogram whose three trailing-byte classes are each strongly
+        // predicted by the leading one: three contexts are a real win, and are
+        // only reachable once the high-quality comparison is enabled.
+        let bigram = [900u32, 10, 10, 10, 900, 10, 10, 10, 900];
+        assert_eq!(choose_context_map(&bigram, false).num_contexts, 2);
+        assert_eq!(choose_context_map(&bigram, true).num_contexts, 3);
+        assert_eq!(
+            choose_context_map(&bigram, true).map,
+            Some(&STATIC_CONTEXT_MAP_CONTINUATION)
+        );
+    }
+
+    #[test]
+    fn an_empty_sample_never_earns_a_context_model() {
+        assert_eq!(choose_context_map(&[0; 9], true), ContextModel::SINGLE);
+        assert_eq!(choose_context_map(&[0; 9], false), ContextModel::SINGLE);
     }
 
     #[test]

@@ -13,31 +13,10 @@
 //! identical across SIMD backends.
 
 use crate::compressor::core::shared::constants::WINDOW_GAP;
+use crate::compressor::core::shared::distance::{DistanceParams, MAX_NDIRECT, MAX_NPOSTFIX};
 use crate::compressor::{
     BrotliCompressError, CompressMode, CompressParams, DistanceCodes, QualityLevel,
 };
-
-/// Largest number of postfix bits the format allows (`BROTLI_MAX_NPOSTFIX`).
-pub(crate) const MAX_NPOSTFIX: u32 = 3;
-
-/// Largest number of direct distance codes (`BROTLI_MAX_NDIRECT`).
-pub(crate) const MAX_NDIRECT: u32 = 120;
-
-/// Number of short distance codes (`BROTLI_NUM_DISTANCE_SHORT_CODES`).
-pub(crate) const NUM_DISTANCE_SHORT_CODES: u32 = 16;
-
-/// Largest number of distance bits in RFC 7932 (`BROTLI_MAX_DISTANCE_BITS`).
-pub(crate) const MAX_DISTANCE_BITS: u32 = 24;
-
-/// Distance symbols a histogram reserves
-/// (`BROTLI_NUM_HISTOGRAM_DISTANCE_SYMBOLS`).
-pub(crate) const NUM_HISTOGRAM_DISTANCE_SYMBOLS: usize = 544;
-
-/// Distance alphabet size assuming no postfix or direct codes.
-///
-/// `MAX_SIMPLE_DISTANCE_ALPHABET_SIZE` in `c/enc/brotli_bit_stream.c`, computed
-/// for the large-window bit count even though this encoder never uses it.
-pub(crate) const MAX_SIMPLE_DISTANCE_ALPHABET_SIZE: usize = 140;
 
 /// Smallest quality that splits meta-blocks into blocks.
 pub(crate) const MIN_QUALITY_FOR_BLOCK_SPLIT: usize = 4;
@@ -48,10 +27,13 @@ pub(crate) const MIN_QUALITY_FOR_EXTENSIVE_REFERENCE_SEARCH: usize = 5;
 /// Smallest quality that models literal contexts.
 pub(crate) const MIN_QUALITY_FOR_CONTEXT_MODELING: usize = 5;
 
+/// Smallest quality that may choose the three-context literal model.
+pub(crate) const MIN_QUALITY_FOR_HQ_CONTEXT_MODELING: usize = 7;
+
 /// Symbols buffered before a quality below four has to flush.
 pub(crate) const MAX_NUM_DELAYED_SYMBOLS: usize = 0x2FFF;
 
-/// The three qualities this encoder implements.
+/// The seven qualities this encoder implements.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(crate) enum GreedyQuality {
     /// Quick matcher, trivial meta-block storage.
@@ -60,6 +42,15 @@ pub(crate) enum GreedyQuality {
     Q4,
     /// Extensive search and literal context modelling.
     Q5,
+    /// Thirty-two bucket candidates.
+    Q6,
+    /// Sixty-four bucket candidates, ten cached distances, three contexts.
+    Q7,
+    /// A hundred and twenty-eight bucket candidates.
+    Q8,
+    /// Two hundred and fifty-six candidates, sixteen cached distances,
+    /// a larger default block and a later sparse search.
+    Q9,
 }
 
 impl GreedyQuality {
@@ -69,6 +60,10 @@ impl GreedyQuality {
             Self::Q3 => 3,
             Self::Q4 => 4,
             Self::Q5 => 5,
+            Self::Q6 => 6,
+            Self::Q7 => 7,
+            Self::Q8 => 8,
+            Self::Q9 => 9,
         }
     }
 
@@ -86,12 +81,34 @@ impl GreedyQuality {
     pub(crate) const fn models_literal_contexts(self) -> bool {
         self.number() >= MIN_QUALITY_FOR_CONTEXT_MODELING
     }
+
+    /// Returns whether the three-context literal model is eligible.
+    ///
+    /// The reference prices it out of reach below quality seven, because three
+    /// context models cost the decoder more than they save.
+    pub(crate) const fn hq_context_modeling(self) -> bool {
+        self.number() >= MIN_QUALITY_FOR_HQ_CONTEXT_MODELING
+    }
+
+    /// Returns how many cached distances the matcher probes.
+    ///
+    /// `ChooseHasher` uses four below quality seven, ten below quality nine
+    /// and all sixteen at quality nine.
+    pub(crate) const fn last_distances_to_check(self) -> usize {
+        if self.number() < 7 {
+            4
+        } else if self.number() < 9 {
+            10
+        } else {
+            16
+        }
+    }
 }
 
 impl TryFrom<QualityLevel> for GreedyQuality {
     type Error = BrotliCompressError;
 
-    /// Routes qualities three to five to the greedy path.
+    /// Routes qualities three to nine to the greedy path.
     ///
     /// # Errors
     ///
@@ -102,51 +119,12 @@ impl TryFrom<QualityLevel> for GreedyQuality {
             QualityLevel::Q3 => Ok(Self::Q3),
             QualityLevel::Q4 => Ok(Self::Q4),
             QualityLevel::Q5 => Ok(Self::Q5),
+            QualityLevel::Q6 => Ok(Self::Q6),
+            QualityLevel::Q7 => Ok(Self::Q7),
+            QualityLevel::Q8 => Ok(Self::Q8),
+            QualityLevel::Q9 => Ok(Self::Q9),
             other => Err(BrotliCompressError::UnsupportedQuality(usize::from(other))),
         }
-    }
-}
-
-/// Resolved distance alphabet (`BrotliDistanceParams`).
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) struct DistanceParams {
-    /// Number of postfix bits, `NPOSTFIX`.
-    pub(crate) postfix_bits: u32,
-    /// Number of direct distance codes, `NDIRECT`.
-    pub(crate) num_direct: u32,
-    /// Size of the distance alphabet that is written to the stream.
-    pub(crate) alphabet_size_max: u32,
-    /// Size of the distance alphabet that can actually occur.
-    pub(crate) alphabet_size_limit: u32,
-    /// Largest distance this alphabet can express.
-    pub(crate) max_distance: u32,
-}
-
-impl DistanceParams {
-    /// Builds the alphabet for `postfix_bits` and `num_direct`.
-    ///
-    /// Mirrors `BrotliInitDistanceParams` for the RFC 7932 window sizes; the
-    /// large-window extension is not reachable through the public API, so the
-    /// limit and the maximum alphabet always coincide.
-    pub(crate) const fn new(postfix_bits: u32, num_direct: u32) -> Self {
-        let alphabet_size_max =
-            NUM_DISTANCE_SHORT_CODES + num_direct + (MAX_DISTANCE_BITS << (postfix_bits + 1));
-        let max_distance = num_direct + (1u32 << (MAX_DISTANCE_BITS + postfix_bits + 2))
-            - (1u32 << (postfix_bits + 2));
-        Self {
-            postfix_bits,
-            num_direct,
-            alphabet_size_max,
-            alphabet_size_limit: alphabet_size_max,
-            max_distance,
-        }
-    }
-}
-
-impl Default for DistanceParams {
-    /// Returns the alphabet with neither postfix nor direct codes.
-    fn default() -> Self {
-        Self::new(0, 0)
     }
 }
 
@@ -190,6 +168,15 @@ pub(crate) const fn choose_distance_params(
 /// `ChooseHasher` picks this from quality, window size and size hint only.
 /// Nothing about the running machine takes part, so two runs with the same
 /// parameters always search the same candidates in the same order.
+///
+/// The reference build selects the tagged `H58`/`H68` variants in place of
+/// `H5`/`H6` for qualities at or below `BROTLI_MAX_SIMD_QUALITY`. Those
+/// variants evaluate exactly the same candidates in exactly the same order —
+/// see the equivalence argument on [`BucketMatcher`] — so this plan names the
+/// portable pair for both, and the differential tests against the C library
+/// check that the streams agree byte for byte.
+///
+/// [`BucketMatcher`]: super::hashers::BucketMatcher
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HasherPlan {
     /// Quality 3: quick matcher, sixteen bucket bits, one candidate slot.
@@ -200,34 +187,54 @@ pub(crate) enum HasherPlan {
     /// Quality 4 at or above the size-hint threshold: wider quick matcher,
     /// seven-byte hash, no dictionary probe.
     H54,
-    /// Quality 5 with a small window: forgetful chains over one bank.
-    H40,
-    /// Quality 5: bucketed matcher over a four-byte hash.
-    H5 {
-        /// Base-2 logarithm of the number of buckets.
-        bucket_bits: u32,
-        /// Base-2 logarithm of the number of slots per bucket.
-        block_bits: u32,
-        /// How many cached distances are probed before the bucket.
-        last_distances: usize,
-    },
-    /// Quality 5 for large inputs: bucketed matcher over an eight-byte hash.
-    H6 {
-        /// Base-2 logarithm of the number of buckets.
-        bucket_bits: u32,
-        /// Base-2 logarithm of the number of slots per bucket.
-        block_bits: u32,
-        /// How many cached distances are probed before the bucket.
-        last_distances: usize,
-    },
+    /// Qualities 5 to 9 with a small window: forgetful chains
+    /// (`H40`, `H41`, `H42`).
+    Chain(ChainShape),
+    /// Bucketed matcher over a four-byte hash (`H5`, tagged `H58`).
+    H5(BucketShape),
+    /// Bucketed matcher over an eight-byte hash (`H6`, tagged `H68`).
+    H6(BucketShape),
 }
 
-/// Size hint at which quality four and five switch to their large matchers.
+/// Geometry of an `H5` or `H6` bucket table.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BucketShape {
+    /// Base-2 logarithm of the number of buckets.
+    pub(crate) bucket_bits: u32,
+    /// Base-2 logarithm of the number of slots per bucket.
+    pub(crate) block_bits: u32,
+    /// How many cached distances are probed before the bucket.
+    pub(crate) last_distances: usize,
+}
+
+/// Geometry of an `H40`, `H41` or `H42` forgetful-chain table.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ChainShape {
+    /// Number of storage banks the chains share.
+    pub(crate) num_banks: usize,
+    /// Base-2 logarithm of the number of slots in one bank.
+    pub(crate) bank_bits: u32,
+    /// How many cached distances are probed before the chain.
+    pub(crate) last_distances: usize,
+    /// How many chain links one search follows (`max_hops`).
+    pub(crate) max_hops: usize,
+}
+
+/// Size hint at which quality four and above switch to their large matchers.
 pub(crate) const LARGE_INPUT_SIZE_HINT: usize = 1 << 20;
+
+/// Returns the chain depth `quality` searches (`self->max_hops`).
+///
+/// `(quality > 6 ? 7 : 8) << (quality - 4)`, which is 16, 32, 56, 112 and 224
+/// for qualities five to nine.
+const fn max_hops(quality: GreedyQuality) -> usize {
+    let number = quality.number();
+    (if number > 6 { 7usize } else { 8usize }) << (number - 4)
+}
 
 /// Selects the matcher for `quality`, `lgwin` and `size_hint`.
 ///
-/// Mirrors `ChooseHasher` restricted to qualities three to five. The
+/// Mirrors `ChooseHasher` restricted to qualities three to nine. The
 /// large-window matchers `H35`, `H55` and `H65` are unreachable because the
 /// public window size stops at twenty-four bits.
 pub(crate) const fn choose_hasher(
@@ -244,21 +251,31 @@ pub(crate) const fn choose_hasher(
                 HasherPlan::H4
             }
         }
-        GreedyQuality::Q5 => {
+        _ => {
+            let number = quality.number();
+            let last_distances = quality.last_distances_to_check();
             if lgwin <= 16 {
-                HasherPlan::H40
+                // H42 spreads its chains over five hundred and twelve small
+                // banks; H40 and H41 share one large one.
+                let (num_banks, bank_bits) = if number >= 9 { (512, 9) } else { (1, 16) };
+                HasherPlan::Chain(ChainShape {
+                    num_banks,
+                    bank_bits,
+                    last_distances,
+                    max_hops: max_hops(quality),
+                })
             } else if size_hint >= LARGE_INPUT_SIZE_HINT && lgwin >= 19 {
-                HasherPlan::H6 {
+                HasherPlan::H6(BucketShape {
                     bucket_bits: 15,
-                    block_bits: 4,
-                    last_distances: 4,
-                }
+                    block_bits: (number - 1) as u32,
+                    last_distances,
+                })
             } else {
-                HasherPlan::H5 {
-                    bucket_bits: 14,
-                    block_bits: 4,
-                    last_distances: 4,
-                }
+                HasherPlan::H5(BucketShape {
+                    bucket_bits: if number < 7 { 14 } else { 15 },
+                    block_bits: (number - 1) as u32,
+                    last_distances,
+                })
             }
         }
     }
@@ -296,7 +313,7 @@ impl GreedyParams {
     ) -> Result<Self, BrotliCompressError> {
         let quality = GreedyQuality::try_from(params.quality())?;
         let lgwin = usize::from(params.lgwin());
-        let lgblock = compute_lgblock(quality, params.lgblock().map(usize::from));
+        let lgblock = compute_lgblock(quality, params.lgblock().map(usize::from), lgwin);
         Ok(Self {
             quality,
             lgwin,
@@ -339,9 +356,10 @@ impl GreedyParams {
 
     /// Returns the literal spree length that triggers the sparse search.
     ///
-    /// `LiteralSpreeLengthForSparseSearch` uses sixty-four below quality nine.
+    /// `LiteralSpreeLengthForSparseSearch` uses sixty-four below quality nine
+    /// and five hundred and twelve at quality nine.
     pub(crate) const fn random_heuristics_window_size(&self) -> usize {
-        64
+        if self.quality.number() < 9 { 64 } else { 512 }
     }
 }
 
@@ -354,14 +372,25 @@ pub(crate) const MAX_INPUT_BLOCK_BITS: usize = 24;
 /// Returns the block size `quality` uses (`ComputeLgBlock`).
 ///
 /// Qualities below four always use fourteen bits, whatever the caller asked
-/// for; the others default to sixteen and clamp an explicit request into the
-/// range the format allows.
-pub(crate) const fn compute_lgblock(quality: GreedyQuality, requested: Option<usize>) -> usize {
+/// for; the others default to sixteen, which quality nine raises to
+/// `min(18, lgwin)` when the window is wider, and clamp an explicit request
+/// into the range the format allows.
+pub(crate) const fn compute_lgblock(
+    quality: GreedyQuality,
+    requested: Option<usize>,
+    lgwin: usize,
+) -> usize {
     if quality.number() < MIN_QUALITY_FOR_BLOCK_SPLIT {
         return 14;
     }
     match requested {
-        None => 16,
+        None => {
+            if quality.number() >= 9 && lgwin > 16 {
+                if lgwin < 18 { lgwin } else { 18 }
+            } else {
+                16
+            }
+        }
         Some(lgblock) => {
             if lgblock < MIN_INPUT_BLOCK_BITS {
                 MIN_INPUT_BLOCK_BITS
@@ -381,22 +410,62 @@ mod tests {
 
     #[test]
     fn quality_routing_accepts_only_the_greedy_range() {
-        assert_eq!(
-            GreedyQuality::try_from(QualityLevel::Q3).ok(),
-            Some(GreedyQuality::Q3)
-        );
-        assert_eq!(
-            GreedyQuality::try_from(QualityLevel::Q5).ok(),
-            Some(GreedyQuality::Q5)
-        );
+        for (public, expected) in [
+            (QualityLevel::Q3, GreedyQuality::Q3),
+            (QualityLevel::Q4, GreedyQuality::Q4),
+            (QualityLevel::Q5, GreedyQuality::Q5),
+            (QualityLevel::Q6, GreedyQuality::Q6),
+            (QualityLevel::Q7, GreedyQuality::Q7),
+            (QualityLevel::Q8, GreedyQuality::Q8),
+            (QualityLevel::Q9, GreedyQuality::Q9),
+        ] {
+            assert_eq!(GreedyQuality::try_from(public).ok(), Some(expected));
+        }
         assert!(matches!(
             GreedyQuality::try_from(QualityLevel::Q2),
             Err(BrotliCompressError::UnsupportedQuality(2))
         ));
         assert!(matches!(
-            GreedyQuality::try_from(QualityLevel::Q6),
-            Err(BrotliCompressError::UnsupportedQuality(6))
+            GreedyQuality::try_from(QualityLevel::Q11),
+            Err(BrotliCompressError::UnsupportedQuality(11))
         ));
+    }
+
+    #[test]
+    fn only_quality_seven_and_above_may_use_three_contexts() {
+        assert!(!GreedyQuality::Q5.hq_context_modeling());
+        assert!(!GreedyQuality::Q6.hq_context_modeling());
+        assert!(GreedyQuality::Q7.hq_context_modeling());
+        assert!(GreedyQuality::Q9.hq_context_modeling());
+    }
+
+    #[test]
+    fn cached_distance_counts_match_the_reference() {
+        let expected = [
+            (GreedyQuality::Q3, 4),
+            (GreedyQuality::Q5, 4),
+            (GreedyQuality::Q6, 4),
+            (GreedyQuality::Q7, 10),
+            (GreedyQuality::Q8, 10),
+            (GreedyQuality::Q9, 16),
+        ];
+        for (quality, count) in expected {
+            assert_eq!(quality.last_distances_to_check(), count, "{quality:?}");
+        }
+    }
+
+    #[test]
+    fn chain_hop_limits_match_the_reference() {
+        let expected = [
+            (GreedyQuality::Q5, 16),
+            (GreedyQuality::Q6, 32),
+            (GreedyQuality::Q7, 56),
+            (GreedyQuality::Q8, 112),
+            (GreedyQuality::Q9, 224),
+        ];
+        for (quality, hops) in expected {
+            assert_eq!(max_hops(quality), hops, "{quality:?}");
+        }
     }
 
     #[test]
@@ -416,13 +485,40 @@ mod tests {
 
     #[test]
     fn lgblock_is_fourteen_below_the_block_split_quality() {
-        assert_eq!(compute_lgblock(GreedyQuality::Q3, None), 14);
-        assert_eq!(compute_lgblock(GreedyQuality::Q3, Some(24)), 14);
-        assert_eq!(compute_lgblock(GreedyQuality::Q4, None), 16);
-        assert_eq!(compute_lgblock(GreedyQuality::Q5, None), 16);
-        assert_eq!(compute_lgblock(GreedyQuality::Q5, Some(18)), 18);
-        assert_eq!(compute_lgblock(GreedyQuality::Q5, Some(10)), 16);
-        assert_eq!(compute_lgblock(GreedyQuality::Q5, Some(30)), 24);
+        assert_eq!(compute_lgblock(GreedyQuality::Q3, None, 22), 14);
+        assert_eq!(compute_lgblock(GreedyQuality::Q3, Some(24), 22), 14);
+        assert_eq!(compute_lgblock(GreedyQuality::Q4, None, 22), 16);
+        assert_eq!(compute_lgblock(GreedyQuality::Q5, None, 22), 16);
+        assert_eq!(compute_lgblock(GreedyQuality::Q5, Some(18), 22), 18);
+        assert_eq!(compute_lgblock(GreedyQuality::Q5, Some(10), 22), 16);
+        assert_eq!(compute_lgblock(GreedyQuality::Q5, Some(30), 22), 24);
+    }
+
+    #[test]
+    fn quality_nine_raises_the_default_block_with_the_window() {
+        // The default only grows once the window is wider than sixteen bits,
+        // and stops at eighteen.
+        assert_eq!(compute_lgblock(GreedyQuality::Q9, None, 16), 16);
+        assert_eq!(compute_lgblock(GreedyQuality::Q9, None, 17), 17);
+        assert_eq!(compute_lgblock(GreedyQuality::Q9, None, 18), 18);
+        assert_eq!(compute_lgblock(GreedyQuality::Q9, None, 24), 18);
+        // An explicit request still wins.
+        assert_eq!(compute_lgblock(GreedyQuality::Q9, Some(20), 24), 20);
+        // Quality eight keeps the flat default.
+        assert_eq!(compute_lgblock(GreedyQuality::Q8, None, 24), 16);
+    }
+
+    #[test]
+    fn the_sparse_search_threshold_rises_at_quality_nine() {
+        for (quality, window) in [
+            (QualityLevel::Q5, 64),
+            (QualityLevel::Q8, 64),
+            (QualityLevel::Q9, 512),
+        ] {
+            let public = CompressParams::new(quality, WindowBits::DEFAULT);
+            let resolved = GreedyParams::new(&public, 0).expect("supported quality");
+            assert_eq!(resolved.random_heuristics_window_size(), window);
+        }
     }
 
     #[test]
@@ -446,18 +542,14 @@ mod tests {
             HasherPlan::H54
         );
 
-        assert_eq!(choose_hasher(GreedyQuality::Q5, 16, 0), HasherPlan::H40);
-        assert_eq!(
-            choose_hasher(GreedyQuality::Q5, 16, LARGE_INPUT_SIZE_HINT),
-            HasherPlan::H40
-        );
         assert!(matches!(
-            choose_hasher(GreedyQuality::Q5, 17, 0),
-            HasherPlan::H5 {
-                bucket_bits: 14,
-                block_bits: 4,
-                last_distances: 4
-            }
+            choose_hasher(GreedyQuality::Q5, 16, 0),
+            HasherPlan::Chain(ChainShape {
+                num_banks: 1,
+                bank_bits: 16,
+                last_distances: 4,
+                max_hops: 16,
+            })
         ));
         assert!(matches!(
             choose_hasher(GreedyQuality::Q5, 18, LARGE_INPUT_SIZE_HINT),
@@ -467,14 +559,58 @@ mod tests {
             choose_hasher(GreedyQuality::Q5, 19, LARGE_INPUT_SIZE_HINT - 1),
             HasherPlan::H5 { .. }
         ));
-        assert!(matches!(
-            choose_hasher(GreedyQuality::Q5, 19, LARGE_INPUT_SIZE_HINT),
-            HasherPlan::H6 {
-                bucket_bits: 15,
-                block_bits: 4,
-                last_distances: 4
-            }
-        ));
+    }
+
+    /// The `ChooseHasher` table of `c/enc/quality.h`, quality by quality.
+    #[test]
+    fn the_hasher_table_matches_the_reference_comment() {
+        let small_window = [
+            (GreedyQuality::Q5, 1usize, 16u32, 4usize, 16usize),
+            (GreedyQuality::Q6, 1, 16, 4, 32),
+            (GreedyQuality::Q7, 1, 16, 10, 56),
+            (GreedyQuality::Q8, 1, 16, 10, 112),
+            (GreedyQuality::Q9, 512, 9, 16, 224),
+        ];
+        for (quality, num_banks, bank_bits, last_distances, max_hops) in small_window {
+            assert_eq!(
+                choose_hasher(quality, 16, LARGE_INPUT_SIZE_HINT),
+                HasherPlan::Chain(ChainShape {
+                    num_banks,
+                    bank_bits,
+                    last_distances,
+                    max_hops,
+                }),
+                "{quality:?} with a small window"
+            );
+        }
+
+        let normal = [
+            (GreedyQuality::Q5, 14u32, 4u32, 4usize),
+            (GreedyQuality::Q6, 14, 5, 4),
+            (GreedyQuality::Q7, 15, 6, 10),
+            (GreedyQuality::Q8, 15, 7, 10),
+            (GreedyQuality::Q9, 15, 8, 16),
+        ];
+        for (quality, bucket_bits, block_bits, last_distances) in normal {
+            assert_eq!(
+                choose_hasher(quality, 22, 0),
+                HasherPlan::H5(BucketShape {
+                    bucket_bits,
+                    block_bits,
+                    last_distances,
+                }),
+                "{quality:?} with an ordinary input"
+            );
+            assert_eq!(
+                choose_hasher(quality, 19, LARGE_INPUT_SIZE_HINT),
+                HasherPlan::H6(BucketShape {
+                    bucket_bits: 15,
+                    block_bits,
+                    last_distances,
+                }),
+                "{quality:?} with a large input"
+            );
+        }
     }
 
     #[test]

@@ -28,6 +28,12 @@ pub const TARGETS: &[(&str, TargetFn)] = &[
     ("q3_roundtrip", q3_roundtrip),
     ("q4_roundtrip", q4_roundtrip),
     ("q5_roundtrip", q5_roundtrip),
+    ("q6_roundtrip", q6_roundtrip),
+    ("q7_roundtrip", q7_roundtrip),
+    ("q8_roundtrip", q8_roundtrip),
+    ("q9_roundtrip", q9_roundtrip),
+    ("q10_roundtrip", q10_roundtrip),
+    ("q11_roundtrip", q11_roundtrip),
     ("params_roundtrip", params_roundtrip),
     ("simd_equivalence", simd_equivalence),
     ("differential_c", differential_c),
@@ -74,6 +80,36 @@ pub fn q4_roundtrip(ctx: &Context, data: &[u8]) {
 /// Quality 5 must never panic and must always round-trip.
 pub fn q5_roundtrip(ctx: &Context, data: &[u8]) {
     fixed_quality_roundtrip(ctx, QualityLevel::Q5, data);
+}
+
+/// Quality 6 must never panic and must always round-trip.
+pub fn q6_roundtrip(ctx: &Context, data: &[u8]) {
+    fixed_quality_roundtrip(ctx, QualityLevel::Q6, data);
+}
+
+/// Quality 7 must never panic and must always round-trip.
+pub fn q7_roundtrip(ctx: &Context, data: &[u8]) {
+    fixed_quality_roundtrip(ctx, QualityLevel::Q7, data);
+}
+
+/// Quality 8 must never panic and must always round-trip.
+pub fn q8_roundtrip(ctx: &Context, data: &[u8]) {
+    fixed_quality_roundtrip(ctx, QualityLevel::Q8, data);
+}
+
+/// Quality 9 must never panic and must always round-trip.
+pub fn q9_roundtrip(ctx: &Context, data: &[u8]) {
+    fixed_quality_roundtrip(ctx, QualityLevel::Q9, data);
+}
+
+/// Quality 10 must never panic and must always round-trip.
+pub fn q10_roundtrip(ctx: &Context, data: &[u8]) {
+    fixed_quality_roundtrip(ctx, QualityLevel::Q10, data);
+}
+
+/// Quality 11 must never panic and must always round-trip.
+pub fn q11_roundtrip(ctx: &Context, data: &[u8]) {
+    fixed_quality_roundtrip(ctx, QualityLevel::Q11, data);
 }
 
 /// Randomised legal settings must round-trip and stay deterministic.
@@ -196,13 +232,12 @@ pub fn parameter_parsing(ctx: &Context, input: &[u8]) {
     let data = cap(data);
 
     // Concentrated on the interesting neighbourhood: the 0..=11 range the API
-    // models, the unrepresentable 10, and the first values above the ceiling.
+    // models, and the first values above the ceiling.
     let quality_value = usize::from(header.first().copied().unwrap_or(0)) % 20;
     let window_value = usize::from(header.get(1).copied().unwrap_or(22));
 
     let quality = QualityLevel::try_from(quality_value);
     match (quality_value, &quality) {
-        (10, Err(ParseQualityLevelError::Unrepresentable)) => {}
         (0..=11, Ok(parsed)) => assert_eq!(
             usize::from(*parsed),
             quality_value,

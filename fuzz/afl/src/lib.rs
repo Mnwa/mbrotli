@@ -21,12 +21,18 @@ use std::mem::discriminant;
 pub mod targets;
 
 /// Every quality this crate implements.
-pub const IMPLEMENTED_QUALITIES: [QualityLevel; 5] = [
+pub const IMPLEMENTED_QUALITIES: [QualityLevel; 11] = [
     QualityLevel::Q0,
     QualityLevel::Q1,
     QualityLevel::Q3,
     QualityLevel::Q4,
     QualityLevel::Q5,
+    QualityLevel::Q6,
+    QualityLevel::Q7,
+    QualityLevel::Q8,
+    QualityLevel::Q9,
+    QualityLevel::Q10,
+    QualityLevel::Q11,
 ];
 
 /// The three modes the encoder accepts.

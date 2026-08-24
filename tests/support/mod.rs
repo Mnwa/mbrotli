@@ -180,17 +180,57 @@ pub fn params_with_hint(quality: QualityLevel, lgwin: usize, size_hint: usize) -
 /// The two qualities the fast encoder implements.
 pub const FAST_QUALITIES: [QualityLevel; 2] = [QualityLevel::Q0, QualityLevel::Q1];
 
-/// The three qualities the greedy encoder implements.
-pub const GREEDY_QUALITIES: [QualityLevel; 3] =
-    [QualityLevel::Q3, QualityLevel::Q4, QualityLevel::Q5];
+/// The seven qualities the greedy encoder implements.
+pub const GREEDY_QUALITIES: [QualityLevel; 7] = [
+    QualityLevel::Q3,
+    QualityLevel::Q4,
+    QualityLevel::Q5,
+    QualityLevel::Q6,
+    QualityLevel::Q7,
+    QualityLevel::Q8,
+    QualityLevel::Q9,
+];
+
+/// The two qualities the high-quality encoder implements.
+pub const HQ_QUALITIES: [QualityLevel; 2] = [QualityLevel::Q10, QualityLevel::Q11];
+
+/// Largest input the high-quality qualities are exercised over by default.
+pub const HQ_INPUT_CAP: usize = 1 << 16;
+
+/// Returns the prefix of `data` that `quality` should be exercised over.
+///
+/// Qualities ten and eleven solve a dynamic program over every match at every
+/// position. In the debug builds these tests run in, quality eleven costs about
+/// a second per hundred and fifty kilobytes, against a hundredth of that at
+/// quality nine — so a sweep that is seconds for the greedy qualities is tens of
+/// minutes for these two.
+///
+/// Capping them keeps the *shapes* each sweep covers — literal runs,
+/// back-references, periodic data, noise — while moving the large-input
+/// coverage to the tests built for it: `vendor_corpus.rs`'s multi-fragment
+/// case, and `streaming.rs`'s chunk-boundary cases, both of which still run
+/// these qualities over inputs spanning several blocks.
+pub fn prefix_for(quality: QualityLevel, data: &[u8]) -> &[u8] {
+    if quality >= QualityLevel::Q10 {
+        &data[..data.len().min(HQ_INPUT_CAP)]
+    } else {
+        data
+    }
+}
 
 /// Every quality this crate implements.
-pub const IMPLEMENTED_QUALITIES: [QualityLevel; 5] = [
+pub const IMPLEMENTED_QUALITIES: [QualityLevel; 11] = [
     QualityLevel::Q0,
     QualityLevel::Q1,
     QualityLevel::Q3,
     QualityLevel::Q4,
     QualityLevel::Q5,
+    QualityLevel::Q6,
+    QualityLevel::Q7,
+    QualityLevel::Q8,
+    QualityLevel::Q9,
+    QualityLevel::Q10,
+    QualityLevel::Q11,
 ];
 
 /// Deterministic xorshift generator, so corpora are reproducible.
