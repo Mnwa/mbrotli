@@ -1,12 +1,12 @@
 //! Brotli compression, in safe Rust.
 //!
-//! `mbrotli` implements Brotli qualities 0, 1, 3, 4 and 5 as a port of Google's
+//! `mbrotli` implements every Brotli quality but 2 as a port of Google's
 //! reference encoder, and emits bytes that are identical to it. There is no
 //! `unsafe` in this crate, and the SIMD instruction set is resolved once per
 //! compressed block rather than inside any loop.
 //!
-//! Quality 2 and qualities 6 through 11 are not implemented yet and are
-//! reported as [`BrotliCompressError::UnsupportedQuality`]; there is no
+//! Quality 2 is the one quality the format defines that has no encoder here;
+//! it is reported as [`BrotliCompressError::UnsupportedQuality`]. There is no
 //! decoder.
 //!
 //! [`BrotliCompressError::UnsupportedQuality`]: compressor::BrotliCompressError::UnsupportedQuality
@@ -20,6 +20,42 @@
 //! | 3 | Greedy matching, one prefix code per stream | Balanced |
 //! | 4 | Adds block splitting and histogram optimisation | Balanced, denser |
 //! | 5 | Adds an extensive search and literal context modelling | Densest of these |
+//! | 6 to 9 | Wider match search, more cached distances, richer context models | Denser, slower |
+//! | 10, 11 | Binary-tree matching and a Zopfli dynamic program | Densest, slowest |
+//!
+//! # Large Window Brotli
+//!
+//! [RFC 9841] widens the sliding window past what RFC 7932 can express. Which
+//! header a stream carries is part of the window itself: build one with
+//! [`WindowBits::standard`] or [`WindowBits::large`], never by widening a
+//! number.
+//!
+//! [`WindowBits::standard`]: compressor::WindowBits::standard
+//! [`WindowBits::large`]: compressor::WindowBits::large
+//!
+//! ```
+//! use mbrotli::Brotli;
+//! use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
+//!
+//! let compressor = Brotli::default().compressor();
+//! let params = CompressParams::new(QualityLevel::Q5, WindowBits::large(30)?);
+//!
+//! let payload = "large window ".repeat(1000);
+//! let compressed = compressor.compress(params, payload.as_bytes())?;
+//!
+//! // The stream carries the RFC 9841 header, so it needs a decoder that
+//! // expects one.
+//! assert_eq!(compressed[0], 0b0001_0001);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! Qualities 0 and 1 report
+//! [`SharedBrotliError::UnsupportedLargeWindow`] rather than dropping the
+//! request. The rest of RFC 9841 — shared dictionaries and the framing
+//! container — is not implemented.
+//!
+//! [RFC 9841]: https://www.rfc-editor.org/rfc/rfc9841.html
+//! [`SharedBrotliError::UnsupportedLargeWindow`]: compressor::shared::SharedBrotliError::UnsupportedLargeWindow
 //!
 //! Qualities 4 and 5 pick a different match finder for inputs of a mebibyte or
 //! more. The one-shot entry points know the input length and pass it on; the

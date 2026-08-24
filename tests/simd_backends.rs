@@ -13,7 +13,7 @@ use support::{
 };
 
 /// Compresses one input on every backend and requires identical output.
-fn assert_backends_agree(name: &str, data: &[u8], lgwin: usize) {
+fn assert_backends_agree(name: &str, data: &[u8], lgwin: u8) {
     let levels = host_levels();
     let (reference_name, reference_level) = levels[0];
     for quality in IMPLEMENTED_QUALITIES {
@@ -60,7 +60,7 @@ fn every_backend_agrees_on_boundary_lengths() {
 #[test]
 fn every_backend_agrees_across_window_sizes() {
     let corpora = structural_corpora();
-    for lgwin in [10usize, 16, 18, 24] {
+    for lgwin in [10u8, 16, 18, 24] {
         for corpus in &corpora {
             assert_backends_agree(&corpus.name, &corpus.data, lgwin);
         }

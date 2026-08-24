@@ -12,6 +12,7 @@
 //! never depends on the instruction set, which is what keeps the output
 //! identical across SIMD backends.
 
+use crate::compressor::core::rfc9841::window::ResolvedWindow;
 use crate::compressor::core::shared::constants::WINDOW_GAP;
 use crate::compressor::core::shared::distance::{DistanceParams, MAX_NDIRECT, MAX_NPOSTFIX};
 use crate::compressor::{
@@ -136,6 +137,7 @@ impl TryFrom<QualityLevel> for GreedyQuality {
 /// below four always use zero.
 pub(crate) const fn choose_distance_params(
     quality: GreedyQuality,
+    large_window: bool,
     mode: CompressMode,
     codes: DistanceCodes,
 ) -> DistanceParams {
@@ -160,7 +162,7 @@ pub(crate) const fn choose_distance_params(
         }
     }
 
-    DistanceParams::new(postfix_bits, num_direct)
+    DistanceParams::for_window(large_window, postfix_bits, num_direct)
 }
 
 /// The matcher a set of parameters selects, with its shape baked in.
@@ -286,7 +288,13 @@ pub(crate) const fn choose_hasher(
 pub(crate) struct GreedyParams {
     /// Quality this encoder runs at.
     pub(crate) quality: GreedyQuality,
-    /// Base-2 logarithm of the sliding window.
+    /// Window this stream declares, and whether it is a large one.
+    pub(crate) window: ResolvedWindow,
+    /// Base-2 logarithm of the history the encoder actually keeps.
+    ///
+    /// For an ordinary stream this is the declared window. For a large window
+    /// it is capped at `MAX_ENCODER_WINDOW_BITS`, so a stream may declare more
+    /// than the encoder ever indexes.
     pub(crate) lgwin: usize,
     /// Base-2 logarithm of the input block size.
     pub(crate) lgblock: usize,
@@ -312,15 +320,22 @@ impl GreedyParams {
         size_hint: usize,
     ) -> Result<Self, BrotliCompressError> {
         let quality = GreedyQuality::try_from(params.quality())?;
-        let lgwin = usize::from(params.lgwin());
+        let window = ResolvedWindow::new(params);
+        let lgwin = window.encoder_bits();
         let lgblock = compute_lgblock(quality, params.lgblock().map(usize::from), lgwin);
         Ok(Self {
             quality,
+            window,
             lgwin,
             lgblock,
             size_hint,
             disable_literal_context_modeling: !params.literal_context_modeling(),
-            dist: choose_distance_params(quality, params.mode(), params.distance_codes()),
+            dist: choose_distance_params(
+                quality,
+                window.is_large(),
+                params.mode(),
+                params.distance_codes(),
+            ),
             hasher: choose_hasher(quality, lgwin, size_hint),
         })
     }
@@ -629,6 +644,7 @@ mod tests {
     fn font_mode_asks_for_the_reference_distance_parameters() {
         let font = choose_distance_params(
             GreedyQuality::Q4,
+            false,
             CompressMode::Font,
             DistanceCodes::DEFAULT,
         );
@@ -636,6 +652,7 @@ mod tests {
 
         let generic = choose_distance_params(
             GreedyQuality::Q4,
+            false,
             CompressMode::Generic,
             DistanceCodes::DEFAULT,
         );
@@ -644,6 +661,7 @@ mod tests {
         // Quality three never uses non-zero distance parameters.
         let low = choose_distance_params(
             GreedyQuality::Q3,
+            false,
             CompressMode::Font,
             DistanceCodes::DEFAULT,
         );
@@ -656,6 +674,7 @@ mod tests {
         // must fit in four bits; the reference drops both otherwise.
         let bad = choose_distance_params(
             GreedyQuality::Q5,
+            false,
             CompressMode::Generic,
             DistanceCodes::from_raw(2, 6),
         );
@@ -663,6 +682,7 @@ mod tests {
 
         let good = choose_distance_params(
             GreedyQuality::Q5,
+            false,
             CompressMode::Generic,
             DistanceCodes::from_raw(2, 8),
         );
@@ -670,6 +690,7 @@ mod tests {
 
         let too_many = choose_distance_params(
             GreedyQuality::Q5,
+            false,
             CompressMode::Generic,
             DistanceCodes::from_raw(0, 121),
         );

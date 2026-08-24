@@ -148,6 +148,56 @@ pub fn c_decompress(input: &[u8], expected_size: usize) -> Option<Vec<u8>> {
     Some(output)
 }
 
+/// Decompresses `input` with the pinned C decoder in large-window mode.
+///
+/// The RFC 9841 fourteen-bit window header is only accepted when the decoder
+/// has been told to expect it, which the one-shot `BrotliDecoderDecompress`
+/// entry point cannot do. Returns [`None`] when the decoder rejects the
+/// stream.
+///
+/// # Panics
+///
+/// Panics when the decoder cannot be created or rejects the parameter, which
+/// would mean the harness is misconfigured rather than the encoder under test
+/// being wrong.
+pub fn c_decompress_large_window(input: &[u8], expected_size: usize) -> Option<Vec<u8>> {
+    let mut output = vec![0u8; expected_size.max(1)];
+    unsafe {
+        let state = ffi::BrotliDecoderCreateInstance(None, None, std::ptr::null_mut());
+        assert!(!state.is_null(), "the C decoder could not be created");
+        assert_eq!(
+            ffi::BrotliDecoderSetParameter(state, ffi::BROTLI_DECODER_PARAM_LARGE_WINDOW, 1),
+            ffi::BROTLI_TRUE,
+            "the C decoder rejected the large window parameter"
+        );
+
+        let mut available_in = input.len();
+        let mut next_in = input.as_ptr();
+        let mut available_out = output.len();
+        let mut next_out = output.as_mut_ptr();
+        let mut total_out = 0usize;
+        let result = ffi::BrotliDecoderDecompressStream(
+            state,
+            &raw mut available_in,
+            &raw mut next_in,
+            &raw mut available_out,
+            &raw mut next_out,
+            &raw mut total_out,
+        );
+        let finished = ffi::BrotliDecoderIsFinished(state);
+        ffi::BrotliDecoderDestroyInstance(state);
+
+        if result != ffi::BROTLI_DECODER_RESULT_SUCCESS
+            || finished != ffi::BROTLI_TRUE
+            || available_in != 0
+        {
+            return None;
+        }
+        output.truncate(total_out);
+    }
+    Some(output)
+}
+
 /// Returns the numeric quality of a level, for the C side.
 pub fn quality_number(quality: QualityLevel) -> c_int {
     usize::from(quality) as c_int
@@ -158,8 +208,8 @@ pub fn quality_number(quality: QualityLevel) -> c_int {
 /// # Panics
 ///
 /// Panics when `lgwin` is outside the range the Brotli format allows.
-pub fn params(quality: QualityLevel, lgwin: usize) -> CompressParams {
-    let lgwin = WindowBits::try_from(lgwin).expect("window size out of range");
+pub fn params(quality: QualityLevel, lgwin: u8) -> CompressParams {
+    let lgwin = WindowBits::standard(lgwin).expect("window size out of range");
     CompressParams::new(quality, lgwin)
 }
 
@@ -173,7 +223,7 @@ pub fn params(quality: QualityLevel, lgwin: usize) -> CompressParams {
 /// # Panics
 ///
 /// Panics when `lgwin` is outside the range the Brotli format allows.
-pub fn params_with_hint(quality: QualityLevel, lgwin: usize, size_hint: usize) -> CompressParams {
+pub fn params_with_hint(quality: QualityLevel, lgwin: u8, size_hint: usize) -> CompressParams {
     params(quality, lgwin).with_size_hint(Some(size_hint))
 }
 

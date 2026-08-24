@@ -12,7 +12,7 @@ use support::{
 };
 
 /// Compresses one input and requires the C decoder to recover it exactly.
-fn assert_round_trips(name: &str, data: &[u8], lgwin: usize) {
+fn assert_round_trips(name: &str, data: &[u8], lgwin: u8) {
     let compressor = Brotli::default().compressor();
     for quality in IMPLEMENTED_QUALITIES {
         let data = prefix_for(quality, data);
@@ -53,7 +53,7 @@ fn boundary_lengths_round_trip() {
 #[test]
 fn every_window_size_round_trips() {
     let corpora = structural_corpora();
-    for lgwin in 10..=24usize {
+    for lgwin in 10..=24u8 {
         for corpus in &corpora {
             assert_round_trips(&corpus.name, &corpus.data, lgwin);
         }

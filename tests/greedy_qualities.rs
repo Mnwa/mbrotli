@@ -18,7 +18,7 @@ use support::{CParams, GREEDY_QUALITIES, c_compress_with, c_decompress, vendor_f
 #[derive(Copy, Clone, Debug)]
 struct Case {
     quality: QualityLevel,
-    lgwin: usize,
+    lgwin: u8,
     mode: CompressMode,
     size_hint: Option<usize>,
     lgblock: Option<usize>,
@@ -28,7 +28,7 @@ struct Case {
 
 impl Case {
     /// Returns the defaults for a quality and window size.
-    fn new(quality: QualityLevel, lgwin: usize) -> Self {
+    fn new(quality: QualityLevel, lgwin: u8) -> Self {
         Self {
             quality,
             lgwin,
@@ -42,7 +42,7 @@ impl Case {
 
     /// Builds the parameters this crate's encoder takes.
     fn rust(&self) -> CompressParams {
-        let lgwin = WindowBits::try_from(self.lgwin).expect("window size out of range");
+        let lgwin = WindowBits::standard(self.lgwin).expect("window size out of range");
         let mut params = CompressParams::new(self.quality, lgwin)
             .with_mode(self.mode)
             .with_size_hint(self.size_hint)
@@ -60,7 +60,7 @@ impl Case {
 
     /// Builds the parameters the C harness takes, for the same input length.
     fn c(&self, input_len: usize) -> CParams {
-        let mut params = CParams::new(usize::from(self.quality) as i32, self.lgwin as i32);
+        let mut params = CParams::new(usize::from(self.quality) as i32, i32::from(self.lgwin));
         params.mode = match self.mode {
             CompressMode::Generic => ffi::BROTLI_MODE_GENERIC,
             CompressMode::Text => ffi::BROTLI_MODE_TEXT,
@@ -120,7 +120,7 @@ fn every_window_size_matches_the_c_encoder() {
     let corpora = [("text", text()), ("binary", binary())];
     for (name, data) in &corpora {
         for quality in GREEDY_QUALITIES {
-            for lgwin in 10..=24usize {
+            for lgwin in 10..=24u8 {
                 assert_matches_c(name, data, Case::new(quality, lgwin));
             }
         }
@@ -133,7 +133,7 @@ fn the_size_hint_boundary_selects_the_large_match_finder() {
     // when the window is wide enough, at exactly one mebibyte.
     let data = text();
     for quality in GREEDY_QUALITIES {
-        for lgwin in [16usize, 17, 18, 19, 22] {
+        for lgwin in [16u8, 17, 18, 19, 22] {
             for hint in [0usize, (1 << 20) - 1, 1 << 20, (1 << 20) + 1, 8 << 20] {
                 let mut case = Case::new(quality, lgwin);
                 case.size_hint = Some(hint);
@@ -156,7 +156,7 @@ fn the_small_window_match_finders_are_reached_from_quality_five() {
         QualityLevel::Q8,
         QualityLevel::Q9,
     ] {
-        for lgwin in [10usize, 14, 16, 17] {
+        for lgwin in [10u8, 14, 16, 17] {
             assert_matches_c("small-window", &data, Case::new(quality, lgwin));
         }
     }
@@ -356,7 +356,7 @@ fn quality_nine_defaults_to_a_larger_input_block() {
         data.extend_from_slice(&source);
     }
     data.truncate(1 << 20);
-    for lgwin in [16usize, 17, 18, 22] {
+    for lgwin in [16u8, 17, 18, 22] {
         assert_matches_c("q9-lgblock", &data, Case::new(QualityLevel::Q9, lgwin));
         assert_matches_c("q8-lgblock", &data, Case::new(QualityLevel::Q8, lgwin));
     }
@@ -457,7 +457,7 @@ fn the_static_dictionary_is_used_where_the_reference_uses_it() {
         data.push(b' ');
     }
     for quality in GREEDY_QUALITIES {
-        for lgwin in [10usize, 16, 22] {
+        for lgwin in [10u8, 16, 22] {
             assert_matches_c("dictionary", &data, Case::new(quality, lgwin));
         }
     }
@@ -469,7 +469,7 @@ fn ring_buffer_wrapping_matches_the_c_encoder() {
     // have to be found across the wrap.
     let source = binary();
     for quality in GREEDY_QUALITIES {
-        for lgwin in [10usize, 11, 12] {
+        for lgwin in [10u8, 11, 12] {
             assert_matches_c("wrap", &source, Case::new(quality, lgwin));
         }
     }

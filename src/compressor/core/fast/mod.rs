@@ -27,6 +27,8 @@ use self::bits::BitWriter;
 use self::constants::{OUTPUT_RESERVE_CONST, OUTPUT_SLACK, WINDOW_BITS_FAST};
 use self::q1::TwoPassState;
 use self::workspace::OnePassArena;
+use crate::compressor::core::rfc9841::window::ResolvedWindow;
+use crate::compressor::shared::SharedBrotliError;
 use crate::compressor::{BrotliCompressError, BrotliResult, CompressParams, QualityLevel};
 
 /// The two qualities this encoder implements.
@@ -121,22 +123,6 @@ fn encode_fragment<S: Simd>(
     }
 }
 
-/// Encodes the stream header for an effective window size.
-///
-/// The fast path never uses the large-window extension, so the header is at
-/// most seven bits wide.
-const fn encode_window_bits(lgwin: usize) -> (u16, u32) {
-    if lgwin == 16 {
-        (0, 1)
-    } else if lgwin == 17 {
-        (1, 7)
-    } else if lgwin > 17 {
-        ((((lgwin - 17) << 1) | 0x01) as u16, 4)
-    } else {
-        ((((lgwin - 8) << 4) | 0x01) as u16, 7)
-    }
-}
-
 /// Streaming quality 0 / quality 1 encoder.
 ///
 /// One instance owns every buffer the encoder needs and reuses them across
@@ -162,10 +148,20 @@ impl FastEncoder {
     /// outside the range this encoder implements.
     pub(crate) fn new(level: Level, params: &CompressParams) -> BrotliResult<Self> {
         let quality = FastQuality::try_from(params.quality())?;
-        let lgwin = usize::from(params.lgwin());
+        if params.lgwin().is_large() {
+            // These qualities write distances through a static entropy model
+            // built for the RFC 7932 alphabet, so they cannot carry the wider
+            // one. Refuse rather than quietly emitting an ordinary stream.
+            return Err(SharedBrotliError::UnsupportedLargeWindow {
+                quality: usize::from(params.quality()),
+            }
+            .into());
+        }
+        let window = ResolvedWindow::new(params);
+        let lgwin = window.encoder_bits();
         // The reference fast path always advertises at least eighteen window
         // bits, while still cutting the input at the requested window size.
-        let (last_bytes, last_bytes_bits) = encode_window_bits(lgwin.max(WINDOW_BITS_FAST));
+        let (last_bytes, last_bytes_bits) = window.at_least(WINDOW_BITS_FAST).header();
         Ok(Self {
             level,
             core: FastCore::new(quality),
@@ -325,12 +321,19 @@ mod tests {
 
     #[test]
     fn window_header_matches_the_reference_encoding() {
-        assert_eq!(encode_window_bits(16), (0, 1));
-        assert_eq!(encode_window_bits(17), (1, 7));
-        assert_eq!(encode_window_bits(18), (3, 4));
-        assert_eq!(encode_window_bits(22), (11, 4));
-        assert_eq!(encode_window_bits(24), (15, 4));
-        assert_eq!(encode_window_bits(10), (0x21, 7));
+        let header = |lgwin| {
+            ResolvedWindow::new(&CompressParams::new(
+                QualityLevel::Q0,
+                WindowBits::standard(lgwin).expect("a legal window"),
+            ))
+            .header()
+        };
+        assert_eq!(header(16), (0, 1));
+        assert_eq!(header(17), (1, 7));
+        assert_eq!(header(18), (3, 4));
+        assert_eq!(header(22), (11, 4));
+        assert_eq!(header(24), (15, 4));
+        assert_eq!(header(10), (0x21, 7));
     }
 
     #[test]
@@ -352,8 +355,8 @@ mod tests {
     #[test]
     fn block_size_limit_follows_the_requested_window() -> Result<(), BrotliCompressError> {
         let level = Level::new();
-        for lgwin in [10usize, 16, 18, 22, 24] {
-            let lgwin_bits = WindowBits::try_from(lgwin).unwrap_or(WindowBits::DEFAULT);
+        for lgwin in [10u8, 16, 18, 22, 24] {
+            let lgwin_bits = WindowBits::standard(lgwin).unwrap_or(WindowBits::DEFAULT);
             let params = CompressParams::new(QualityLevel::Q0, lgwin_bits);
             let encoder = FastEncoder::new(level, &params)?;
             assert_eq!(encoder.block_size_limit(), 1 << usize::from(lgwin_bits));

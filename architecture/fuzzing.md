@@ -64,7 +64,7 @@ persistent mode needs no reset hook and `fuzz_with_reset!` is not used.
 
 ## Input model
 
-Two input shapes exist. Both cap the payload at `MAX_PAYLOAD` (128 KiB) by
+Three input shapes exist. All cap the payload at `MAX_PAYLOAD` (128 KiB) by
 truncation rather than rejection, so an oversized input still contributes the
 structure its prefix carries.
 
@@ -88,6 +88,10 @@ flowchart TD
     shape -->|numeric settings| pp["parameter_parsing: 2 header bytes"]
     pp --> qn["byte 0 — quality value b mod 20<br/>reaches 10 and 12 and above, which are illegal"]
     pp --> wn["byte 1 — window value b, 0 to 255<br/>reaches below 10 and above 24"]
+
+    shape -->|"large window"| lw["large_window: 1 byte, then decode_case"]
+    lw --> lwn["byte 0 — declared window b mod 70<br/>reaches below 10 and above 62, both illegal"]
+    lw --> lwr["remainder — a whole decode_case input,<br/>so quality and distance layout still vary"]
 ```
 
 `decode_case` is closed over the legal domain by construction: its window index
@@ -122,6 +126,7 @@ conversions and the unimplemented-quality path.
 | `streaming_equivalence` | header | writer output equals reader output at an arbitrary chunk size, and round-trips |
 | `output_capacity` | header | exactly sized `dst` accepted, one byte short reported as `OutputTooSmall` |
 | `parameter_parsing` | numeric | `TryFrom` contracts hold; unimplemented qualities reported by all four entry points |
+| `large_window` | large window | `WindowBits::large` contract holds; qualities 0 and 1 refuse rather than dropping the request; bound, determinism, backend identity; C decoder round-trip up to 30 declared bits, and above it the stream differs from the 30-bit stream only in the six header bits |
 
 The oracles are layered rather than independent: `differential_c` is the
 strongest (byte identity with the reference), `params_roundtrip` and the
@@ -199,7 +204,10 @@ vendored submodule at `brotli-ffi/vendor/brotli/tests/testdata`, and
 `minimise-seeds.sh` reduces each corpus with `cargo afl cmin`, keeping the
 unminimised original alongside as `seeds/*.raw`. `seeds/generic` is the raw
 test data (24 files, minimised to 21); `seeds/params` is the same files behind
-a parameter header (114, minimised to 47 — most headers reach the same code).
+a parameter header (114, minimised to 47 — most headers reach the same code);
+`seeds/large_window` is each parameter seed behind one more byte, at four
+declared windows — the floor, the default, the widest the pinned C decoder
+reads, and the widest the format allows.
 Minimisation cuts the file count, not the byte count: the large fixtures carry
 coverage the small ones miss and survive `cmin`. Per-iteration cost is bounded
 by `MAX_PAYLOAD`, not by the corpus. No dictionary is used — the targets
@@ -229,6 +237,12 @@ sets are identical; the corpus takes under two seconds instead of minutes.
 - **The regression corpora for every quality target above one are seeded, not
   found.** `q3_roundtrip` through `q11_roundtrip` start from the same boundary
   cases as `q0_roundtrip`; nothing has crashed yet to replace them.
+- **The `large_window` regression corpus is seeded, not found.** Its twenty
+  inputs are the boundary cases written when the target was added — every edge
+  of the `10..=62` range, both refusing qualities, an empty payload, a single
+  byte and incompressible bytes — and a 150-second campaign over
+  `seeds/large_window` on `aarch64-apple-darwin` found 1024 new corpus items,
+  24.45% coverage, no crashes and no timeouts.
 - **Only smoke campaigns have been run,** and none since qualities six to
   eleven were added, so the figures below predate more than half the targets.
   The most recent was thirty to forty-five seconds per target on

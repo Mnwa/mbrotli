@@ -135,6 +135,7 @@ fn compute_distance_cost(
 /// is the reference's, and it decides which combinations are examined at all.
 fn choose_distance_params(
     commands: &[Command],
+    large_window: bool,
     original: DistanceParams,
     tmp: &mut HistogramDistance,
 ) -> DistanceParams {
@@ -146,7 +147,7 @@ fn choose_distance_params(
     for npostfix in 0..=MAX_NPOSTFIX {
         while ndirect_msb < 16 {
             let ndirect = ndirect_msb << npostfix;
-            let candidate = DistanceParams::new(npostfix, ndirect);
+            let candidate = DistanceParams::for_window(large_window, npostfix, ndirect);
             if npostfix == original.postfix_bits && ndirect == original.num_direct {
                 check_orig = false;
             }
@@ -274,7 +275,12 @@ impl MetaBlockBuilder {
         mb: &mut MetaBlockSplit,
     ) {
         let original = *dist;
-        *dist = choose_distance_params(commands, original, &mut self.distance_tmp);
+        *dist = choose_distance_params(
+            commands,
+            params.window.is_large(),
+            original,
+            &mut self.distance_tmp,
+        );
         recompute_distance_prefixes(commands, &original, dist);
 
         self.splitter.split(
@@ -460,7 +466,7 @@ mod tests {
         let original = DistanceParams::default();
         let mut tmp = HistogramDistance::default();
         let cmds = commands(500, &original);
-        let chosen = choose_distance_params(&cmds, original, &mut tmp);
+        let chosen = choose_distance_params(&cmds, false, original, &mut tmp);
         for command in &cmds {
             if command.has_distance() {
                 assert!(command.restore_distance_code(&original) <= chosen.max_distance);
@@ -481,7 +487,7 @@ mod tests {
             // A spread of distances: the plain alphabet is hard to beat.
             commands(500, &original),
         ] {
-            let chosen = choose_distance_params(&cmds, original, &mut tmp);
+            let chosen = choose_distance_params(&cmds, false, original, &mut tmp);
             let before = compute_distance_cost(&cmds, &original, &original, &mut tmp)
                 .expect("the original alphabet always prices");
             let after = compute_distance_cost(&cmds, &original, &chosen, &mut tmp)
@@ -502,7 +508,7 @@ mod tests {
         let cmds: Vec<Command> = (0..300)
             .map(|_| Command::new(&original, 4, 12, 0, 20))
             .collect();
-        let chosen = choose_distance_params(&cmds, original, &mut tmp);
+        let chosen = choose_distance_params(&cmds, false, original, &mut tmp);
         assert!(chosen.num_direct > 0, "no direct codes were chosen");
     }
 

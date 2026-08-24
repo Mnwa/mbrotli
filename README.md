@@ -2,8 +2,8 @@
 
 Brotli compression in safe Rust, byte-identical to Google's reference encoder.
 
-`mbrotli` implements Brotli qualities **0**, **1**, **3**, **4** and **5** as a
-port of [google/brotli] v1.2.0, commit `028fb5a`. For any input and any
+`mbrotli` implements every Brotli quality but **2** as a port of
+[google/brotli] v1.2.0, commit `028fb5a`. For any input and any
 combination of encoder parameters, it emits exactly the same bytes the
 reference encoder does. That is not an aspiration: it is what the test suite
 asserts, on every corpus, on every run.
@@ -18,6 +18,11 @@ asserts, on every corpus, on every run.
   bytes. The match finder is chosen from the caller's parameters alone, so the
   machine cannot change the output.
 - **RFC 7932 output.** Verified by round-tripping through Google's C decoder.
+- **RFC 9841 Large Window.** A window of up to 62 bits, asked for by name —
+  `WindowBits::large(30)` rather than a number that happens to exceed 24, so
+  the wider header is never inferred. Declaring a wide window allocates
+  nothing: the encoder keeps at most 30 bits of history whatever the header
+  says.
 
 ## Status
 
@@ -28,6 +33,8 @@ asserts, on every corpus, on every run.
 | Decoder | not implemented |
 | One-shot and streaming APIs | implemented |
 | Mode, block size, size hint, distance layout, context modelling | implemented |
+| RFC 9841 Large Window (qualities 3–11) | implemented — qualities 0 and 1 report `UnsupportedLargeWindow` |
+| RFC 9841 shared dictionaries and framing container | not implemented |
 | Large window (`lgwin > 24`) | not supported |
 | Compound and custom dictionaries | not supported; the built-in static dictionary is used |
 
@@ -104,7 +111,7 @@ cargo run --example compress
 | `Compressor` | Compression entry points, bound to a level |
 | `CompressParams` | Every encoder parameter, `Copy`, built by chained `with_*` |
 | `QualityLevel` | Closed enum, `Q0`–`Q11` |
-| `WindowBits` | Validated newtype over `10..=24` |
+| `WindowBits` | The window and the header it selects: `standard(10..=24)` or `large(10..=62)` |
 | `BlockBits` | Validated newtype over `16..=24` |
 | `CompressMode` | `Generic`, `Text`, `Font` |
 | `DistanceCodes` | Validated postfix-bit and direct-code pair |
@@ -216,6 +223,12 @@ cargo llvm-cov --package mbrotli --all-features --summary-only
 | [`architecture/fast-encoder.md`](architecture/fast-encoder.md) | Quality 0 and 1 core: scans, bitstream, dispatch, specialisation |
 | [`architecture/greedy-encoder.md`](architecture/greedy-encoder.md) | Quality 3 to 9 core: hasher plan, commands, greedy meta-blocks |
 | [`architecture/hq-encoder.md`](architecture/hq-encoder.md) | Quality 10 and 11 core: binary tree, Zopfli search, clustering, numerical determinism |
+| [`architecture/shared-brotli.md`](architecture/shared-brotli.md) | RFC 9841: Large Window selection, declared window versus retained history, the widened distance alphabet |
+| [`docs/rfc9841_api_binding.md`](docs/rfc9841_api_binding.md) | How RFC 9841 maps onto the existing API, symbol by symbol |
+| [`docs/rfc9841_interop_decisions.md`](docs/rfc9841_interop_decisions.md) | Every ambiguity in RFC 9841 and which reading this encoder implements |
+| [`docs/rfc9841_wire_map.md`](docs/rfc9841_wire_map.md) | Every RFC 9841 field written, its width, its validation and its implementing function |
+| [`docs/rfc9841_security.md`](docs/rfc9841_security.md) | What an attacker can influence through RFC 9841, and what is done about it |
+| [`docs/rfc9841_benchmarks.md`](docs/rfc9841_benchmarks.md) | Evidence that Large Window support did not slow ordinary compression |
 | [`docs/q6_q9_api_binding.md`](docs/q6_q9_api_binding.md) | How qualities 6–9 map onto the greedy encoder |
 | [`docs/q10_q11_api_binding.md`](docs/q10_q11_api_binding.md) | How the high-quality encoder maps onto the existing API, and the one public change |
 | [`docs/q6_q11_reference_differences.md`](docs/q6_q11_reference_differences.md) | Every divergence from the reference in the q6–q11 port, and the quirks reproduced on purpose |
@@ -239,6 +252,7 @@ reference in their source comments and are pinned by golden checksums; the
 dictionary blobs under `src/compressor/core/greedy/dictionary/` are extracted
 verbatim from the same source.
 
-The format itself is [RFC 7932](https://datatracker.ietf.org/doc/html/rfc7932).
+The format itself is [RFC 7932](https://datatracker.ietf.org/doc/html/rfc7932),
+extended by [RFC 9841](https://www.rfc-editor.org/rfc/rfc9841.html).
 
 `mbrotli` does not declare a licence of its own yet.

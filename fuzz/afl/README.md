@@ -55,6 +55,8 @@ submodule already carries them:
 That produces two corpora:
 
 - `seeds/generic` — the raw test data, for targets that fuzz the payload only.
+- `seeds/large_window` — the parameter seeds behind one more byte, the declared
+  RFC 9841 window the `large_window` target reads first.
 - `seeds/params` — the same files behind a six byte parameter header, for
   targets that decode their settings from the start of the input.
 
@@ -118,6 +120,7 @@ depending on the target. Large multi-fragment inputs are covered instead by
 | `streaming_equivalence` | `seeds/params` | writer and reader agree, round-trip |
 | `output_capacity` | `seeds/params` | exact buffer accepted, short buffer reported |
 | `parameter_parsing` | `seeds/params` | illegal settings rejected, unimplemented qualities reported not panicked |
+| `large_window` | `seeds/large_window` | RFC 9841 window validation, refusal at qualities 0 and 1, determinism, backend identity, round-trip through the large-window C decoder |
 
 ## Building and running
 

@@ -10,6 +10,7 @@
 //! one of those limits is resolved here, once, from the caller's parameters
 //! alone — nothing about the running machine takes part.
 
+use crate::compressor::core::rfc9841::window::ResolvedWindow;
 use crate::compressor::core::shared::constants::WINDOW_GAP;
 use crate::compressor::core::shared::distance::DistanceParams;
 use crate::compressor::core::shared::format::ContextMode;
@@ -60,7 +61,13 @@ impl TryFrom<QualityLevel> for HqQuality {
 pub(crate) struct HqParams {
     /// Quality this encoder runs at.
     pub(crate) quality: HqQuality,
-    /// Base-2 logarithm of the sliding window.
+    /// Window this stream declares, and whether it is a large one.
+    pub(crate) window: ResolvedWindow,
+    /// Base-2 logarithm of the history the encoder actually keeps.
+    ///
+    /// For an ordinary stream this is the declared window. For a large window
+    /// it is capped at `MAX_ENCODER_WINDOW_BITS`, so a stream may declare more
+    /// than the encoder ever indexes.
     pub(crate) lgwin: usize,
     /// Base-2 logarithm of the input block size.
     pub(crate) lgblock: usize,
@@ -85,14 +92,16 @@ impl HqParams {
     /// outside the range this encoder implements.
     pub(crate) fn new(params: &CompressParams) -> Result<Self, BrotliCompressError> {
         let quality = HqQuality::try_from(params.quality())?;
-        let lgwin = usize::from(params.lgwin());
+        let window = ResolvedWindow::new(params);
+        let lgwin = window.encoder_bits();
         let lgblock = compute_lgblock(params.lgblock().map(usize::from), lgwin);
         Ok(Self {
             quality,
+            window,
             lgwin,
             lgblock,
             disable_literal_context_modeling: !params.literal_context_modeling(),
-            dist: choose_distance_params(params.mode(), params.distance_codes()),
+            dist: choose_distance_params(window.is_large(), params.mode(), params.distance_codes()),
         })
     }
 
@@ -210,6 +219,7 @@ const fn compute_lgblock(requested: Option<usize>, lgwin: usize) -> usize {
 /// that the commands are first encoded with the same alphabet the reference
 /// starts from.
 const fn choose_distance_params(
+    large_window: bool,
     mode: CompressMode,
     codes: crate::compressor::DistanceCodes,
 ) -> DistanceParams {
@@ -230,7 +240,7 @@ const fn choose_distance_params(
         postfix_bits = 0;
         num_direct = 0;
     }
-    DistanceParams::new(postfix_bits, num_direct)
+    DistanceParams::for_window(large_window, postfix_bits, num_direct)
 }
 
 #[cfg(test)]
@@ -239,8 +249,8 @@ mod tests {
     use crate::compressor::{BlockBits, DistanceCodes, WindowBits};
 
     /// Resolves the parameters for one quality and window size.
-    fn params(quality: QualityLevel, lgwin: usize) -> HqParams {
-        let lgwin = WindowBits::try_from(lgwin).unwrap_or(WindowBits::DEFAULT);
+    fn params(quality: QualityLevel, lgwin: u8) -> HqParams {
+        let lgwin = WindowBits::standard(lgwin).unwrap_or(WindowBits::DEFAULT);
         HqParams::new(&CompressParams::new(quality, lgwin)).expect("supported quality")
     }
 
@@ -316,19 +326,21 @@ mod tests {
 
     #[test]
     fn font_mode_asks_for_the_reference_distance_parameters() {
-        let font = choose_distance_params(CompressMode::Font, DistanceCodes::DEFAULT);
+        let font = choose_distance_params(false, CompressMode::Font, DistanceCodes::DEFAULT);
         assert_eq!((font.postfix_bits, font.num_direct), (1, 12));
 
-        let generic = choose_distance_params(CompressMode::Generic, DistanceCodes::DEFAULT);
+        let generic = choose_distance_params(false, CompressMode::Generic, DistanceCodes::DEFAULT);
         assert_eq!((generic.postfix_bits, generic.num_direct), (0, 0));
     }
 
     #[test]
     fn an_unrepresentable_distance_layout_falls_back_to_zero() {
-        let bad = choose_distance_params(CompressMode::Generic, DistanceCodes::from_raw(2, 6));
+        let bad =
+            choose_distance_params(false, CompressMode::Generic, DistanceCodes::from_raw(2, 6));
         assert_eq!((bad.postfix_bits, bad.num_direct), (0, 0));
 
-        let good = choose_distance_params(CompressMode::Generic, DistanceCodes::from_raw(2, 8));
+        let good =
+            choose_distance_params(false, CompressMode::Generic, DistanceCodes::from_raw(2, 8));
         assert_eq!((good.postfix_bits, good.num_direct), (2, 8));
     }
 

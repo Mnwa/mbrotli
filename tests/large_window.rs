@@ -1,0 +1,431 @@
+//! RFC 9841 Large Window Brotli, over the public API.
+//!
+//! Every stream produced here is handed back to the pinned Google Brotli C
+//! decoder with `BROTLI_DECODER_PARAM_LARGE_WINDOW` set, which is an
+//! independent implementation of the header this crate writes.
+
+mod support;
+
+use mbrotli::Brotli;
+use mbrotli::compressor::shared::SharedBrotliError;
+use mbrotli::compressor::{
+    BrotliCompressError, CompressParams, ParseWindowBitsError, QualityLevel, WindowBits,
+};
+use std::io::{Read, Write};
+use support::{
+    Corpus, boundary_corpora, c_decompress, c_decompress_large_window, host_levels,
+    structural_corpora,
+};
+
+/// Every quality that implements the large window.
+const LARGE_WINDOW_QUALITIES: [QualityLevel; 9] = [
+    QualityLevel::Q3,
+    QualityLevel::Q4,
+    QualityLevel::Q5,
+    QualityLevel::Q6,
+    QualityLevel::Q7,
+    QualityLevel::Q8,
+    QualityLevel::Q9,
+    QualityLevel::Q10,
+    QualityLevel::Q11,
+];
+
+/// Widest window the pinned C decoder accepts (`BROTLI_LARGE_MAX_WBITS`).
+///
+/// RFC 9841 allows 62, but the pinned reference is built for 32-bit
+/// arithmetic and rejects a declared window above 30. Streams wider than this
+/// are checked against the RFC directly instead; see
+/// `a_window_wider_than_the_c_decoder_only_changes_the_header`.
+const C_DECODER_MAX_WINDOW_BITS: u8 = 30;
+
+/// Qualities whose encoders cannot carry a large window.
+const REFUSING_QUALITIES: [(QualityLevel, usize); 2] =
+    [(QualityLevel::Q0, 0), (QualityLevel::Q1, 1)];
+
+fn large(quality: QualityLevel, bits: u8) -> Result<CompressParams, ParseWindowBitsError> {
+    Ok(CompressParams::new(quality, WindowBits::large(bits)?))
+}
+
+#[test]
+fn the_default_parameters_ask_for_no_large_window() {
+    let params = CompressParams::new(QualityLevel::Q5, WindowBits::DEFAULT);
+    assert!(!params.lgwin().is_large());
+}
+
+#[test]
+fn the_window_carries_both_the_size_and_the_syntax() -> Result<(), ParseWindowBitsError> {
+    let bits = WindowBits::large(40)?;
+    let params = CompressParams::new(QualityLevel::Q5, bits);
+
+    assert_eq!(params.lgwin(), bits);
+    assert_eq!(params.lgwin().bits(), 40);
+    assert!(params.lgwin().is_large());
+    Ok(())
+}
+
+#[test]
+fn the_window_range_is_the_one_rfc_9841_allows() {
+    assert!(matches!(
+        WindowBits::large(9),
+        Err(ParseWindowBitsError::LowerBound)
+    ));
+    assert!(matches!(
+        WindowBits::large(63),
+        Err(ParseWindowBitsError::LargeUpperBound)
+    ));
+    for bits in 10u8..=62 {
+        assert!(WindowBits::large(bits).is_ok(), "{bits} bits");
+    }
+}
+
+#[test]
+fn the_stream_header_is_the_marker_and_six_window_bits() -> Result<(), Box<dyn std::error::Error>> {
+    let compressor = Brotli::default().compressor();
+    // A payload short enough that the first meta-block starts inside the
+    // second byte, so the header bits are the only thing under test.
+    let payload = b"large window payload large window payload";
+
+    for bits in 10u8..=62 {
+        let encoded = compressor.compress(large(QualityLevel::Q5, bits)?, payload)?;
+        let header = u16::from(encoded[0]) | (u16::from(encoded[1]) << 8);
+        assert_eq!(header & 0xFF, 0x11, "{bits} bits: marker");
+        assert_eq!((header >> 8) & 0x3F, u16::from(bits), "{bits} bits: window");
+    }
+    Ok(())
+}
+
+#[test]
+fn every_window_round_trips_through_the_c_decoder() -> Result<(), Box<dyn std::error::Error>> {
+    let compressor = Brotli::default().compressor();
+    let payload: Vec<u8> = "the quick brown fox jumps over the lazy dog "
+        .repeat(400)
+        .into_bytes();
+
+    for bits in 10u8..=C_DECODER_MAX_WINDOW_BITS {
+        for quality in LARGE_WINDOW_QUALITIES {
+            let params = large(quality, bits)?;
+            let encoded = compressor.compress(params, &payload)?;
+            assert_eq!(
+                c_decompress_large_window(&encoded, payload.len()).as_deref(),
+                Some(payload.as_slice()),
+                "{bits} bits at quality {quality:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Overwrites the six window bits of a large-window stream header.
+///
+/// The header is fourteen bits: an eight-bit marker in the first byte, then
+/// the window in the low six bits of the second. Everything above that belongs
+/// to the first meta-block.
+fn repoint_window(stream: &[u8], bits: u8) -> Vec<u8> {
+    let mut patched = stream.to_vec();
+    patched[1] = (patched[1] & 0xC0) | (bits & 0x3F);
+    patched
+}
+
+#[test]
+fn a_window_wider_than_the_c_decoder_only_changes_the_header()
+-> Result<(), Box<dyn std::error::Error>> {
+    let compressor = Brotli::default().compressor();
+    let payload: Vec<u8> = "the quick brown fox jumps over the lazy dog "
+        .repeat(400)
+        .into_bytes();
+
+    // The encoder keeps at most thirty bits of history whatever the header
+    // declares, so every wider stream is the thirty-bit stream with a
+    // different window written into it. That is what makes the range above the
+    // C decoder's limit checkable without a 64-bit decoder: the payload is one
+    // the C decoder has already accepted.
+    for quality in LARGE_WINDOW_QUALITIES {
+        let baseline = compressor.compress(large(quality, C_DECODER_MAX_WINDOW_BITS)?, &payload)?;
+        assert_eq!(
+            c_decompress_large_window(&baseline, payload.len()).as_deref(),
+            Some(payload.as_slice()),
+            "quality {quality:?}"
+        );
+        for bits in (C_DECODER_MAX_WINDOW_BITS + 1)..=62 {
+            assert_eq!(
+                compressor.compress(large(quality, bits)?, &payload)?,
+                repoint_window(&baseline, bits),
+                "{bits} bits at quality {quality:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn a_large_window_stream_needs_a_large_window_decoder() -> Result<(), Box<dyn std::error::Error>> {
+    let compressor = Brotli::default().compressor();
+    let payload = b"a large window header is not an ordinary one".repeat(20);
+
+    // Above 24 bits the header is not expressible in RFC 7932 at all, so an
+    // ordinary decoder has to reject it.
+    let encoded = compressor.compress(large(QualityLevel::Q5, 30)?, &payload)?;
+    assert_eq!(c_decompress(&encoded, payload.len()), None);
+    assert_eq!(
+        c_decompress_large_window(&encoded, payload.len()).as_deref(),
+        Some(payload.as_slice())
+    );
+    Ok(())
+}
+
+#[test]
+fn a_large_window_is_never_the_same_stream_as_an_ordinary_one()
+-> Result<(), Box<dyn std::error::Error>> {
+    let compressor = Brotli::default().compressor();
+    let payload = b"selection is explicit, never inferred".repeat(30);
+
+    for quality in LARGE_WINDOW_QUALITIES {
+        let ordinary = CompressParams::new(quality, WindowBits::standard(22)?);
+        // The same numeric window still switches syntax when asked for.
+        let requested = CompressParams::new(quality, WindowBits::large(22)?);
+        assert_ne!(
+            compressor.compress(ordinary, &payload)?,
+            compressor.compress(requested, &payload)?,
+            "quality {quality:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn the_fast_qualities_refuse_a_large_window_rather_than_dropping_it()
+-> Result<(), Box<dyn std::error::Error>> {
+    let compressor = Brotli::default().compressor();
+
+    for (quality, number) in REFUSING_QUALITIES {
+        let params = large(quality, 30)?;
+        for payload in [b"".as_slice(), b"payload".as_slice()] {
+            assert!(
+                matches!(
+                    compressor.compress(params, payload),
+                    Err(BrotliCompressError::Shared(
+                        SharedBrotliError::UnsupportedLargeWindow { quality: reported }
+                    )) if reported == number
+                ),
+                "quality {quality:?}, {} bytes",
+                payload.len()
+            );
+            let mut buffer = vec![0u8; 1024];
+            assert!(matches!(
+                compressor.compress_to_slice(params, payload, &mut buffer),
+                Err(BrotliCompressError::Shared(
+                    SharedBrotliError::UnsupportedLargeWindow { .. }
+                ))
+            ));
+        }
+
+        // The streaming adapters build their encoder on first use, so the
+        // refusal reaches the caller through `std::io::Error` rather than
+        // making construction fallible.
+        let mut sink = compressor.compress_writer(params, Vec::new());
+        let refused = sink
+            .write_all(b"payload")
+            .expect_err("the writer must refuse a large window");
+        assert!(
+            refused.to_string().contains("large window"),
+            "quality {quality:?}: {refused}"
+        );
+
+        let mut source = compressor.compress_reader(params, &b"payload"[..]);
+        let mut drained = Vec::new();
+        let refused = source
+            .read_to_end(&mut drained)
+            .expect_err("the reader must refuse a large window");
+        assert!(
+            refused.to_string().contains("large window"),
+            "quality {quality:?}: {refused}"
+        );
+        assert!(drained.is_empty());
+    }
+    Ok(())
+}
+
+#[test]
+fn an_unimplemented_quality_is_reported_before_the_window() -> Result<(), Box<dyn std::error::Error>>
+{
+    let compressor = Brotli::default().compressor();
+    assert!(matches!(
+        compressor.compress(large(QualityLevel::Q2, 30)?, b"payload"),
+        Err(BrotliCompressError::UnsupportedQuality(2))
+    ));
+    Ok(())
+}
+
+#[test]
+fn an_empty_input_is_still_one_byte() -> Result<(), Box<dyn std::error::Error>> {
+    let compressor = Brotli::default().compressor();
+    for quality in LARGE_WINDOW_QUALITIES {
+        for bits in [10u8, 24, 30, 62] {
+            let encoded = compressor.compress(large(quality, bits)?, b"")?;
+            assert_eq!(encoded, vec![6], "{bits} bits at quality {quality:?}");
+            assert_eq!(c_decompress(&encoded, 1).as_deref(), Some(b"".as_slice()));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn a_tiny_input_under_the_widest_window_still_decodes() -> Result<(), Box<dyn std::error::Error>> {
+    let compressor = Brotli::default().compressor();
+    for length in [1usize, 2, 3, 7, 16, 64, 256, 1024, 4096] {
+        let payload: Vec<u8> = (0..length).map(|index| (index % 251) as u8).collect();
+        for quality in LARGE_WINDOW_QUALITIES {
+            let params = large(quality, C_DECODER_MAX_WINDOW_BITS)?;
+            let encoded = compressor.compress(params, &payload)?;
+            assert_eq!(
+                c_decompress_large_window(&encoded, payload.len()).as_deref(),
+                Some(payload.as_slice()),
+                "{length} bytes at quality {quality:?}"
+            );
+            // The widest legal declaration reaches the same bytes.
+            assert_eq!(
+                compressor.compress(large(quality, 62)?, &payload)?,
+                repoint_window(&encoded, 62),
+                "{length} bytes at quality {quality:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn declaring_a_wider_window_than_the_input_costs_nothing() -> Result<(), Box<dyn std::error::Error>>
+{
+    let compressor = Brotli::default().compressor();
+    let payload: Vec<u8> = "history repeats ".repeat(4000).into_bytes();
+
+    // Everything from the widest legal declaration down to the point where the
+    // encoder's own history is the binding constraint compresses identically:
+    // the header is all that changed.
+    let widest = compressor.compress(large(QualityLevel::Q5, 62)?, &payload)?;
+    for bits in [30u8, 40, 50, 61] {
+        assert_eq!(
+            compressor
+                .compress(large(QualityLevel::Q5, bits)?, &payload)?
+                .len(),
+            widest.len(),
+            "{bits} bits"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn the_bound_covers_every_large_window_stream() -> Result<(), Box<dyn std::error::Error>> {
+    let compressor = Brotli::default().compressor();
+    let corpora: Vec<Corpus> = structural_corpora()
+        .into_iter()
+        .chain(boundary_corpora())
+        .collect();
+
+    for corpus in corpora {
+        for quality in [QualityLevel::Q3, QualityLevel::Q5, QualityLevel::Q9] {
+            for bits in [10u8, 24, 30, 62] {
+                let params = large(quality, bits)?;
+                let bound = compressor.calculate_bound(&params, corpus.data.len())?;
+                let encoded = compressor.compress(params, &corpus.data)?;
+                assert!(
+                    encoded.len() <= bound,
+                    "{}: {bits} bits at quality {quality:?}: {} > {bound}",
+                    corpus.name,
+                    encoded.len()
+                );
+
+                let mut buffer = vec![0u8; bound];
+                let written = compressor.compress_to_slice(params, &corpus.data, &mut buffer)?;
+                assert_eq!(&buffer[..written], encoded.as_slice(), "{}", corpus.name);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn streaming_and_one_shot_agree() -> Result<(), Box<dyn std::error::Error>> {
+    let compressor = Brotli::default().compressor();
+    let payload: Vec<u8> = "streamed large window payload ".repeat(500).into_bytes();
+
+    for quality in LARGE_WINDOW_QUALITIES {
+        let params = large(quality, 30)?.with_size_hint(Some(payload.len()));
+        let expected = compressor.compress(params, &payload)?;
+
+        for chunk in [
+            1usize, 2, 3, 7, 8, 15, 16, 31, 32, 63, 64, 127, 128, 255, 256, 4096,
+        ] {
+            let mut sink = compressor.compress_writer(params, Vec::new());
+            for block in payload.chunks(chunk) {
+                sink.write_all(block)?;
+            }
+            assert_eq!(
+                sink.finish()?,
+                expected,
+                "quality {quality:?}, {chunk} byte chunks"
+            );
+        }
+
+        let mut source = compressor.compress_reader(params, payload.as_slice());
+        let mut streamed = Vec::new();
+        source.read_to_end(&mut streamed)?;
+        assert_eq!(streamed, expected, "quality {quality:?}: reader");
+
+        assert_eq!(
+            c_decompress_large_window(&expected, payload.len()).as_deref(),
+            Some(payload.as_slice()),
+            "quality {quality:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn every_backend_produces_the_same_large_window_stream() -> Result<(), Box<dyn std::error::Error>> {
+    let payload: Vec<u8> = "backends must agree byte for byte "
+        .repeat(300)
+        .into_bytes();
+
+    for quality in LARGE_WINDOW_QUALITIES {
+        for bits in [10u8, 24, 30, 62] {
+            let params = large(quality, bits)?;
+            let mut expected: Option<Vec<u8>> = None;
+            for (name, level) in host_levels() {
+                let encoded = Brotli::from(level)
+                    .compressor()
+                    .compress(params, &payload)?;
+                match &expected {
+                    None => expected = Some(encoded),
+                    Some(first) => assert_eq!(
+                        &encoded, first,
+                        "{name} disagrees at quality {quality:?}, {bits} bits"
+                    ),
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn a_corpus_round_trips_at_every_quality() -> Result<(), Box<dyn std::error::Error>> {
+    let compressor = Brotli::default().compressor();
+
+    for corpus in structural_corpora() {
+        for quality in LARGE_WINDOW_QUALITIES {
+            for bits in [10u8, 25, 30] {
+                let params = large(quality, bits)?;
+                let encoded = compressor.compress(params, &corpus.data)?;
+                assert_eq!(
+                    c_decompress_large_window(&encoded, corpus.data.len()).as_deref(),
+                    Some(corpus.data.as_slice()),
+                    "{}: {bits} bits at quality {quality:?}",
+                    corpus.name
+                );
+            }
+        }
+    }
+    Ok(())
+}

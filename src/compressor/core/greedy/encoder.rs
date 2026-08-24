@@ -76,7 +76,7 @@ impl GreedyEncoder {
         size_hint: usize,
     ) -> BrotliResult<Self> {
         let resolved = GreedyParams::new(params, size_hint)?;
-        let (last_bytes, last_bytes_bits) = encode_window_bits(resolved.lgwin);
+        let (last_bytes, last_bytes_bits) = resolved.window.header();
         let references = ReferenceState::default();
         Ok(Self {
             level,
@@ -521,22 +521,6 @@ const fn remembered(cache: &DistanceCache) -> [i32; NUM_REMEMBERED_DISTANCES] {
     [cache[0], cache[1], cache[2], cache[3]]
 }
 
-/// Encodes the stream header for a window size.
-///
-/// Mirrors `EncodeWindowBits` without the large-window extension, which the
-/// public window size cannot reach.
-const fn encode_window_bits(lgwin: usize) -> (u16, u32) {
-    if lgwin == 16 {
-        (0, 1)
-    } else if lgwin == 17 {
-        (1, 7)
-    } else if lgwin > 17 {
-        ((((lgwin - 17) << 1) | 0x01) as u16, 4)
-    } else {
-        ((((lgwin - 8) << 4) | 0x01) as u16, 7)
-    }
-}
-
 /// Decides whether a meta-block is worth compressing at all.
 ///
 /// Mirrors `ShouldCompress`. Tiny blocks cannot win, and a block that is almost
@@ -606,12 +590,24 @@ mod tests {
 
     #[test]
     fn the_window_header_matches_the_reference_encoding() {
-        assert_eq!(encode_window_bits(16), (0, 1));
-        assert_eq!(encode_window_bits(17), (1, 7));
-        assert_eq!(encode_window_bits(18), (3, 4));
-        assert_eq!(encode_window_bits(22), (11, 4));
-        assert_eq!(encode_window_bits(24), (15, 4));
-        assert_eq!(encode_window_bits(10), (0x21, 7));
+        let header = |lgwin| {
+            GreedyParams::new(
+                &CompressParams::new(
+                    QualityLevel::Q5,
+                    WindowBits::standard(lgwin).expect("a legal window"),
+                ),
+                0,
+            )
+            .expect("a supported quality")
+            .window
+            .header()
+        };
+        assert_eq!(header(16), (0, 1));
+        assert_eq!(header(17), (1, 7));
+        assert_eq!(header(18), (3, 4));
+        assert_eq!(header(22), (11, 4));
+        assert_eq!(header(24), (15, 4));
+        assert_eq!(header(10), (0x21, 7));
     }
 
     #[test]

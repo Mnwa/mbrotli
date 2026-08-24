@@ -35,7 +35,7 @@ graph LR
     detect["Level::try_detect()<br/>fallback: Level::baseline()"]
     brotli["Brotli { level }"]
     compressor["Compressor { level }"]
-    params["CompressParams<br/>{ quality, lgwin }"]
+    params["CompressParams<br/>{ quality, lgwin, ... }"]
 
     oneshot["compress / compress_to_slice"]
     rd["CompressorReader<br/>{ reader, level, params, encoder }"]
@@ -109,10 +109,16 @@ classDiagram
         +direct_codes() u32
     }
     class WindowBits {
-        <<newtype usize>>
-        +MIN = 10
-        +MAX = 24
-        +DEFAULT = 22
+        <<newtype over private WindowKind>>
+        +MIN = Standard(10)
+        +MAX = Standard(24)
+        +DEFAULT = Standard(22)
+        +LARGE_MIN = Large(10)
+        +LARGE_MAX = Large(62)
+        +standard(u8) Result
+        +large(u8) Result
+        +bits() u8
+        +is_large() bool
     }
     class QualityLevel {
         <<enum Q0..Q11>>
@@ -179,15 +185,22 @@ validating at use:
   enforces all three rules the format imposes on a postfix / direct pair. The
   reference silently falls back to `(0, 0)` for a pair it cannot express; here
   that pair cannot be built, so the fallback is unreachable from outside.
-- `QualityLevel` and `CompressMode` are closed enums. `QualityLevel`'s
-  `TryFrom<usize>` rejects values above eleven and reports quality 10, which
-  the enum does not model, as `ParseQualityLevelError::Unrepresentable`.
+- `QualityLevel` and `CompressMode` are closed enums; `QualityLevel`'s
+  `TryFrom<usize>` rejects values above eleven.
+- `WindowBits` carries the header a stream uses as well as its size, over a
+  private `WindowKind` enum. `WindowBits::standard` validates `10..=24` for the
+  RFC 7932 header and `WindowBits::large` validates `10..=62` for the RFC 9841
+  one; there is no other way to build a value, so no window can exist that no
+  header can express. The two ranges overlap on purpose — a large window is
+  asked for by name, never reached by widening a number.
 
 Quality routing happens once, when a `core::driver::Encoder` is built:
 
 ```mermaid
 flowchart TD
-    q["CompressParams::quality()"] --> fast{"0 or 1?"}
+    q["CompressParams::quality()"] --> lw{"lgwin().is_large()?"}
+    lw -->|yes, quality 0 or 1| lwerr["BrotliCompressError::Shared<br/>(UnsupportedLargeWindow)"]
+    lw -->|"no, or quality 3 to 11"| fast{"0 or 1?"}
     fast -->|yes| f["Encoder::Fast(FastEncoder)"]
     fast -->|no| greedy{"3 to 9?"}
     greedy -->|yes| g["Encoder::Greedy(GreedyEncoder)"]
@@ -195,6 +208,10 @@ flowchart TD
     hq -->|yes| h["Encoder::Hq(HqEncoder)"]
     hq -->|no| err["BrotliCompressError::UnsupportedQuality<br/>(quality 2 only)"]
 ```
+
+The large-window branch runs in `core::driver` before the empty-input shortcut,
+and again in `FastEncoder::new` for the streaming adapters, which build their
+encoder lazily. See [shared-brotli.md](shared-brotli.md) §5.
 
 ### 1.4. The size hint
 
@@ -361,12 +378,17 @@ unbounded; see [hq-encoder.md](hq-encoder.md) §10.1 for what that gives up.
   encoder core rather than a variant of any of the three that exist.
 - **No decoder.** Round-trip verification uses Google's C decoder from the
   `google-brotli-ffi` workspace crate.
-- **No large-window support.** `WindowBits` stops at 24 and no encoder sets the
-  large-window bit, so the reference's `H35`, `H55` and `H65` match finders are
-  unreachable and the extended distance alphabet is never built.
-- **No compound or custom dictionary.** Only Brotli's built-in static
-  dictionary is used; the reference gates the others behind its experimental
-  flag.
+- **Large window is refused below quality 3.** RFC 9841 Large Window Brotli is
+  implemented for qualities 3 to 11, selected by
+  `WindowBits::large`; see
+  [shared-brotli.md](shared-brotli.md). Qualities 0 and 1 report
+  `SharedBrotliError::UnsupportedLargeWindow` rather than dropping the request.
+  Retained history stops at 30 bits however wide the header declares, so the
+  reference's `H35`, `H55` and `H65` match finders remain unreachable.
+- **No shared dictionary and no framing container.** The rest of RFC 9841 — the
+  caller-owned `SharedContext`, prefix and serialized dictionaries, and the
+  framing format — is not implemented. Only Brotli's built-in static dictionary
+  is used.
 - **No stream offset.** The reference parameter that starts a stream at a
   non-zero position, and poisons the distance cache to match, is not exposed.
 - **`Write::flush` does not terminate the stream.** Callers must use

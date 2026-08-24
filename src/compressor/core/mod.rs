@@ -9,4 +9,5 @@ pub(crate) mod driver;
 pub(crate) mod fast;
 pub(crate) mod greedy;
 pub(crate) mod hq;
+pub(crate) mod rfc9841;
 pub(crate) mod shared;

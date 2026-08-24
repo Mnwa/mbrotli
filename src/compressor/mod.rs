@@ -6,10 +6,12 @@
 
 mod core;
 pub mod reader;
+pub mod shared;
 pub mod writer;
 
 use crate::Brotli;
 use crate::compressor::reader::CompressorReader;
+use crate::compressor::shared::SharedBrotliError;
 use crate::compressor::writer::CompressorWriter;
 use fearless_simd::Level;
 use std::io::{Read, Write};
@@ -253,7 +255,7 @@ impl CompressParams {
     /// ```
     /// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
     ///
-    /// let lgwin = WindowBits::try_from(18)?;
+    /// let lgwin = WindowBits::standard(18)?;
     /// let params = CompressParams::new(QualityLevel::Q1, lgwin);
     ///
     /// assert_eq!(usize::from(params.lgwin()), 18);
@@ -706,36 +708,189 @@ pub enum ParseDistanceCodesError {
     Misaligned,
 }
 
-/// Base-2 logarithm of the Brotli sliding window size.
+/// Base-2 logarithm of the Brotli sliding window size, and the syntax it uses.
 ///
-/// The Brotli format restricts this value to the inclusive range
-/// `10..=24`; every way of building a `WindowBits` enforces that range,
-/// so a value of this type is always usable as a window size.
+/// Brotli has two stream headers for the window, and which one a stream carries
+/// is a choice rather than a consequence of the size:
+///
+/// - [`WindowBits::standard`] writes the RFC 7932 header and allows `10..=24`.
+/// - [`WindowBits::large`] writes the fourteen-bit [RFC 9841] Large Window
+///   header and allows `10..=62`.
+///
+/// The two ranges overlap on purpose. `WindowBits::large(22)` and
+/// `WindowBits::standard(22)` describe the same window size but produce
+/// different streams, because the header and the distance alphabet differ, so a
+/// large window is never inferred from a size — it is asked for by name.
+///
+/// Those two constructors are the only way to build a value, and each validates
+/// its own range, so a `WindowBits` always describes a window some header can
+/// express. Read it back with [`WindowBits::bits`] and
+/// [`WindowBits::is_large`].
+///
+/// A large window above 30 bits is written to the header faithfully but costs
+/// nothing: the encoder never keeps more than 30 bits of history, which is also
+/// where the reference C encoder stops.
+///
+/// [RFC 9841]: https://www.rfc-editor.org/rfc/rfc9841.html
 ///
 /// # Examples
 ///
 /// ```
 /// use mbrotli::compressor::WindowBits;
 ///
-/// let lgwin = WindowBits::try_from(16)?;
+/// let ordinary = WindowBits::standard(16)?;
+/// let large = WindowBits::large(30)?;
 ///
-/// assert_eq!(usize::from(lgwin), 16);
-/// assert!(WindowBits::try_from(9).is_err());
-/// assert!(WindowBits::try_from(25).is_err());
+/// assert_eq!(ordinary.bits(), 16);
+/// assert!(!ordinary.is_large());
+/// assert!(large.is_large());
+///
+/// // The same size, asked for two ways, is two different windows.
+/// assert_ne!(WindowBits::standard(22)?, WindowBits::large(22)?);
+///
+/// assert!(WindowBits::standard(25).is_err());
+/// assert!(WindowBits::large(63).is_err());
 /// # Ok::<(), mbrotli::compressor::ParseWindowBitsError>(())
 /// ```
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct WindowBits(usize);
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct WindowBits(WindowKind);
+
+/// Which header a window is written with, and how wide it is.
+///
+/// Private so that the only way to build a [`WindowBits`] is through a
+/// constructor that has checked the range for the header it picked.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+enum WindowKind {
+    /// An RFC 7932 window: `10..=24` bits, the ordinary stream header.
+    Standard(u8),
+    /// An RFC 9841 Large Window: `10..=62` bits, the fourteen-bit header.
+    Large(u8),
+}
 
 impl WindowBits {
-    /// Smallest window size allowed by the Brotli format: 2^10 bytes.
-    pub const MIN: Self = Self(10);
+    /// Smallest window either header allows: 2^10 bytes.
+    pub const MIN: Self = Self(WindowKind::Standard(10));
 
-    /// Largest window size allowed by the Brotli format: 2^24 bytes.
-    pub const MAX: Self = Self(24);
+    /// Largest window the RFC 7932 header allows: 2^24 bytes.
+    pub const MAX: Self = Self(WindowKind::Standard(24));
 
     /// Window size used when no other is requested: 2^22 bytes.
-    pub const DEFAULT: Self = Self(22);
+    pub const DEFAULT: Self = Self(WindowKind::Standard(22));
+
+    /// Smallest window the RFC 9841 Large Window header allows: 2^10 bytes.
+    pub const LARGE_MIN: Self = Self(WindowKind::Large(10));
+
+    /// Largest window the RFC 9841 Large Window header allows: 2^62 bytes.
+    pub const LARGE_MAX: Self = Self(WindowKind::Large(62));
+
+    /// Smallest base-2 logarithm either header allows.
+    const MIN_BITS: u8 = 10;
+
+    /// Largest base-2 logarithm the RFC 7932 header allows.
+    const MAX_STANDARD_BITS: u8 = 24;
+
+    /// Largest base-2 logarithm the RFC 9841 Large Window header allows.
+    const MAX_LARGE_BITS: u8 = 62;
+
+    /// Creates an ordinary RFC 7932 window from its base-2 logarithm.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseWindowBitsError::LowerBound`] below ten and
+    /// [`ParseWindowBitsError::UpperBound`] above twenty-four. A wider window
+    /// needs [`WindowBits::large`], which changes the stream header.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::compressor::{ParseWindowBitsError, WindowBits};
+    ///
+    /// assert_eq!(WindowBits::standard(10)?, WindowBits::MIN);
+    /// assert_eq!(WindowBits::standard(24)?, WindowBits::MAX);
+    /// assert!(matches!(
+    ///     WindowBits::standard(9),
+    ///     Err(ParseWindowBitsError::LowerBound)
+    /// ));
+    /// assert!(matches!(
+    ///     WindowBits::standard(25),
+    ///     Err(ParseWindowBitsError::UpperBound)
+    /// ));
+    /// # Ok::<(), ParseWindowBitsError>(())
+    /// ```
+    pub const fn standard(bits: u8) -> Result<Self, ParseWindowBitsError> {
+        if bits < Self::MIN_BITS {
+            return Err(ParseWindowBitsError::LowerBound);
+        }
+        if bits > Self::MAX_STANDARD_BITS {
+            return Err(ParseWindowBitsError::UpperBound);
+        }
+        Ok(Self(WindowKind::Standard(bits)))
+    }
+
+    /// Creates an RFC 9841 Large Window from its base-2 logarithm.
+    ///
+    /// Selecting this is always explicit, including for a size an ordinary
+    /// window could have expressed: it changes the stream header and the
+    /// distance alphabet, so it is never inferred from the size, the input, the
+    /// quality or the target.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseWindowBitsError::LowerBound`] below ten and
+    /// [`ParseWindowBitsError::LargeUpperBound`] above sixty-two.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::compressor::{ParseWindowBitsError, WindowBits};
+    ///
+    /// assert_eq!(WindowBits::large(10)?, WindowBits::LARGE_MIN);
+    /// assert_eq!(WindowBits::large(62)?, WindowBits::LARGE_MAX);
+    /// assert!(matches!(
+    ///     WindowBits::large(63),
+    ///     Err(ParseWindowBitsError::LargeUpperBound)
+    /// ));
+    /// # Ok::<(), ParseWindowBitsError>(())
+    /// ```
+    pub const fn large(bits: u8) -> Result<Self, ParseWindowBitsError> {
+        if bits < Self::MIN_BITS {
+            return Err(ParseWindowBitsError::LowerBound);
+        }
+        if bits > Self::MAX_LARGE_BITS {
+            return Err(ParseWindowBitsError::LargeUpperBound);
+        }
+        Ok(Self(WindowKind::Large(bits)))
+    }
+
+    /// Returns the base-2 logarithm of the window size.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::compressor::WindowBits;
+    ///
+    /// assert_eq!(WindowBits::DEFAULT.bits(), 22);
+    /// assert_eq!(WindowBits::LARGE_MAX.bits(), 62);
+    /// ```
+    pub const fn bits(self) -> u8 {
+        match self.0 {
+            WindowKind::Standard(bits) | WindowKind::Large(bits) => bits,
+        }
+    }
+
+    /// Returns whether this window uses the RFC 9841 Large Window header.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::compressor::WindowBits;
+    ///
+    /// assert!(!WindowBits::DEFAULT.is_large());
+    /// assert!(WindowBits::LARGE_MAX.is_large());
+    /// ```
+    pub const fn is_large(self) -> bool {
+        matches!(self.0, WindowKind::Large(_))
+    }
 }
 
 impl Default for WindowBits {
@@ -753,47 +908,11 @@ impl Default for WindowBits {
     }
 }
 
-impl TryFrom<usize> for WindowBits {
-    type Error = ParseWindowBitsError;
-
-    /// Creates a window size from its base-2 logarithm.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ParseWindowBitsError::LowerBound`] when `value` is below
-    /// [`WindowBits::MIN`] and [`ParseWindowBitsError::UpperBound`] when
-    /// it is above [`WindowBits::MAX`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mbrotli::compressor::{WindowBits, ParseWindowBitsError};
-    ///
-    /// assert_eq!(WindowBits::try_from(10)?, WindowBits::MIN);
-    /// assert_eq!(WindowBits::try_from(24)?, WindowBits::MAX);
-    /// assert!(matches!(
-    ///     WindowBits::try_from(9),
-    ///     Err(ParseWindowBitsError::LowerBound)
-    /// ));
-    /// assert!(matches!(
-    ///     WindowBits::try_from(25),
-    ///     Err(ParseWindowBitsError::UpperBound)
-    /// ));
-    /// # Ok::<(), ParseWindowBitsError>(())
-    /// ```
-    fn try_from(value: usize) -> Result<Self, Self::Error> {
-        if value < Self::MIN.0 {
-            return Err(ParseWindowBitsError::LowerBound);
-        }
-        if value > Self::MAX.0 {
-            return Err(ParseWindowBitsError::UpperBound);
-        }
-        Ok(Self(value))
-    }
-}
-
 impl From<WindowBits> for usize {
     /// Returns the base-2 logarithm of the window size.
+    ///
+    /// The header the window uses is dropped; [`WindowBits::is_large`] keeps
+    /// it.
     ///
     /// # Examples
     ///
@@ -805,19 +924,20 @@ impl From<WindowBits> for usize {
     /// assert_eq!(usize::from(WindowBits::DEFAULT), 22);
     /// ```
     fn from(value: WindowBits) -> Self {
-        value.0
+        Self::from(value.bits())
     }
 }
 
-/// Error returned when a window size falls outside the range the Brotli format
-/// allows.
-#[derive(Error, Debug)]
+/// Error returned when a window size falls outside the range its header allows.
+#[derive(Error, Debug, Copy, Clone, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ParseWindowBitsError {
     #[error("Window bits should be greater than or equal to 10")]
     LowerBound,
     #[error("Window bits should be less than or equal to 24")]
     UpperBound,
+    #[error("Large window bits should be less than or equal to 62")]
+    LargeUpperBound,
 }
 
 /// Compression quality: how much work the encoder spends per byte.
@@ -948,6 +1068,9 @@ pub enum BrotliCompressError {
     /// The compressed-size bound does not fit in a `usize`.
     #[error("The compressed-size bound overflows the address space")]
     BoundOverflow,
+    /// An RFC 9841 shared-Brotli feature reported a failure.
+    #[error(transparent)]
+    Shared(#[from] SharedBrotliError),
 }
 
 impl From<BrotliCompressError> for std::io::Error {

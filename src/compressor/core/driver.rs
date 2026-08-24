@@ -15,7 +15,8 @@ use fearless_simd::Level;
 use super::fast::FastEncoder;
 use super::greedy::encoder::GreedyEncoder;
 use super::hq::encoder::HqEncoder;
-use crate::compressor::{BrotliCompressError, BrotliResult, CompressParams};
+use crate::compressor::shared::SharedBrotliError;
+use crate::compressor::{BrotliCompressError, BrotliResult, CompressParams, QualityLevel};
 
 /// The encoder a quality routes to.
 pub(crate) enum Encoder {
@@ -90,6 +91,33 @@ impl Encoder {
             Self::Greedy(encoder) => encoder.encode_block(input, is_last),
             Self::Hq(encoder) => encoder.encode_block(input, is_last),
         }
+    }
+}
+
+/// Rejects a large window at a quality that cannot carry one.
+///
+/// Runs before the empty-input shortcut, so an explicit RFC 9841 request is
+/// never quietly dropped on the way to a one-byte stream. It only inspects the
+/// field this extension added, which is why no previously constructible
+/// parameter set changes behaviour: without a large window the check is a
+/// predictable branch that returns immediately.
+const fn check_large_window(params: &CompressParams) -> BrotliResult<()> {
+    if !params.lgwin().is_large() {
+        return Ok(());
+    }
+    match params.quality() {
+        // The fast qualities write distances through a static entropy model
+        // built for the RFC 7932 alphabet and cannot carry the wider one.
+        QualityLevel::Q0 => Err(BrotliCompressError::Shared(
+            SharedBrotliError::UnsupportedLargeWindow { quality: 0 },
+        )),
+        QualityLevel::Q1 => Err(BrotliCompressError::Shared(
+            SharedBrotliError::UnsupportedLargeWindow { quality: 1 },
+        )),
+        // Quality two has no encoder at all, which is the more useful thing to
+        // report.
+        QualityLevel::Q2 => Err(BrotliCompressError::UnsupportedQuality(2)),
+        _ => Ok(()),
     }
 }
 
@@ -223,6 +251,7 @@ pub(crate) fn compress_to_vec(
     src: &[u8],
     out: &mut Vec<u8>,
 ) -> BrotliResult<()> {
+    check_large_window(params)?;
     if src.is_empty() {
         out.push(6);
         return Ok(());
@@ -256,6 +285,7 @@ pub(crate) fn compress_to_slice(
     src: &[u8],
     dst: &mut [u8],
 ) -> BrotliResult<usize> {
+    check_large_window(params)?;
     if src.is_empty() {
         let target = dst.first_mut().ok_or(BrotliCompressError::OutputTooSmall)?;
         *target = 6;
@@ -291,8 +321,8 @@ mod tests {
     use super::*;
     use crate::compressor::{QualityLevel, WindowBits};
 
-    fn params(quality: QualityLevel, lgwin: usize) -> CompressParams {
-        let lgwin = WindowBits::try_from(lgwin).unwrap_or(WindowBits::DEFAULT);
+    fn params(quality: QualityLevel, lgwin: u8) -> CompressParams {
+        let lgwin = WindowBits::standard(lgwin).unwrap_or(WindowBits::DEFAULT);
         CompressParams::new(quality, lgwin)
     }
 

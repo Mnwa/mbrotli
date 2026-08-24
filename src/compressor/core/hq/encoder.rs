@@ -78,7 +78,7 @@ impl HqEncoder {
     /// outside the range this encoder implements.
     pub(crate) fn new(level: Level, params: &CompressParams) -> BrotliResult<Self> {
         let resolved = HqParams::new(params)?;
-        let (last_bytes, last_bytes_bits) = encode_window_bits(resolved.lgwin);
+        let (last_bytes, last_bytes_bits) = resolved.window.header();
         let references = ZopfliState::default();
         Ok(Self {
             level,
@@ -514,22 +514,6 @@ impl HqEncoder {
     }
 }
 
-/// Encodes the stream header for a window size.
-///
-/// Mirrors `EncodeWindowBits` without the large-window extension, which the
-/// public window size cannot reach.
-const fn encode_window_bits(lgwin: usize) -> (u16, u32) {
-    if lgwin == 16 {
-        (0, 1)
-    } else if lgwin == 17 {
-        (1, 7)
-    } else if lgwin > 17 {
-        ((((lgwin - 17) << 1) | 0x01) as u16, 4)
-    } else {
-        ((((lgwin - 8) << 4) | 0x01) as u16, 7)
-    }
-}
-
 /// Decides whether a meta-block is worth compressing at all.
 ///
 /// Mirrors `ShouldCompress`. Even at these qualities the reference refuses to
@@ -605,10 +589,19 @@ mod tests {
 
     #[test]
     fn the_window_header_matches_the_reference_encoding() {
-        assert_eq!(encode_window_bits(16), (0, 1));
-        assert_eq!(encode_window_bits(17), (1, 7));
-        assert_eq!(encode_window_bits(22), (11, 4));
-        assert_eq!(encode_window_bits(10), (0x21, 7));
+        let header = |lgwin| {
+            HqParams::new(&CompressParams::new(
+                QualityLevel::Q11,
+                WindowBits::standard(lgwin).expect("a legal window"),
+            ))
+            .expect("a supported quality")
+            .window
+            .header()
+        };
+        assert_eq!(header(16), (0, 1));
+        assert_eq!(header(17), (1, 7));
+        assert_eq!(header(22), (11, 4));
+        assert_eq!(header(10), (0x21, 7));
     }
 
     #[test]

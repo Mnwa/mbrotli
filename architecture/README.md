@@ -13,7 +13,8 @@ error propagation, with Mermaid diagrams for the mechanics it describes.
 | [fast-encoder.md](fast-encoder.md) | Quality 0 and quality 1 encoder core: module map, workspace ownership, fragment lifecycle, the two scan state machines, bitstream layer, SIMD dispatch points, and table-bit specialisation. |
 | [greedy-encoder.md](greedy-encoder.md) | Quality 3 to 9 encoder core: parameter resolution and the deterministic hasher plan, greedy and lazy command generation, the bucket and forgetful-chain match finders, meta-block splitting and context modelling, and the single SIMD dispatch. |
 | [hq-encoder.md](hq-encoder.md) | Quality 10 and 11 encoder core: the binary-tree match finder, the Zopfli dynamic program and its numerical-determinism contract, the high-quality block splitter and histogram clustering, and the layer-by-layer differential harness. |
-| [fuzzing.md](fuzzing.md) | AFL fuzzing subsystem: package isolation, the engine-neutral target layer, input model and payload cap, the eleven targets and their oracles, backend deduplication, and the crash-to-regression lifecycle. |
+| [shared-brotli.md](shared-brotli.md) | RFC 9841 subsystem: what of Shared Brotli exists today — Large Window selection, declared window versus retained history, the widened distance alphabet and its per-meta-block retune, where a large window is refused, and the shared error type — plus the shared-dictionary and framing work that is not written yet. |
+| [fuzzing.md](fuzzing.md) | AFL fuzzing subsystem: package isolation, the engine-neutral target layer, input model and payload cap, the eighteen targets and their oracles, backend deduplication, and the crash-to-regression lifecycle. |
 
 ## Module map
 
@@ -24,12 +25,14 @@ graph TD
         comp["compressor<br/>(Compressor, params, errors)"]
         reader["compressor::reader<br/>(CompressorReader: Read)"]
         writer["compressor::writer<br/>(CompressorWriter: Write)"]
+        sharedapi["compressor::shared<br/>(SharedBrotliError; RFC 9841)"]
     end
 
     subgraph private["Private implementation"]
         core["compressor::core"]
         bound["core::bound<br/>(compressed-size bound)"]
         driver["core::driver<br/>(quality routing, one-shot entry points)"]
+        rfc["core::rfc9841<br/>(ResolvedWindow: header,<br/>declared vs retained window)"]
         shared["core::shared<br/>(bits, huffman, match_len, fast_log,<br/>command, histogram, ringbuffer, dictionary,<br/>block_split, metablock, bitstream,<br/>distance, format, bit_cost)"]
         fast["core::fast<br/>(FastEncoder, SIMD dispatch)"]
         q0["fast::q0<br/>(one-pass encoder)"]
@@ -50,9 +53,15 @@ graph TD
     lib --> comp
     comp --> reader
     comp --> writer
+    comp --> sharedapi
     comp --> core
     core --> bound
     core --> driver
+    core --> rfc
+    driver --> rfc
+    rfc --> fast
+    rfc --> greedy
+    rfc --> hq
     driver --> fast
     driver --> greedy
     driver --> hq
@@ -75,7 +84,7 @@ graph TD
     ffi -.->|benches and tests| comp
 
     classDef privateNode fill:#f6e8c3,stroke:#8a6d3b;
-    class core,bound,driver,shared,fast,q0,q1,greedy,gsearch,gblock,hq,hsearch,hblock privateNode;
+    class core,bound,driver,rfc,shared,fast,q0,q1,greedy,gsearch,gblock,hq,hsearch,hblock privateNode;
 ```
 
 `core` and everything below it are private: no `core` type, SIMD type detail,
@@ -89,6 +98,8 @@ the ergonomic surface; `core` owns the algorithms.
 | `src/lib.rs` | Crate root; `Brotli` entry point and SIMD level detection. |
 | `src/compressor/` | Public compressor API, parameters, error types. |
 | `src/compressor/core/` | Private implementation modules: bound, quality routing. |
+| `src/compressor/shared/` | Public RFC 9841 surface: the shared-Brotli error type. |
+| `src/compressor/core/rfc9841/` | Private RFC 9841 wire primitives: window resolution and stream-header encoding. |
 | `src/compressor/core/shared/` | Everything more than one quality needs: the bit writer, Huffman builders, match-length scan and reference logarithms, plus the shape of a compressed meta-block — commands, histograms, block splits, the distance alphabet, context modes, the ring buffer, the static dictionary and the meta-block writer. |
 | `src/compressor/core/fast/` | Quality 0 and quality 1 encoders and their SIMD dispatch. |
 | `src/compressor/core/greedy/` | Quality 3 to 9 encoder: match finders, greedy backward-reference search, greedy meta-block builder and its SIMD dispatch. |

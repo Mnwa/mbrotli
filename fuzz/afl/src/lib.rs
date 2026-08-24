@@ -111,7 +111,7 @@ pub fn decode_case(input: &[u8]) -> Case<'_> {
         |index: usize, fallback: u8| usize::from(header.get(index).copied().unwrap_or(fallback));
 
     let quality = IMPLEMENTED_QUALITIES[byte(0, 0) % IMPLEMENTED_QUALITIES.len()];
-    let lgwin = WindowBits::try_from(10 + byte(1, 12) % 15).unwrap_or(WindowBits::DEFAULT);
+    let lgwin = WindowBits::standard(10 + (byte(1, 12) % 15) as u8).unwrap_or(WindowBits::DEFAULT);
     let chunk = 1usize << (byte(2, 12) % 18);
 
     let flags = byte(3, 0);
@@ -320,6 +320,53 @@ pub fn c_decompress(input: &[u8], expected_size: usize) -> Option<Vec<u8>> {
         return None;
     }
     output.truncate(size);
+    Some(output)
+}
+
+/// Decodes `input` with the pinned C decoder in large-window mode.
+///
+/// The RFC 9841 fourteen-bit window header is only recognised when the decoder
+/// has been told to expect it, which the one-shot entry point cannot do.
+///
+/// # Panics
+///
+/// Panics when the decoder cannot be created or refuses the parameter, which
+/// means the harness is broken rather than the encoder.
+pub fn c_decompress_large_window(input: &[u8], expected_size: usize) -> Option<Vec<u8>> {
+    let mut output = vec![0u8; expected_size.max(1)];
+    unsafe {
+        let state = ffi::BrotliDecoderCreateInstance(None, None, std::ptr::null_mut());
+        assert!(!state.is_null(), "the C decoder could not be created");
+        assert_eq!(
+            ffi::BrotliDecoderSetParameter(state, ffi::BROTLI_DECODER_PARAM_LARGE_WINDOW, 1),
+            ffi::BROTLI_TRUE,
+            "the C decoder rejected the large window parameter"
+        );
+
+        let mut available_in = input.len();
+        let mut next_in = input.as_ptr();
+        let mut available_out = output.len();
+        let mut next_out = output.as_mut_ptr();
+        let mut total_out = 0usize;
+        let result = ffi::BrotliDecoderDecompressStream(
+            state,
+            &raw mut available_in,
+            &raw mut next_in,
+            &raw mut available_out,
+            &raw mut next_out,
+            &raw mut total_out,
+        );
+        let finished = ffi::BrotliDecoderIsFinished(state);
+        ffi::BrotliDecoderDestroyInstance(state);
+
+        if result != ffi::BROTLI_DECODER_RESULT_SUCCESS
+            || finished != ffi::BROTLI_TRUE
+            || available_in != 0
+        {
+            return None;
+        }
+        output.truncate(total_out);
+    }
     Some(output)
 }
 

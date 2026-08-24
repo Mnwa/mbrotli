@@ -1,5 +1,6 @@
 //! Upper bound on the size of a compressed stream.
 
+use crate::compressor::core::rfc9841::window::MAX_ENCODER_WINDOW_BITS;
 use crate::compressor::core::shared::constants::{OUTPUT_RESERVE_CONST, OUTPUT_SLACK};
 use crate::compressor::{BrotliCompressError, BrotliResult, CompressParams, QualityLevel};
 
@@ -46,6 +47,11 @@ pub(crate) const fn bound(params: &CompressParams, input_size: usize) -> BrotliR
 /// cut the input at the window size; the greedy ones use the block size, which
 /// is fourteen bits below quality four and the requested or default sixteen
 /// above it.
+///
+/// A window is counted at the history the encoder actually keeps rather than
+/// at what its header declares, because a declared sixty-two-bit window would
+/// otherwise claim the whole input as one fragment and stop reserving
+/// per-meta-block overhead the encoder still pays.
 const fn fragment_bits(params: &CompressParams) -> usize {
     match params.quality {
         QualityLevel::Q3 => 14,
@@ -55,7 +61,14 @@ const fn fragment_bits(params: &CompressParams) -> usize {
         },
         // Quality 0 and 1 cut at the window size; an unimplemented quality
         // never reaches an encoder, but still has to return some bound.
-        _ => params.lgwin.0,
+        _ => {
+            let bits = params.lgwin.bits() as usize;
+            if bits > MAX_ENCODER_WINDOW_BITS {
+                MAX_ENCODER_WINDOW_BITS
+            } else {
+                bits
+            }
+        }
     }
 }
 
@@ -64,10 +77,10 @@ mod tests {
     use super::*;
     use crate::compressor::{ParseWindowBitsError, QualityLevel, WindowBits};
 
-    fn params(lgwin: usize) -> Result<CompressParams, ParseWindowBitsError> {
+    fn params(lgwin: u8) -> Result<CompressParams, ParseWindowBitsError> {
         Ok(CompressParams::new(
             QualityLevel::Q0,
-            WindowBits::try_from(lgwin)?,
+            WindowBits::standard(lgwin)?,
         ))
     }
 

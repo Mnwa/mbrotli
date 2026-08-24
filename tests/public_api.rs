@@ -4,6 +4,7 @@
 mod support;
 
 use mbrotli::Brotli;
+use mbrotli::compressor::shared::SharedBrotliError;
 use mbrotli::compressor::{
     BlockBits, BrotliCompressError, CompressMode, CompressParams, Compressor, DistanceCodes,
     ParseBlockBitsError, ParseDistanceCodesError, ParseQualityLevelError, ParseWindowBitsError,
@@ -396,4 +397,82 @@ fn the_size_hint_is_what_makes_streaming_match_one_shot() {
     sink.write_all(&payload).expect("write failed");
     let streamed = sink.finish().expect("finish failed");
     assert_eq!(streamed, one_shot);
+}
+
+#[test]
+fn a_large_window_is_a_separate_constructor_not_a_wider_range() -> Result<(), ParseWindowBitsError>
+{
+    // Every size the ordinary header allows is also a legal large window, and
+    // the two are never the same value.
+    for bits in 10u8..=24 {
+        let ordinary = WindowBits::standard(bits)?;
+        let large = WindowBits::large(bits)?;
+        assert_eq!(ordinary.bits(), large.bits());
+        assert_ne!(ordinary, large);
+        assert!(!ordinary.is_large());
+        assert!(large.is_large());
+    }
+    // And the large header reaches sizes the ordinary one cannot express.
+    for bits in 25u8..=62 {
+        assert!(WindowBits::large(bits)?.is_large());
+        assert!(WindowBits::standard(bits).is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn window_bits_reject_what_their_header_cannot_express() {
+    assert!(matches!(
+        WindowBits::standard(0),
+        Err(ParseWindowBitsError::LowerBound)
+    ));
+    assert!(matches!(
+        WindowBits::large(9),
+        Err(ParseWindowBitsError::LowerBound)
+    ));
+    assert!(matches!(
+        WindowBits::standard(25),
+        Err(ParseWindowBitsError::UpperBound)
+    ));
+    assert!(matches!(
+        WindowBits::large(63),
+        Err(ParseWindowBitsError::LargeUpperBound)
+    ));
+}
+
+#[test]
+fn the_shared_error_travels_transparently() {
+    let inner = SharedBrotliError::UnsupportedLargeWindow { quality: 0 };
+    assert_eq!(
+        inner.to_string(),
+        "Quality level 0 does not implement large window Brotli"
+    );
+
+    let outer = BrotliCompressError::from(inner);
+    // `#[error(transparent)]`: the wrapper adds no text of its own.
+    assert_eq!(outer.to_string(), inner.to_string());
+    assert!(matches!(
+        outer,
+        BrotliCompressError::Shared(SharedBrotliError::UnsupportedLargeWindow { quality: 0 })
+    ));
+
+    // And it survives the trip through `std::io::Error` the adapters take.
+    let converted = std::io::Error::from(BrotliCompressError::from(inner));
+    assert!(converted.to_string().contains("large window"));
+}
+
+#[test]
+fn a_finished_empty_stream_still_declares_its_large_window()
+-> Result<(), Box<dyn std::error::Error>> {
+    let compressor = Brotli::default().compressor();
+    let params = CompressParams::new(QualityLevel::Q5, WindowBits::large(30)?);
+
+    // The one-shot shortcut answers an empty input with an ordinary one-byte
+    // stream, matching the reference; a streaming session has no such shortcut
+    // and emits the header that was asked for.
+    assert_eq!(compressor.compress(params, b"")?, vec![6]);
+    let streamed = compressor.compress_writer(params, Vec::new()).finish()?;
+    assert_eq!(streamed[0], 0x11, "the large window marker");
+    assert_eq!(streamed[1] & 0x3F, 30, "the declared window");
+    Ok(())
 }

@@ -7,12 +7,16 @@
 # Reusing it keeps the seeds identical to what upstream considers interesting
 # instead of duplicating a hand-rolled corpus in this repository.
 #
-# Two corpora are produced:
+# Three corpora are produced:
 #
-#   seeds/generic  the raw test data, for targets that fuzz the payload only
-#   seeds/params   the same files behind a six byte parameter header, for
-#                  targets that decode quality, window size, chunk size, mode,
-#                  block size and distance layout from the start of the input
+#   seeds/generic       the raw test data, for targets that fuzz the payload
+#                       only
+#   seeds/params        the same files behind a six byte parameter header, for
+#                       targets that decode quality, window size, chunk size,
+#                       mode, block size and distance layout from the start of
+#                       the input
+#   seeds/large_window  the parameter seeds behind one more byte, the RFC 9841
+#                       large window the large_window target reads first
 #
 # Usage: fuzz/afl/prepare-seeds.sh
 
@@ -22,6 +26,7 @@ here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 testdata="$here/../../brotli-ffi/vendor/brotli/tests/testdata"
 generic="$here/seeds/generic"
 params="$here/seeds/params"
+large_window="$here/seeds/large_window"
 
 # AFL refuses seeds above its default input cap, and huge seeds slow the
 # fuzzer down far more than they help coverage.
@@ -33,8 +38,8 @@ if [ ! -d "$testdata" ]; then
     exit 1
 fi
 
-rm -rf "$generic" "$params"
-mkdir -p "$generic" "$params"
+rm -rf "$generic" "$params" "$large_window"
+mkdir -p "$generic" "$params" "$large_window"
 
 count=0
 for path in "$testdata"/*; do
@@ -91,5 +96,19 @@ for path in "$generic"/*; do
     done
 done
 
+# The large window target reads one byte before the parameter header. Seed it
+# with the floor, the widest window the pinned C decoder reads, the widest the
+# format allows, and the ordinary default, so a campaign starts with both sides
+# of the decoder's limit already covered.
+for path in "$params"/*; do
+    name=$(basename "$path")
+    for window in 10 22 30 62; do
+        target="$large_window/lw$window-$name"
+        printf "$(printf '\\%03o' "$window")" > "$target"
+        cat "$path" >> "$target"
+    done
+done
+
 echo "prepared $count generic seeds in $generic"
 echo "prepared $(ls "$params" | wc -l | tr -d ' ') parameter seeds in $params"
+echo "prepared $(ls "$large_window" | wc -l | tr -d ' ') large window seeds in $large_window"

@@ -46,7 +46,7 @@ fn vendor_corpus_matches_the_c_encoder() {
     for corpus in vendor_corpora(MAX_CORPUS_BYTES) {
         for quality in IMPLEMENTED_QUALITIES {
             let data = &corpus.data[..corpus.data.len().min(corpus_limit(quality))];
-            for lgwin in [10usize, 16, 18, 22, 24] {
+            for lgwin in [10u8, 16, 18, 22, 24] {
                 let expected = c_compress(quality_number(quality), lgwin as i32, data);
                 let actual = compressor
                     .compress(params(quality, lgwin), data)
@@ -118,7 +118,7 @@ fn multi_fragment_input_matches_the_c_encoder() {
         } else {
             &whole[..]
         };
-        for lgwin in [18usize, 22, 24] {
+        for lgwin in [18u8, 22, 24] {
             let expected = c_compress(quality_number(quality), lgwin as i32, data);
             let actual = compressor
                 .compress(params(quality, lgwin), data)

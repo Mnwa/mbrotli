@@ -6,8 +6,12 @@
 //! committed inputs through the very same functions, so a finding reproduces
 //! identically under AFL, under `cargo test` and under a debugger.
 
-use crate::{Context, IMPLEMENTED_QUALITIES, assert_round_trip, c_compress_with, cap, decode_case};
+use crate::{
+    Context, IMPLEMENTED_QUALITIES, assert_round_trip, c_compress_with, c_decompress_large_window,
+    cap, decode_case,
+};
 use mbrotli::Brotli;
+use mbrotli::compressor::shared::SharedBrotliError;
 use mbrotli::compressor::{
     BrotliCompressError, CompressParams, ParseQualityLevelError, ParseWindowBitsError,
     QualityLevel, WindowBits,
@@ -40,6 +44,7 @@ pub const TARGETS: &[(&str, TargetFn)] = &[
     ("streaming_equivalence", streaming_equivalence),
     ("output_capacity", output_capacity),
     ("parameter_parsing", parameter_parsing),
+    ("large_window", large_window),
 ];
 
 /// Quality 0 must never panic and must always round-trip.
@@ -234,7 +239,7 @@ pub fn parameter_parsing(ctx: &Context, input: &[u8]) {
     // Concentrated on the interesting neighbourhood: the 0..=11 range the API
     // models, and the first values above the ceiling.
     let quality_value = usize::from(header.first().copied().unwrap_or(0)) % 20;
-    let window_value = usize::from(header.get(1).copied().unwrap_or(22));
+    let window_value = header.get(1).copied().unwrap_or(22);
 
     let quality = QualityLevel::try_from(quality_value);
     match (quality_value, &quality) {
@@ -247,14 +252,20 @@ pub fn parameter_parsing(ctx: &Context, input: &[u8]) {
         _ => panic!("quality {quality_value} produced {quality:?}"),
     }
 
-    let window = WindowBits::try_from(window_value);
+    let window = WindowBits::standard(window_value);
     match (window_value, &window) {
         (..10, Err(ParseWindowBitsError::LowerBound)) => {}
-        (10..=24, Ok(parsed)) => assert_eq!(
-            usize::from(*parsed),
-            window_value,
-            "window bits did not round-trip"
-        ),
+        (10..=24, Ok(parsed)) => {
+            assert_eq!(
+                parsed.bits(),
+                window_value,
+                "window bits did not round-trip"
+            );
+            assert!(
+                !parsed.is_large(),
+                "standard() must select the ordinary header"
+            );
+        }
         (25.., Err(ParseWindowBitsError::UpperBound)) => {}
         _ => panic!("window {window_value} produced {window:?}"),
     }
@@ -305,5 +316,139 @@ pub fn parameter_parsing(ctx: &Context, input: &[u8]) {
     assert!(
         source.read_to_end(&mut drained).is_err(),
         "the reader must refuse quality {quality_value}"
+    );
+}
+
+/// Returns `params` with a different window and everything else untouched.
+///
+/// The window is part of `CompressParams`'s constructor rather than a setter,
+/// so swapping it means rebuilding the value around it.
+fn rebuild(params: &CompressParams, window: WindowBits) -> CompressParams {
+    CompressParams::new(params.quality(), window)
+        .with_mode(params.mode())
+        .with_size_hint(params.size_hint())
+        .with_block_bits(params.lgblock())
+        .with_distance_codes(params.distance_codes())
+        .with_literal_context_modeling(params.literal_context_modeling())
+}
+
+/// Widest window the pinned C decoder accepts (`BROTLI_LARGE_MAX_WBITS`).
+///
+/// RFC 9841 allows 62; the pinned reference is built for 32-bit arithmetic and
+/// refuses to decode a wider declaration. Above this the target checks the
+/// header and the payload against the stream the decoder did accept.
+const C_DECODER_MAX_WINDOW_BITS: u8 = 30;
+
+/// RFC 9841 large-window streams must round-trip and stay deterministic.
+///
+/// Reuses [`decode_case`] for the payload, the quality and the distance-code
+/// layout, then overrides the window from a byte of its own. That byte sweeps
+/// the whole `10..=62` range plus the values on either side of it, so the
+/// validating conversion, the fourteen-bit header, the widened distance
+/// alphabet and its per-meta-block retune are all driven from fuzz input.
+///
+/// # Panics
+///
+/// Panics when a legal window is refused, an illegal one is accepted, the
+/// stream does not round-trip, the encoder is not deterministic, the output
+/// exceeds the bound, or a declaration wider than the C decoder's limit
+/// changes anything but the six header bits.
+pub fn large_window(ctx: &Context, input: &[u8]) {
+    let (head, rest) = input.split_at(input.len().min(1));
+    let case = decode_case(rest);
+    // Concentrated on the legal range and the first values outside it.
+    let requested = head.first().copied().unwrap_or(22) % 70;
+
+    let window = match WindowBits::large(requested) {
+        Ok(window) => {
+            assert_eq!(window.bits(), requested, "the window did not round-trip");
+            assert!(window.is_large(), "large() must select the large header");
+            window
+        }
+        Err(ParseWindowBitsError::LowerBound) => {
+            assert!(requested < 10, "{requested} is a legal window");
+            return;
+        }
+        Err(ParseWindowBitsError::LargeUpperBound) => {
+            assert!(requested > 62, "{requested} is a legal window");
+            return;
+        }
+        Err(other) => panic!("window {requested} produced {other:?}"),
+    };
+
+    let params = rebuild(&case.params, window);
+    assert_eq!(params.lgwin(), window);
+    assert!(params.lgwin().is_large());
+
+    // Qualities zero and one refuse rather than dropping the request, and
+    // refuse it the same way whatever the payload is.
+    if matches!(params.quality(), QualityLevel::Q0 | QualityLevel::Q1) {
+        assert!(
+            matches!(
+                ctx.compressor.compress(params, case.data),
+                Err(BrotliCompressError::Shared(
+                    SharedBrotliError::UnsupportedLargeWindow { .. }
+                ))
+            ),
+            "a fast quality must refuse a large window"
+        );
+        return;
+    }
+
+    let bound = ctx
+        .compressor
+        .calculate_bound(&params, case.data.len())
+        .expect("bound overflowed");
+    let compressed = ctx
+        .compressor
+        .compress(params, case.data)
+        .expect("compression failed");
+    assert!(compressed.len() <= bound, "output exceeded the bound");
+    let again = ctx
+        .compressor
+        .compress(params, case.data)
+        .expect("compression failed");
+    assert_eq!(compressed, again, "compression is not deterministic");
+
+    for &level in &ctx.levels {
+        let actual = Brotli::from(level)
+            .compressor()
+            .compress(params, case.data)
+            .expect("compression failed");
+        assert_eq!(actual, compressed, "backends disagree");
+    }
+
+    if case.data.is_empty() {
+        // The one-shot shortcut answers an empty input with an ordinary
+        // one-byte stream, exactly as the reference does.
+        assert_eq!(compressed, vec![6], "an empty input must stay one byte");
+        return;
+    }
+
+    if requested <= C_DECODER_MAX_WINDOW_BITS {
+        let decoded = c_decompress_large_window(&compressed, case.data.len())
+            .unwrap_or_else(|| panic!("the decoder rejected a {} byte stream", compressed.len()));
+        assert_eq!(decoded, case.data, "decoded content differs");
+        return;
+    }
+
+    // Above the decoder's limit, the encoder still keeps at most thirty bits of
+    // history, so the stream must be the thirty-bit stream with a different
+    // window written into its header — and that one has to decode.
+    let narrow_window =
+        WindowBits::large(C_DECODER_MAX_WINDOW_BITS).expect("thirty is a legal window");
+    let narrow = ctx
+        .compressor
+        .compress(rebuild(&params, narrow_window), case.data)
+        .expect("compression failed");
+    let decoded = c_decompress_large_window(&narrow, case.data.len())
+        .unwrap_or_else(|| panic!("the decoder rejected a {} byte stream", narrow.len()));
+    assert_eq!(decoded, case.data, "decoded content differs");
+
+    let mut expected = narrow;
+    expected[1] = (expected[1] & 0xC0) | (requested & 0x3F);
+    assert_eq!(
+        compressed, expected,
+        "a wider declaration changed more than the header"
     );
 }
