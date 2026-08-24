@@ -1,7 +1,7 @@
 //! Streaming compression from a [`Read`] source.
 
 use crate::compressor::CompressParams;
-use crate::compressor::core::fast::FastEncoder;
+use crate::compressor::core::driver::Encoder;
 use fearless_simd::Level;
 use std::io::{Error, ErrorKind, Read, Result};
 
@@ -32,7 +32,7 @@ pub struct CompressorReader<T: Read> {
     pub(crate) reader: T,
     pub(crate) level: Level,
     pub(crate) params: CompressParams,
-    pub(crate) encoder: Option<FastEncoder>,
+    pub(crate) encoder: Option<Encoder>,
     pub(crate) input: Vec<u8>,
     pub(crate) output: Vec<u8>,
     pub(crate) served: usize,
@@ -73,9 +73,13 @@ impl<T: Read> CompressorReader<T> {
     }
 
     /// Returns the encoder, creating it on first use.
-    fn encoder(&mut self) -> Result<&mut FastEncoder> {
+    fn encoder(&mut self) -> Result<&mut Encoder> {
         if self.encoder.is_none() {
-            let encoder = FastEncoder::new(self.level, &self.params)?;
+            let encoder = Encoder::new(
+                self.level,
+                &self.params,
+                self.params.size_hint().unwrap_or(0),
+            )?;
             self.input.reserve(encoder.block_size_limit());
             self.encoder = Some(encoder);
         }

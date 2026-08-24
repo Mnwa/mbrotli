@@ -36,6 +36,99 @@ pub fn c_compress(quality: c_int, lgwin: c_int, input: &[u8]) -> Vec<u8> {
     output
 }
 
+/// Every encoder parameter the C harness can set.
+#[derive(Copy, Clone, Debug)]
+pub struct CParams {
+    pub quality: c_int,
+    pub lgwin: c_int,
+    pub mode: ffi::BrotliEncoderMode,
+    pub size_hint: Option<u32>,
+    pub lgblock: Option<u32>,
+    pub npostfix: u32,
+    pub ndirect: u32,
+    pub disable_literal_context_modeling: bool,
+}
+
+impl CParams {
+    /// Returns the defaults, for `quality` and `lgwin`.
+    pub fn new(quality: c_int, lgwin: c_int) -> Self {
+        Self {
+            quality,
+            lgwin,
+            mode: ffi::BROTLI_DEFAULT_MODE,
+            size_hint: None,
+            lgblock: None,
+            npostfix: 0,
+            ndirect: 0,
+            disable_literal_context_modeling: false,
+        }
+    }
+}
+
+/// Compresses `input` with the pinned C encoder through its streaming API.
+///
+/// Unlike [`c_compress`] this sets every parameter explicitly, so it can
+/// reproduce configurations the one-shot entry point does not expose.
+///
+/// # Panics
+///
+/// Panics when the C encoder reports failure, which would mean the harness is
+/// misconfigured rather than the encoder under test being wrong.
+pub fn c_compress_with(params: CParams, input: &[u8]) -> Vec<u8> {
+    let capacity = unsafe { ffi::BrotliEncoderMaxCompressedSize(input.len()) }.max(64) + 4096;
+    let mut output = vec![0u8; capacity];
+    unsafe {
+        let state = ffi::BrotliEncoderCreateInstance(None, None, std::ptr::null_mut());
+        assert!(!state.is_null(), "the C encoder could not be created");
+        let set = |parameter, value| {
+            assert_eq!(
+                ffi::BrotliEncoderSetParameter(state, parameter, value),
+                ffi::BROTLI_TRUE,
+                "the C encoder rejected a parameter"
+            );
+        };
+        set(ffi::BROTLI_PARAM_QUALITY, params.quality as u32);
+        set(ffi::BROTLI_PARAM_LGWIN, params.lgwin as u32);
+        set(ffi::BROTLI_PARAM_MODE, params.mode as u32);
+        set(ffi::BROTLI_PARAM_NPOSTFIX, params.npostfix);
+        set(ffi::BROTLI_PARAM_NDIRECT, params.ndirect);
+        set(
+            ffi::BROTLI_PARAM_DISABLE_LITERAL_CONTEXT_MODELING,
+            u32::from(params.disable_literal_context_modeling),
+        );
+        if let Some(size_hint) = params.size_hint {
+            set(ffi::BROTLI_PARAM_SIZE_HINT, size_hint);
+        }
+        if let Some(lgblock) = params.lgblock {
+            set(ffi::BROTLI_PARAM_LGBLOCK, lgblock);
+        }
+
+        let mut available_in = input.len();
+        let mut next_in = input.as_ptr();
+        let mut available_out = output.len();
+        let mut next_out = output.as_mut_ptr();
+        let mut total_out = 0usize;
+        let ok = ffi::BrotliEncoderCompressStream(
+            state,
+            ffi::BROTLI_OPERATION_FINISH,
+            &raw mut available_in,
+            &raw mut next_in,
+            &raw mut available_out,
+            &raw mut next_out,
+            &raw mut total_out,
+        );
+        assert_eq!(ok, ffi::BROTLI_TRUE, "the C encoder failed");
+        assert_eq!(
+            ffi::BrotliEncoderIsFinished(state),
+            ffi::BROTLI_TRUE,
+            "the C encoder did not finish"
+        );
+        ffi::BrotliEncoderDestroyInstance(state);
+        output.truncate(total_out);
+    }
+    output
+}
+
 /// Decompresses `input` with the pinned C decoder.
 pub fn c_decompress(input: &[u8], expected_size: usize) -> Option<Vec<u8>> {
     let mut output = vec![0u8; expected_size.max(1)];
@@ -70,8 +163,35 @@ pub fn params(quality: QualityLevel, lgwin: usize) -> CompressParams {
     CompressParams::new(quality, lgwin)
 }
 
+/// Builds parameters that pin the size hint, so streaming and one-shot agree.
+///
+/// The one-shot entry points substitute the input length for a missing hint,
+/// exactly as the reference one-shot API does, while the streaming adapters
+/// have no length to substitute. Qualities four and five choose their match
+/// finder from the hint, so a comparison between the two has to fix it.
+///
+/// # Panics
+///
+/// Panics when `lgwin` is outside the range the Brotli format allows.
+pub fn params_with_hint(quality: QualityLevel, lgwin: usize, size_hint: usize) -> CompressParams {
+    params(quality, lgwin).with_size_hint(Some(size_hint))
+}
+
 /// The two qualities the fast encoder implements.
 pub const FAST_QUALITIES: [QualityLevel; 2] = [QualityLevel::Q0, QualityLevel::Q1];
+
+/// The three qualities the greedy encoder implements.
+pub const GREEDY_QUALITIES: [QualityLevel; 3] =
+    [QualityLevel::Q3, QualityLevel::Q4, QualityLevel::Q5];
+
+/// Every quality this crate implements.
+pub const IMPLEMENTED_QUALITIES: [QualityLevel; 5] = [
+    QualityLevel::Q0,
+    QualityLevel::Q1,
+    QualityLevel::Q3,
+    QualityLevel::Q4,
+    QualityLevel::Q5,
+];
 
 /// Deterministic xorshift generator, so corpora are reproducible.
 pub struct Rng(u64);

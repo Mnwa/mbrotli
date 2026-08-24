@@ -612,6 +612,64 @@ pub(crate) fn build_and_store_huffman_tree_fast(
     }
 }
 
+/// Builds a prefix code from `histogram` and writes its description.
+///
+/// Mirrors `BuildAndStoreHuffmanTree` from `c/enc/brotli_bit_stream.c`: an
+/// alphabet with at most four used symbols gets the compact "simple" form,
+/// everything else the run-length coded one. `alphabet_size` is only used to
+/// work out how many bits a symbol index takes in the simple form, which is
+/// why it can differ from `histogram.len()`.
+///
+/// `depth` and `bits` receive the code, so the caller can then write symbols
+/// with it.
+pub(crate) fn build_and_store_huffman_tree(
+    histogram: &[u32],
+    histogram_length: usize,
+    alphabet_size: usize,
+    tree: &mut [HuffmanNode],
+    depth: &mut [u8],
+    bits: &mut [u16],
+    w: &mut BitWriter,
+) {
+    let mut count = 0usize;
+    let mut symbols = [0usize; 4];
+    for (symbol, &occurrences) in histogram.iter().enumerate().take(histogram_length) {
+        if occurrences != 0 {
+            if count < 4 {
+                symbols[count] = symbol;
+            } else if count > 4 {
+                break;
+            }
+            count += 1;
+        }
+    }
+
+    let mut max_bits = 0u32;
+    let mut max_bits_counter = alphabet_size - 1;
+    while max_bits_counter != 0 {
+        max_bits_counter >>= 1;
+        max_bits += 1;
+    }
+
+    if count <= 1 {
+        w.write(4, 1);
+        w.write(max_bits, symbols[0] as u64);
+        depth[symbols[0]] = 0;
+        bits[symbols[0]] = 0;
+        return;
+    }
+
+    depth[..histogram_length].fill(0);
+    create_huffman_tree(histogram, histogram_length, 15, tree, depth);
+    convert_bit_depths_to_symbols(depth, histogram_length, bits);
+
+    if count <= 4 {
+        store_simple_code(depth, &mut symbols, count, max_bits, w);
+    } else {
+        store_huffman_tree(depth, histogram_length, tree, w);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

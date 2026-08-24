@@ -1,7 +1,7 @@
 //! Streaming compression into a [`Write`] sink.
 
 use crate::compressor::CompressParams;
-use crate::compressor::core::fast::FastEncoder;
+use crate::compressor::core::driver::Encoder;
 use fearless_simd::Level;
 use std::io::{Error, Result, Write};
 
@@ -35,7 +35,7 @@ pub struct CompressorWriter<T: Write> {
     pub(crate) writer: T,
     pub(crate) level: Level,
     pub(crate) params: CompressParams,
-    pub(crate) encoder: Option<FastEncoder>,
+    pub(crate) encoder: Option<Encoder>,
     pub(crate) pending: Vec<u8>,
 }
 
@@ -70,9 +70,13 @@ impl<T: Write> CompressorWriter<T> {
     }
 
     /// Returns the encoder, creating it on first use.
-    fn encoder(&mut self) -> Result<&mut FastEncoder> {
+    fn encoder(&mut self) -> Result<&mut Encoder> {
         if self.encoder.is_none() {
-            let encoder = FastEncoder::new(self.level, &self.params)?;
+            let encoder = Encoder::new(
+                self.level,
+                &self.params,
+                self.params.size_hint().unwrap_or(0),
+            )?;
             self.pending.reserve(encoder.block_size_limit());
             self.encoder = Some(encoder);
         }

@@ -10,8 +10,8 @@ mod support;
 
 use mbrotli::Brotli;
 use support::{
-    FAST_QUALITIES, c_compress, c_decompress, host_levels, params, quality_number, vendor_corpora,
-    vendor_file,
+    IMPLEMENTED_QUALITIES, c_compress, c_decompress, host_levels, params, quality_number,
+    vendor_corpora, vendor_file,
 };
 
 /// Largest file size the per-corpus tests use, to keep debug runs quick.
@@ -21,7 +21,7 @@ const MAX_CORPUS_BYTES: usize = 1 << 20;
 fn vendor_corpus_matches_the_c_encoder() {
     let compressor = Brotli::default().compressor();
     for corpus in vendor_corpora(MAX_CORPUS_BYTES) {
-        for quality in FAST_QUALITIES {
+        for quality in IMPLEMENTED_QUALITIES {
             for lgwin in [10usize, 16, 18, 22, 24] {
                 let expected = c_compress(quality_number(quality), lgwin as i32, &corpus.data);
                 let actual = compressor
@@ -43,7 +43,7 @@ fn vendor_corpus_matches_the_c_encoder() {
 fn vendor_corpus_round_trips() {
     let compressor = Brotli::default().compressor();
     for corpus in vendor_corpora(MAX_CORPUS_BYTES) {
-        for quality in FAST_QUALITIES {
+        for quality in IMPLEMENTED_QUALITIES {
             let compressed = compressor
                 .compress(params(quality, 22), &corpus.data)
                 .expect("compression failed");
@@ -58,7 +58,7 @@ fn vendor_corpus_round_trips() {
 fn vendor_corpus_agrees_across_backends() {
     let levels = host_levels();
     for corpus in vendor_corpora(MAX_CORPUS_BYTES) {
-        for quality in FAST_QUALITIES {
+        for quality in IMPLEMENTED_QUALITIES {
             let mut reference: Option<Vec<u8>> = None;
             for &(level_name, level) in &levels {
                 let actual = Brotli::from(level)
@@ -83,7 +83,7 @@ fn multi_fragment_input_matches_the_c_encoder() {
     let data = vendor_file("bb.binast");
     assert!(data.len() > 4 << 20, "expected a multi-fragment input");
     let compressor = Brotli::default().compressor();
-    for quality in FAST_QUALITIES {
+    for quality in IMPLEMENTED_QUALITIES {
         for lgwin in [18usize, 22, 24] {
             let expected = c_compress(quality_number(quality), lgwin as i32, &data);
             let actual = compressor

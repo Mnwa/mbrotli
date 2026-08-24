@@ -2,11 +2,11 @@
 
 Brotli compression in safe Rust, byte-identical to Google's reference encoder.
 
-`mbrotli` implements the two fast Brotli qualities — **0** (one-pass) and **1**
-(two-pass) — as a port of [google/brotli] v1.2.0, commit `028fb5a`. For any
-input, quality and window size, it emits exactly the same bytes the reference
-encoder does. That is not an aspiration: it is what the test suite asserts, on
-every corpus, on every run.
+`mbrotli` implements Brotli qualities **0**, **1**, **3**, **4** and **5** as a
+port of [google/brotli] v1.2.0, commit `028fb5a`. For any input and any
+combination of encoder parameters, it emits exactly the same bytes the
+reference encoder does. That is not an aspiration: it is what the test suite
+asserts, on every corpus, on every run.
 
 [google/brotli]: https://github.com/google/brotli/tree/028fb5a
 
@@ -14,18 +14,32 @@ every corpus, on every run.
   `src/`. Hot loops shed their bounds checks through `as_chunks`, `first_chunk`
   and const-generic widths instead.
 - **SIMD resolved once.** `fearless_simd` picks the instruction set one time per
-  compression, never inside a loop, and every backend produces identical bytes.
+  compressed block, never inside a loop, and every backend produces identical
+  bytes. The match finder is chosen from the caller's parameters alone, so the
+  machine cannot change the output.
 - **RFC 7932 output.** Verified by round-tripping through Google's C decoder.
 
 ## Status
 
 | Feature | State |
 | --- | --- |
-| Quality 0 and 1 | implemented, byte-identical to the reference |
-| Quality 2–11 | not implemented — reported as `UnsupportedQuality` |
+| Quality 0, 1, 3, 4, 5 | implemented, byte-identical to the reference |
+| Quality 2, 6–11 | not implemented — reported as `UnsupportedQuality` |
 | Decoder | not implemented |
 | One-shot and streaming APIs | implemented |
-| Large window (`lgwin > 24`) | not supported, as in the reference fast path |
+| Mode, block size, size hint, distance layout, context modelling | implemented |
+| Large window (`lgwin > 24`) | not supported |
+| Compound and custom dictionaries | not supported; the built-in static dictionary is used |
+
+### Quality guide
+
+| Quality | What it does |
+| --- | --- |
+| 0 | One pass, static entropy codes — fastest, largest output |
+| 1 | Two passes, per-block entropy codes |
+| 3 | Greedy matching, one prefix code per stream |
+| 4 | Adds block splitting, histogram optimisation, distance parameters |
+| 5 | Adds an extensive delayed search and literal context modelling |
 
 ## Usage
 
@@ -85,9 +99,12 @@ cargo run --example compress
 | --- | --- |
 | `Brotli` | Entry point; resolves the SIMD level once |
 | `Compressor` | Compression entry points, bound to a level |
-| `CompressParams` | Quality and window size, `Copy` |
+| `CompressParams` | Every encoder parameter, `Copy`, built by chained `with_*` |
 | `QualityLevel` | Closed enum, `Q0`–`Q9` and `Q11` |
 | `WindowBits` | Validated newtype over `10..=24` |
+| `BlockBits` | Validated newtype over `16..=24` |
+| `CompressMode` | `Generic`, `Text`, `Font` |
+| `DistanceCodes` | Validated postfix-bit and direct-code pair |
 | `CompressorWriter` / `CompressorReader` | Streaming adapters |
 | `BrotliCompressError` | `#[non_exhaustive]` error type |
 
@@ -100,17 +117,23 @@ Measured against the same reference encoder the output is compared with, on an
 Apple M5 Pro (NEON), portable builds on both sides, `lgwin = 22`. Compressed
 size is **exactly identical**, so these are like-for-like comparisons.
 
-| Shape | q0 | q1 |
-| --- | ---: | ---: |
-| End-to-end one-shot, geometric mean | 0.965× | 1.196× |
-| Pre-sized output buffer, geometric mean | 0.991× | 1.257× |
+| Shape | q0 | q1 | q3 | q4 | q5 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| End-to-end one-shot, geometric mean | 0.950× | 1.142× | 0.793× | 0.771× | 0.799× |
+| Pre-sized output buffer, geometric mean | 1.019× | 1.259× | 0.799× | 0.765× | 0.803× |
 
-Quality 1 is ahead of the reference; quality 0 is at parity in the pre-sized
-shape and slightly behind end-to-end, with English prose the weakest bucket.
-Per-case numbers, confidence intervals, the machine manifest and the raw
-Criterion logs are in [`docs/q0_q1_benchmarks.md`](docs/q0_q1_benchmarks.md),
-including what is *not* claimed — no x86-64 host was available, so the AVX2 and
-AVX-512 paths compile and are dispatch-covered but unmeasured.
+Quality 1 is ahead of the reference and quality 0 is at parity in the pre-sized
+shape. **The greedy qualities are not there yet**: they run at roughly 0.77× to
+0.80×, and short inputs are worse still at about 0.5×, because this crate pays
+initialisation costs the reference skips. Where the time goes, what has been
+tried and what would close the gap are all in
+[`docs/q3_q5_benchmarks.md`](docs/q3_q5_benchmarks.md).
+
+Per-case numbers, confidence intervals, the machine manifests and the raw
+Criterion logs are in [`docs/q0_q1_benchmarks.md`](docs/q0_q1_benchmarks.md)
+and [`docs/q3_q5_benchmarks.md`](docs/q3_q5_benchmarks.md), including what is
+*not* claimed — no x86-64 host was available, so the AVX2 and AVX-512 paths
+compile and are dispatch-covered but unmeasured.
 
 ## Requirements
 
@@ -166,7 +189,9 @@ cargo llvm-cov --package mbrotli --all-features --summary-only
 | Path | Role |
 | --- | --- |
 | `src/compressor/` | Public API, parameters, error types |
-| `src/compressor/core/fast/` | Quality 0 and 1 encoders, bitstream, Huffman, SIMD dispatch |
+| `src/compressor/core/shared/` | Bit writer, Huffman builders, match-length scan, format constants |
+| `src/compressor/core/fast/` | Quality 0 and 1 encoders and their SIMD dispatch |
+| `src/compressor/core/greedy/` | Quality 3, 4 and 5 encoder: ring buffer, match finders, meta-blocks |
 | `brotli-ffi/` | Bindings to Google's C Brotli; `vendor/` is upstream source and is not hand-edited |
 | `architecture/` | Always-current description of what the code does |
 | `docs/` | Port record: API binding, design, reference differences, benchmarks, CI |
@@ -179,20 +204,27 @@ cargo llvm-cov --package mbrotli --all-features --summary-only
 | --- | --- |
 | [`architecture/README.md`](architecture/README.md) | Index and module map |
 | [`architecture/compressor.md`](architecture/compressor.md) | API layer, streaming state machines, error model |
-| [`architecture/fast-encoder.md`](architecture/fast-encoder.md) | Encoder core: scans, bitstream, dispatch, specialisation |
+| [`architecture/fast-encoder.md`](architecture/fast-encoder.md) | Quality 0 and 1 core: scans, bitstream, dispatch, specialisation |
+| [`architecture/greedy-encoder.md`](architecture/greedy-encoder.md) | Quality 3, 4 and 5 core: hasher plan, ring buffer, commands, meta-blocks |
 | [`docs/q0_q1_api_binding.md`](docs/q0_q1_api_binding.md) | How the port maps onto the existing API, and what changed |
 | [`docs/q0_q1_design.md`](docs/q0_q1_design.md) | Design record and the reasoning behind it |
 | [`docs/q0_q1_reference_differences.md`](docs/q0_q1_reference_differences.md) | Every divergence from the reference, including the quirks reproduced on purpose |
 | [`docs/q0_q1_benchmarks.md`](docs/q0_q1_benchmarks.md) | Measured results, methodology, and the gates not met |
 | [`docs/q0_q1_ci.md`](docs/q0_q1_ci.md) | Commands for checks, backend matrix, coverage, fuzzing |
+| [`docs/q3_q5_api_binding.md`](docs/q3_q5_api_binding.md) | How the greedy port maps onto the API, and what was added |
+| [`docs/q3_q5_design.md`](docs/q3_q5_design.md) | Design record for the greedy port |
+| [`docs/q3_q5_reference_differences.md`](docs/q3_q5_reference_differences.md) | Every divergence from the reference at qualities 3 to 5 |
+| [`docs/q3_q5_benchmarks.md`](docs/q3_q5_benchmarks.md) | Measured results for qualities 3, 4 and 5, and the gates not met |
 
 ## Attribution
 
-The quality 0 and quality 1 algorithms, their constant tables and the bitstream
-layout are ported from [google/brotli] v1.2.0 (commit `028fb5a`), which Google
-distributes under the MIT licence; see
+The encoder algorithms, their constant tables, the built-in static dictionary
+and the bitstream layout are ported from [google/brotli] v1.2.0 (commit
+`028fb5a`), which Google distributes under the MIT licence; see
 `brotli-ffi/vendor/brotli/LICENSE`. Translated tables carry an upstream
-reference in their source comments and are pinned by golden checksums.
+reference in their source comments and are pinned by golden checksums; the
+dictionary blobs under `src/compressor/core/greedy/dictionary/` are extracted
+verbatim from the same source.
 
 The format itself is [RFC 7932](https://datatracker.ietf.org/doc/html/rfc7932).
 

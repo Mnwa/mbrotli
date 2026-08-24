@@ -5,11 +5,12 @@ mod support;
 
 use mbrotli::Brotli;
 use mbrotli::compressor::{
-    BrotliCompressError, CompressParams, Compressor, ParseQualityLevelError, ParseWindowBitsError,
+    BlockBits, BrotliCompressError, CompressMode, CompressParams, Compressor, DistanceCodes,
+    ParseBlockBitsError, ParseDistanceCodesError, ParseQualityLevelError, ParseWindowBitsError,
     QualityLevel, WindowBits,
 };
 use std::io::{Read, Write};
-use support::{FAST_QUALITIES, c_decompress, params};
+use support::{IMPLEMENTED_QUALITIES, c_decompress, params};
 
 #[test]
 fn a_compressor_can_be_built_from_a_level_or_from_brotli() {
@@ -119,7 +120,7 @@ fn the_bound_rejects_arithmetic_that_cannot_fit() {
 #[test]
 fn the_slice_entry_point_reports_a_buffer_that_is_one_byte_short() {
     let compressor = Brotli::default().compressor();
-    for quality in FAST_QUALITIES {
+    for quality in IMPLEMENTED_QUALITIES {
         let parameters = params(quality, 22);
         let input = b"a payload long enough that compressing it actually shrinks it a lot lot lot";
         let expected = compressor
@@ -220,4 +221,186 @@ fn the_default_entry_point_uses_a_detected_level() {
     // `Brotli` is `Copy` and `Debug`, which the public API documents.
     let copied = brotli;
     assert!(!format!("{copied:?}").is_empty());
+}
+
+#[test]
+fn the_new_parameters_default_to_the_encoders_own_choice() {
+    let parameters = params(QualityLevel::Q5, 22);
+    assert_eq!(parameters.mode(), CompressMode::default());
+    assert_eq!(parameters.mode(), CompressMode::Generic);
+    assert_eq!(parameters.distance_codes(), DistanceCodes::default());
+    assert_eq!(DistanceCodes::default(), DistanceCodes::DEFAULT);
+    assert_eq!(DistanceCodes::default().postfix_bits(), 0);
+    assert_eq!(DistanceCodes::default().direct_codes(), 0);
+    assert!(parameters.lgblock().is_none());
+    assert!(parameters.size_hint().is_none());
+    assert!(parameters.literal_context_modeling());
+}
+
+#[test]
+fn every_parameter_survives_being_set() {
+    let codes = DistanceCodes::try_from((2u32, 8u32)).expect("a valid layout");
+    let parameters = params(QualityLevel::Q5, 22)
+        .with_mode(CompressMode::Font)
+        .with_block_bits(Some(BlockBits::MAX))
+        .with_size_hint(Some(4 << 20))
+        .with_distance_codes(codes)
+        .with_literal_context_modeling(false);
+
+    assert_eq!(parameters.quality(), QualityLevel::Q5);
+    assert_eq!(parameters.mode(), CompressMode::Font);
+    assert_eq!(parameters.lgblock(), Some(BlockBits::MAX));
+    assert_eq!(parameters.size_hint(), Some(4 << 20));
+    assert_eq!(parameters.distance_codes(), codes);
+    assert!(!parameters.literal_context_modeling());
+
+    // Setting a parameter back restores the encoder's own choice.
+    let restored = parameters.with_block_bits(None).with_size_hint(None);
+    assert!(restored.lgblock().is_none());
+    assert!(restored.size_hint().is_none());
+}
+
+#[test]
+fn block_bits_reject_everything_outside_the_encoders_range() {
+    assert_eq!(BlockBits::try_from(16).ok(), Some(BlockBits::MIN));
+    assert_eq!(BlockBits::try_from(24).ok(), Some(BlockBits::MAX));
+    assert_eq!(usize::from(BlockBits::MIN), 16);
+    assert_eq!(usize::from(BlockBits::MAX), 24);
+    for value in [0usize, 1, 15] {
+        assert!(matches!(
+            BlockBits::try_from(value),
+            Err(ParseBlockBitsError::LowerBound)
+        ));
+    }
+    for value in [25usize, 64, usize::MAX] {
+        assert!(matches!(
+            BlockBits::try_from(value),
+            Err(ParseBlockBitsError::UpperBound)
+        ));
+    }
+    assert!(BlockBits::MIN < BlockBits::MAX);
+}
+
+#[test]
+fn distance_codes_reject_layouts_the_format_cannot_express() {
+    for postfix in 0u32..=3 {
+        for groups in 0u32..16 {
+            let direct = groups << postfix;
+            if direct > 120 {
+                continue;
+            }
+            let codes = DistanceCodes::try_from((postfix, direct))
+                .unwrap_or_else(|error| panic!("({postfix}, {direct}) rejected: {error}"));
+            assert_eq!(codes.postfix_bits(), postfix);
+            assert_eq!(codes.direct_codes(), direct);
+        }
+    }
+    assert!(matches!(
+        DistanceCodes::try_from((4u32, 0u32)),
+        Err(ParseDistanceCodesError::PostfixBits)
+    ));
+    assert!(matches!(
+        DistanceCodes::try_from((0u32, 121u32)),
+        Err(ParseDistanceCodesError::DirectCodes)
+    ));
+    assert!(matches!(
+        DistanceCodes::try_from((2u32, 6u32)),
+        Err(ParseDistanceCodesError::Misaligned)
+    ));
+    // Sixteen groups is one too many for the four-bit field.
+    assert!(matches!(
+        DistanceCodes::try_from((0u32, 16u32)),
+        Err(ParseDistanceCodesError::Misaligned)
+    ));
+}
+
+#[test]
+fn the_new_error_messages_describe_what_went_wrong() {
+    assert_eq!(
+        BlockBits::try_from(0).unwrap_err().to_string(),
+        "Block bits should be greater than or equal to 16"
+    );
+    assert_eq!(
+        BlockBits::try_from(99).unwrap_err().to_string(),
+        "Block bits should be less than or equal to 24"
+    );
+    assert_eq!(
+        DistanceCodes::try_from((7u32, 0u32))
+            .unwrap_err()
+            .to_string(),
+        "Distance postfix bits should be less than or equal to 3"
+    );
+    assert_eq!(
+        DistanceCodes::try_from((0u32, 200u32))
+            .unwrap_err()
+            .to_string(),
+        "Direct distance codes should be less than or equal to 120"
+    );
+    assert_eq!(
+        DistanceCodes::try_from((3u32, 4u32))
+            .unwrap_err()
+            .to_string(),
+        "Direct distance codes should be a whole number of postfix groups"
+    );
+}
+
+#[test]
+fn quality_levels_order_by_effort() {
+    assert!(QualityLevel::Q0 < QualityLevel::Q1);
+    assert!(QualityLevel::Q3 < QualityLevel::Q5);
+    assert!(QualityLevel::Q9 < QualityLevel::Q11);
+    assert_eq!(QualityLevel::Q5, QualityLevel::Q5);
+
+    let mut sorted = [QualityLevel::Q5, QualityLevel::Q0, QualityLevel::Q3];
+    sorted.sort();
+    assert_eq!(
+        sorted,
+        [QualityLevel::Q0, QualityLevel::Q3, QualityLevel::Q5]
+    );
+}
+
+#[test]
+fn every_implemented_quality_compresses_and_round_trips() {
+    let compressor = Brotli::default().compressor();
+    let payload: Vec<u8> = (0..100_000u32).map(|index| (index % 251) as u8).collect();
+    for quality in IMPLEMENTED_QUALITIES {
+        let compressed = compressor
+            .compress(params(quality, 22), &payload)
+            .unwrap_or_else(|error| panic!("quality {quality:?}: {error}"));
+        assert!(compressed.len() < payload.len(), "quality {quality:?}");
+        assert_eq!(
+            c_decompress(&compressed, payload.len()).as_deref(),
+            Some(payload.as_slice()),
+            "quality {quality:?}"
+        );
+    }
+}
+
+#[test]
+fn the_size_hint_is_what_makes_streaming_match_one_shot() {
+    use std::io::Write;
+
+    let compressor = Brotli::default().compressor();
+    let payload: Vec<u8> = (0..(2 << 20u32)).map(|index| (index % 251) as u8).collect();
+
+    // Without a hint the one-shot path substitutes the input length and the
+    // streaming path does not, which quality five reacts to.
+    let unpinned = params(QualityLevel::Q5, 22);
+    let one_shot = compressor
+        .compress(unpinned, &payload)
+        .expect("compression failed");
+    let mut sink = compressor.compress_writer(unpinned, Vec::new());
+    sink.write_all(&payload).expect("write failed");
+    let streamed = sink.finish().expect("finish failed");
+    assert_ne!(streamed, one_shot);
+
+    // Pinning it makes them agree.
+    let pinned = unpinned.with_size_hint(Some(payload.len()));
+    let one_shot = compressor
+        .compress(pinned, &payload)
+        .expect("compression failed");
+    let mut sink = compressor.compress_writer(pinned, Vec::new());
+    sink.write_all(&payload).expect("write failed");
+    let streamed = sink.finish().expect("finish failed");
+    assert_eq!(streamed, one_shot);
 }

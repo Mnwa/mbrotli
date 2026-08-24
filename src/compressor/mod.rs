@@ -71,7 +71,7 @@ impl Compressor {
     /// ```
     pub fn compress(&self, params: CompressParams, src: &[u8]) -> BrotliResult<Vec<u8>> {
         let mut output = Vec::with_capacity(self.calculate_bound(&params, src.len())?);
-        core::fast::compress_to_vec(self.level, &params, src, &mut output)?;
+        core::driver::compress_to_vec(self.level, &params, src, &mut output)?;
         Ok(output)
     }
 
@@ -106,7 +106,7 @@ impl Compressor {
         src: &[u8],
         dst: &mut [u8],
     ) -> BrotliResult<usize> {
-        core::fast::compress_to_slice(self.level, &params, src, dst)
+        core::driver::compress_to_slice(self.level, &params, src, dst)
     }
 
     /// Wraps `writer` in an adapter that compresses everything written to it.
@@ -178,26 +178,57 @@ impl From<Brotli> for Compressor {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+/// Every knob the encoder exposes, resolved per compression call.
+///
+/// # Examples
+///
+/// ```
+/// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
+///
+/// let params = CompressParams::new(QualityLevel::Q5, WindowBits::DEFAULT)
+///     .with_size_hint(Some(4 << 20));
+///
+/// assert_eq!(params.quality(), QualityLevel::Q5);
+/// ```
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct CompressParams {
     quality: QualityLevel,
     lgwin: WindowBits,
+    lgblock: Option<BlockBits>,
+    mode: CompressMode,
+    size_hint: Option<usize>,
+    distance_codes: DistanceCodes,
+    literal_context_modeling: bool,
 }
 
 impl CompressParams {
     /// Creates compression parameters from a quality level and a window size.
     ///
+    /// Everything else starts at the encoder's own default: a generic mode, an
+    /// automatically chosen block size, no size hint, no direct distance codes
+    /// and literal context modelling left on.
+    ///
     /// # Examples
     ///
     /// ```
-    /// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
+    /// use mbrotli::compressor::{CompressMode, CompressParams, QualityLevel, WindowBits};
     ///
     /// let params = CompressParams::new(QualityLevel::Q0, WindowBits::DEFAULT);
     ///
     /// assert_eq!(params.lgwin(), WindowBits::DEFAULT);
+    /// assert_eq!(params.mode(), CompressMode::Generic);
+    /// assert!(params.lgblock().is_none());
     /// ```
     pub const fn new(quality: QualityLevel, lgwin: WindowBits) -> Self {
-        Self { quality, lgwin }
+        Self {
+            quality,
+            lgwin,
+            lgblock: None,
+            mode: CompressMode::Generic,
+            size_hint: None,
+            distance_codes: DistanceCodes::DEFAULT,
+            literal_context_modeling: true,
+        }
     }
 
     /// Returns the configured quality level.
@@ -231,6 +262,448 @@ impl CompressParams {
     pub const fn lgwin(&self) -> WindowBits {
         self.lgwin
     }
+
+    /// Sets the input block size, or restores the encoder's own choice.
+    ///
+    /// Qualities below four ignore this: they always work in blocks of
+    /// `1 << 14` bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::compressor::{BlockBits, CompressParams, QualityLevel, WindowBits};
+    ///
+    /// let params = CompressParams::new(QualityLevel::Q5, WindowBits::DEFAULT)
+    ///     .with_block_bits(Some(BlockBits::MAX));
+    ///
+    /// assert_eq!(params.lgblock(), Some(BlockBits::MAX));
+    /// ```
+    #[must_use]
+    pub const fn with_block_bits(mut self, lgblock: Option<BlockBits>) -> Self {
+        self.lgblock = lgblock;
+        self
+    }
+
+    /// Returns the configured input block size, if one was requested.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
+    ///
+    /// let params = CompressParams::new(QualityLevel::Q5, WindowBits::DEFAULT);
+    ///
+    /// assert!(params.lgblock().is_none());
+    /// ```
+    pub const fn lgblock(&self) -> Option<BlockBits> {
+        self.lgblock
+    }
+
+    /// Sets the kind of data being compressed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::compressor::{CompressMode, CompressParams, QualityLevel, WindowBits};
+    ///
+    /// let params = CompressParams::new(QualityLevel::Q4, WindowBits::DEFAULT)
+    ///     .with_mode(CompressMode::Font);
+    ///
+    /// assert_eq!(params.mode(), CompressMode::Font);
+    /// ```
+    #[must_use]
+    pub const fn with_mode(mut self, mode: CompressMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Returns the configured mode.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::compressor::{CompressMode, CompressParams, QualityLevel, WindowBits};
+    ///
+    /// let params = CompressParams::new(QualityLevel::Q4, WindowBits::DEFAULT);
+    ///
+    /// assert_eq!(params.mode(), CompressMode::Generic);
+    /// ```
+    pub const fn mode(&self) -> CompressMode {
+        self.mode
+    }
+
+    /// Sets the expected total input size.
+    ///
+    /// Qualities four and five pick a different match finder for inputs of a
+    /// mebibyte or more, so the hint changes the compressed bytes. The one-shot
+    /// entry points substitute the real input length when no hint is given,
+    /// which is what makes them match the reference encoder's one-shot API; the
+    /// streaming adapters have no such length to substitute and treat a missing
+    /// hint as zero. Set it explicitly to make both agree.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
+    ///
+    /// let params = CompressParams::new(QualityLevel::Q5, WindowBits::DEFAULT)
+    ///     .with_size_hint(Some(4 << 20));
+    ///
+    /// assert_eq!(params.size_hint(), Some(4 << 20));
+    /// ```
+    #[must_use]
+    pub const fn with_size_hint(mut self, size_hint: Option<usize>) -> Self {
+        self.size_hint = size_hint;
+        self
+    }
+
+    /// Returns the configured size hint, if one was given.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
+    ///
+    /// let params = CompressParams::new(QualityLevel::Q5, WindowBits::DEFAULT);
+    ///
+    /// assert!(params.size_hint().is_none());
+    /// ```
+    pub const fn size_hint(&self) -> Option<usize> {
+        self.size_hint
+    }
+
+    /// Sets the distance code layout.
+    ///
+    /// Qualities below four always use [`DistanceCodes::DEFAULT`], and font
+    /// mode overrides this with the layout the reference encoder prefers for
+    /// font data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::compressor::{CompressParams, DistanceCodes, QualityLevel, WindowBits};
+    ///
+    /// let codes = DistanceCodes::try_from((1u32, 4u32))?;
+    /// let params = CompressParams::new(QualityLevel::Q5, WindowBits::DEFAULT)
+    ///     .with_distance_codes(codes);
+    ///
+    /// assert_eq!(params.distance_codes(), codes);
+    /// # Ok::<(), mbrotli::compressor::ParseDistanceCodesError>(())
+    /// ```
+    #[must_use]
+    pub const fn with_distance_codes(mut self, distance_codes: DistanceCodes) -> Self {
+        self.distance_codes = distance_codes;
+        self
+    }
+
+    /// Returns the configured distance code layout.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::compressor::{CompressParams, DistanceCodes, QualityLevel, WindowBits};
+    ///
+    /// let params = CompressParams::new(QualityLevel::Q5, WindowBits::DEFAULT);
+    ///
+    /// assert_eq!(params.distance_codes(), DistanceCodes::DEFAULT);
+    /// ```
+    pub const fn distance_codes(&self) -> DistanceCodes {
+        self.distance_codes
+    }
+
+    /// Enables or disables literal context modelling.
+    ///
+    /// Only quality five and above model literal contexts; switching it off
+    /// trades compression ratio for decoding speed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
+    ///
+    /// let params = CompressParams::new(QualityLevel::Q5, WindowBits::DEFAULT)
+    ///     .with_literal_context_modeling(false);
+    ///
+    /// assert!(!params.literal_context_modeling());
+    /// ```
+    #[must_use]
+    pub const fn with_literal_context_modeling(mut self, enabled: bool) -> Self {
+        self.literal_context_modeling = enabled;
+        self
+    }
+
+    /// Returns whether literal context modelling is enabled.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
+    ///
+    /// let params = CompressParams::new(QualityLevel::Q5, WindowBits::DEFAULT);
+    ///
+    /// assert!(params.literal_context_modeling());
+    /// ```
+    pub const fn literal_context_modeling(&self) -> bool {
+        self.literal_context_modeling
+    }
+}
+
+/// The kind of data a stream carries.
+///
+/// The encoder uses this as a hint only: every mode produces a valid stream
+/// that any decoder reads back identically.
+///
+/// # Examples
+///
+/// ```
+/// use mbrotli::compressor::CompressMode;
+///
+/// assert_eq!(CompressMode::default(), CompressMode::Generic);
+/// ```
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Hash)]
+pub enum CompressMode {
+    /// No assumption about the data.
+    #[default]
+    Generic,
+    /// UTF-8 text.
+    Text,
+    /// Font data, in the WOFF 2.0 sense.
+    Font,
+}
+
+/// Base-2 logarithm of the encoder's input block size.
+///
+/// The Brotli encoder restricts an explicitly requested block size to the
+/// inclusive range `16..=24`; every way of building a `BlockBits` enforces that
+/// range.
+///
+/// # Examples
+///
+/// ```
+/// use mbrotli::compressor::BlockBits;
+///
+/// let lgblock = BlockBits::try_from(18)?;
+///
+/// assert_eq!(usize::from(lgblock), 18);
+/// assert!(BlockBits::try_from(15).is_err());
+/// assert!(BlockBits::try_from(25).is_err());
+/// # Ok::<(), mbrotli::compressor::ParseBlockBitsError>(())
+/// ```
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct BlockBits(usize);
+
+impl BlockBits {
+    /// Smallest block size the encoder accepts: 2^16 bytes.
+    pub const MIN: Self = Self(16);
+
+    /// Largest block size the encoder accepts: 2^24 bytes.
+    pub const MAX: Self = Self(24);
+}
+
+impl TryFrom<usize> for BlockBits {
+    type Error = ParseBlockBitsError;
+
+    /// Creates a block size from its base-2 logarithm.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseBlockBitsError::LowerBound`] below [`BlockBits::MIN`] and
+    /// [`ParseBlockBitsError::UpperBound`] above [`BlockBits::MAX`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::compressor::{BlockBits, ParseBlockBitsError};
+    ///
+    /// assert_eq!(BlockBits::try_from(16)?, BlockBits::MIN);
+    /// assert!(matches!(
+    ///     BlockBits::try_from(15),
+    ///     Err(ParseBlockBitsError::LowerBound)
+    /// ));
+    /// # Ok::<(), ParseBlockBitsError>(())
+    /// ```
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        if value < Self::MIN.0 {
+            return Err(ParseBlockBitsError::LowerBound);
+        }
+        if value > Self::MAX.0 {
+            return Err(ParseBlockBitsError::UpperBound);
+        }
+        Ok(Self(value))
+    }
+}
+
+impl From<BlockBits> for usize {
+    /// Returns the base-2 logarithm of the block size.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::compressor::BlockBits;
+    ///
+    /// assert_eq!(usize::from(BlockBits::MIN), 16);
+    /// assert_eq!(usize::from(BlockBits::MAX), 24);
+    /// ```
+    fn from(value: BlockBits) -> Self {
+        value.0
+    }
+}
+
+/// Error returned when a block size falls outside the range the encoder allows.
+#[derive(Error, Debug)]
+#[non_exhaustive]
+pub enum ParseBlockBitsError {
+    #[error("Block bits should be greater than or equal to 16")]
+    LowerBound,
+    #[error("Block bits should be less than or equal to 24")]
+    UpperBound,
+}
+
+/// Layout of the distance alphabet: postfix bits and direct distance codes.
+///
+/// The two numbers are not independent. RFC 7932 allows at most three postfix
+/// bits and one hundred and twenty direct codes, and the number of direct codes
+/// has to be a multiple of `1 << postfix_bits` whose quotient still fits in four
+/// bits. Every way of building a `DistanceCodes` enforces all three rules, so a
+/// value of this type always describes an alphabet the format can express.
+///
+/// # Examples
+///
+/// ```
+/// use mbrotli::compressor::DistanceCodes;
+///
+/// let codes = DistanceCodes::try_from((1u32, 12u32))?;
+///
+/// assert_eq!(codes.postfix_bits(), 1);
+/// assert_eq!(codes.direct_codes(), 12);
+/// // 6 is not a multiple of `1 << 2`.
+/// assert!(DistanceCodes::try_from((2u32, 6u32)).is_err());
+/// # Ok::<(), mbrotli::compressor::ParseDistanceCodesError>(())
+/// ```
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct DistanceCodes {
+    postfix_bits: u32,
+    direct_codes: u32,
+}
+
+impl DistanceCodes {
+    /// The alphabet with neither postfix bits nor direct distance codes.
+    pub const DEFAULT: Self = Self {
+        postfix_bits: 0,
+        direct_codes: 0,
+    };
+
+    /// Returns the number of postfix bits.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::compressor::DistanceCodes;
+    ///
+    /// assert_eq!(DistanceCodes::DEFAULT.postfix_bits(), 0);
+    /// ```
+    pub const fn postfix_bits(&self) -> u32 {
+        self.postfix_bits
+    }
+
+    /// Returns the number of direct distance codes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::compressor::DistanceCodes;
+    ///
+    /// assert_eq!(DistanceCodes::DEFAULT.direct_codes(), 0);
+    /// ```
+    pub const fn direct_codes(&self) -> u32 {
+        self.direct_codes
+    }
+
+    /// Builds a pair without validating it, for the sanitiser's own tests.
+    #[cfg(test)]
+    pub(crate) const fn from_raw(postfix_bits: u32, direct_codes: u32) -> Self {
+        Self {
+            postfix_bits,
+            direct_codes,
+        }
+    }
+}
+
+impl Default for DistanceCodes {
+    /// Returns [`DistanceCodes::DEFAULT`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::compressor::DistanceCodes;
+    ///
+    /// assert_eq!(DistanceCodes::default(), DistanceCodes::DEFAULT);
+    /// ```
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+impl TryFrom<(u32, u32)> for DistanceCodes {
+    type Error = ParseDistanceCodesError;
+
+    /// Creates a distance alphabet from `(postfix_bits, direct_codes)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseDistanceCodesError::PostfixBits`] above three postfix
+    /// bits, [`ParseDistanceCodesError::DirectCodes`] above one hundred and
+    /// twenty direct codes, and [`ParseDistanceCodesError::Misaligned`] when
+    /// the direct codes do not form a whole number of postfix groups that a
+    /// four-bit field can hold.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::compressor::{DistanceCodes, ParseDistanceCodesError};
+    ///
+    /// assert!(DistanceCodes::try_from((0u32, 0u32)).is_ok());
+    /// assert!(matches!(
+    ///     DistanceCodes::try_from((4u32, 0u32)),
+    ///     Err(ParseDistanceCodesError::PostfixBits)
+    /// ));
+    /// assert!(matches!(
+    ///     DistanceCodes::try_from((0u32, 121u32)),
+    ///     Err(ParseDistanceCodesError::DirectCodes)
+    /// ));
+    /// assert!(matches!(
+    ///     DistanceCodes::try_from((2u32, 6u32)),
+    ///     Err(ParseDistanceCodesError::Misaligned)
+    /// ));
+    /// ```
+    fn try_from((postfix_bits, direct_codes): (u32, u32)) -> Result<Self, Self::Error> {
+        if postfix_bits > 3 {
+            return Err(ParseDistanceCodesError::PostfixBits);
+        }
+        if direct_codes > 120 {
+            return Err(ParseDistanceCodesError::DirectCodes);
+        }
+        let groups = (direct_codes >> postfix_bits) & 0x0F;
+        if (groups << postfix_bits) != direct_codes {
+            return Err(ParseDistanceCodesError::Misaligned);
+        }
+        Ok(Self {
+            postfix_bits,
+            direct_codes,
+        })
+    }
+}
+
+/// Error returned when a distance alphabet cannot be expressed by the format.
+#[derive(Error, Debug)]
+#[non_exhaustive]
+pub enum ParseDistanceCodesError {
+    #[error("Distance postfix bits should be less than or equal to 3")]
+    PostfixBits,
+    #[error("Direct distance codes should be less than or equal to 120")]
+    DirectCodes,
+    #[error("Direct distance codes should be a whole number of postfix groups")]
+    Misaligned,
 }
 
 /// Base-2 logarithm of the Brotli sliding window size.
@@ -347,7 +820,20 @@ pub enum ParseWindowBitsError {
     UpperBound,
 }
 
-#[derive(Copy, Clone, Debug)]
+/// Compression quality: how much work the encoder spends per byte.
+///
+/// The variants are ordered the way the format numbers them, so they compare
+/// and sort by effort.
+///
+/// # Examples
+///
+/// ```
+/// use mbrotli::compressor::QualityLevel;
+///
+/// assert!(QualityLevel::Q1 < QualityLevel::Q5);
+/// assert_eq!(usize::from(QualityLevel::Q5), 5);
+/// ```
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum QualityLevel {
     Q0,
     Q1,

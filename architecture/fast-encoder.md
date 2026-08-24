@@ -1,6 +1,7 @@
 # Fast Encoder Core (quality 0 and quality 1)
 
-Scope: `src/compressor/core/fast/`. This is the implementation of the two fast
+Scope: `src/compressor/core/fast/`, and the parts of
+`src/compressor/core/shared/` it uses. This is the implementation of the two fast
 Brotli qualities: a one-pass encoder (quality 0) and a two-pass encoder
 (quality 1), both ported from Google Brotli v1.2.0, commit `028fb5a`, and both
 byte-identical to it.
@@ -13,17 +14,23 @@ that wraps it.
 
 ```mermaid
 graph TD
-    modmod["fast/mod.rs<br/>FastEncoder, dispatch, one-shot driver"]
+    modmod["fast/mod.rs<br/>FastEncoder, dispatch"]
     q0["fast/q0.rs<br/>one-pass scan and meta-blocks"]
     q1["fast/q1.rs<br/>two-pass scan, replay, TwoPassState"]
     cmd["fast/commands.rs<br/>insert/copy/distance mapping"]
-    huff["fast/huffman.rs<br/>tree build, canonical codes, serialisation"]
     hist["fast/histogram.rs<br/>chunked byte counting"]
-    ml["fast/match_len.rs<br/>hybrid scalar/SIMD match length"]
-    bits["fast/bits.rs<br/>LSB-first bit writer"]
-    tabs["fast/tables.rs<br/>reference constant tables"]
-    consts["fast/constants.rs<br/>normative constants"]
+    tabs["fast/tables.rs<br/>quality 0 and 1 command tables"]
+    consts["fast/constants.rs<br/>quality 0 and 1 constants"]
     ws["fast/workspace.rs<br/>OnePassArena, TwoPassArena"]
+
+    subgraph shared["compressor::core::shared"]
+        huff["huffman.rs<br/>tree build, canonical codes, serialisation"]
+        ml["match_len.rs<br/>hybrid scalar/SIMD match length"]
+        bits["bits.rs<br/>LSB-first bit writer"]
+        log["fast_log.rs<br/>reference logarithms"]
+        stabs["tables.rs<br/>entropy-coding tables"]
+        sconsts["constants.rs<br/>format constants"]
+    end
 
     modmod --> q0
     modmod --> q1
@@ -40,12 +47,20 @@ graph TD
     q1 --> bits
     cmd --> bits
     cmd --> tabs
+    cmd --> log
     huff --> bits
-    huff --> tabs
+    huff --> stabs
     q0 --> consts
     q1 --> consts
-    tabs --> consts
+    consts --> sconsts
+    log --> stabs
+    stabs --> sconsts
 ```
+
+The bit writer, the Huffman builders, the match-length scan, the reference
+logarithms and the entropy-coding tables live in `compressor::core::shared`
+rather than in this tree, because the greedy encoder needs exactly the same
+implementations; see [greedy-encoder.md](greedy-encoder.md).
 
 ## 2. Ownership and reuse
 

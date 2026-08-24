@@ -1,16 +1,15 @@
 //! Upper bound on the size of a compressed stream.
 
-use crate::compressor::core::fast::constants::{OUTPUT_RESERVE_CONST, OUTPUT_SLACK};
-use crate::compressor::{BrotliCompressError, BrotliResult, CompressParams};
+use crate::compressor::core::shared::constants::{OUTPUT_RESERVE_CONST, OUTPUT_SLACK};
+use crate::compressor::{BrotliCompressError, BrotliResult, CompressParams, QualityLevel};
 
 /// Returns an upper bound on the compressed size of `input_size` bytes.
 ///
-/// The fast path cuts the input into `1 << lgwin` fragments and reserves
-/// `2 * fragment + 503` bytes for each of them, exactly like the reference
-/// encoder, plus the bit writer's whole-word headroom and two bytes for the
-/// stream header. Counting the headroom per fragment is what lets the encoder
-/// write straight into a buffer sized by this bound instead of copying through
-/// its own scratch space.
+/// Both encoders reserve `2 * fragment + 503` bytes per meta-block, exactly
+/// like the reference encoder, plus the bit writer's whole-word headroom and
+/// two bytes for the stream header. Counting the headroom per fragment is what
+/// lets the fast path write straight into a buffer sized by this bound instead
+/// of copying through its own scratch space.
 ///
 /// # Errors
 ///
@@ -18,7 +17,7 @@ use crate::compressor::{BrotliCompressError, BrotliResult, CompressParams};
 /// fit in a `usize`, rather than wrapping or saturating into a bound that no
 /// longer bounds anything.
 pub(crate) const fn bound(params: &CompressParams, input_size: usize) -> BrotliResult<usize> {
-    let fragment = 1usize << params.lgwin.0;
+    let fragment = 1usize << fragment_bits(params);
     let fragments = if input_size == 0 {
         1
     } else {
@@ -37,6 +36,26 @@ pub(crate) const fn bound(params: &CompressParams, input_size: usize) -> BrotliR
     match total.checked_add(2) {
         Some(total) => Ok(total),
         None => Err(BrotliCompressError::BoundOverflow),
+    }
+}
+
+/// Returns the base-2 logarithm of the input the encoder consumes per step.
+///
+/// Both encoder families emit at most one meta-block per step, so this is what
+/// bounds how often the per-meta-block overhead is paid. The fast qualities
+/// cut the input at the window size; the greedy ones use the block size, which
+/// is fourteen bits below quality four and the requested or default sixteen
+/// above it.
+const fn fragment_bits(params: &CompressParams) -> usize {
+    match params.quality {
+        QualityLevel::Q3 => 14,
+        QualityLevel::Q4 | QualityLevel::Q5 => match params.lgblock {
+            Some(lgblock) => lgblock.0,
+            None => 16,
+        },
+        // Quality 0 and 1 cut at the window size; an unimplemented quality
+        // never reaches an encoder, but still has to return some bound.
+        _ => params.lgwin.0,
     }
 }
 

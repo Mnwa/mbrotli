@@ -1,14 +1,31 @@
 //! Brotli compression, in safe Rust.
 //!
-//! `mbrotli` implements the two fast Brotli qualities — 0 and 1 — as a port of
-//! Google's reference encoder, and emits bytes that are identical to it. There
-//! is no `unsafe` in this crate, and the SIMD instruction set is resolved once
-//! per compression rather than inside any loop.
+//! `mbrotli` implements Brotli qualities 0, 1, 3, 4 and 5 as a port of Google's
+//! reference encoder, and emits bytes that are identical to it. There is no
+//! `unsafe` in this crate, and the SIMD instruction set is resolved once per
+//! compressed block rather than inside any loop.
 //!
-//! Qualities 2 through 11 are not implemented yet and are reported as
-//! [`BrotliCompressError::UnsupportedQuality`]; there is no decoder.
+//! Quality 2 and qualities 6 through 11 are not implemented yet and are
+//! reported as [`BrotliCompressError::UnsupportedQuality`]; there is no
+//! decoder.
 //!
 //! [`BrotliCompressError::UnsupportedQuality`]: compressor::BrotliCompressError::UnsupportedQuality
+//!
+//! # Choosing a quality
+//!
+//! | Quality | What it does | Typical use |
+//! | --- | --- | --- |
+//! | 0 | One pass, static entropy codes | Fastest, largest output |
+//! | 1 | Two passes, per-block entropy codes | Fast |
+//! | 3 | Greedy matching, one prefix code per stream | Balanced |
+//! | 4 | Adds block splitting and histogram optimisation | Balanced, denser |
+//! | 5 | Adds an extensive search and literal context modelling | Densest of these |
+//!
+//! Qualities 4 and 5 pick a different match finder for inputs of a mebibyte or
+//! more. The one-shot entry points know the input length and pass it on; the
+//! streaming adapters do not, so set
+//! [`CompressParams::with_size_hint`](compressor::CompressParams::with_size_hint)
+//! when a stream should compress exactly like the same bytes in one shot.
 //!
 //! # Examples
 //!
@@ -27,6 +44,24 @@
 //! // Deterministic, and byte-identical to the reference encoder.
 //! assert_eq!(payload.len(), 7000);
 //! assert_eq!(compressed.len(), 41);
+//! # Ok::<(), mbrotli::compressor::BrotliCompressError>(())
+//! ```
+//!
+//! A denser quality, with the encoder parameters spelled out:
+//!
+//! ```
+//! use mbrotli::Brotli;
+//! use mbrotli::compressor::{CompressMode, CompressParams, QualityLevel, WindowBits};
+//!
+//! let compressor = Brotli::default().compressor();
+//! let payload = "the quick brown fox ".repeat(500);
+//! let params = CompressParams::new(QualityLevel::Q5, WindowBits::DEFAULT)
+//!     .with_mode(CompressMode::Text)
+//!     .with_size_hint(Some(payload.len()));
+//!
+//! let compressed = compressor.compress(params, payload.as_bytes())?;
+//!
+//! assert!(compressed.len() < payload.len() / 100);
 //! # Ok::<(), mbrotli::compressor::BrotliCompressError>(())
 //! ```
 //!

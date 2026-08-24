@@ -55,6 +55,17 @@ impl<'a> BitWriter<'a> {
         }
     }
 
+    /// Overwrites the byte at `index`, ignoring an index past the buffer.
+    ///
+    /// The encoder uses this to restore the partial byte it carried into a
+    /// meta-block after deciding to store that meta-block uncompressed.
+    pub(crate) fn set_byte(&mut self, index: usize, value: u8) {
+        match self.storage.get_mut(index) {
+            Some(byte) => *byte = value,
+            None => self.overflowed = true,
+        }
+    }
+
     /// Appends the `n_bits` low bits of `bits`.
     ///
     /// Like the reference writer this materialises a whole machine word, which
@@ -119,6 +130,27 @@ impl<'a> BitWriter<'a> {
     /// Advances to the next byte boundary, leaving the skipped bits zero.
     pub(crate) const fn align(&mut self) {
         self.position = (self.position + 7) & !7;
+    }
+
+    /// Advances to the next byte boundary and clears the byte landed on.
+    ///
+    /// Mirrors `JumpToByteBoundary`: the caller reads that byte back as the
+    /// partial byte carried into the next meta-block, so in a reused buffer it
+    /// has to be cleared rather than left holding an older stream's bits.
+    pub(crate) fn jump_to_byte_boundary(&mut self) {
+        self.align();
+        self.prepare_storage();
+    }
+
+    /// Clears the byte at the current, byte-aligned position.
+    ///
+    /// Mirrors `BrotliWriteBitsPrepareStorage`.
+    pub(crate) fn prepare_storage(&mut self) {
+        debug_assert_eq!(self.position & 7, 0);
+        match self.storage.get_mut(self.position >> 3) {
+            Some(byte) => *byte = 0,
+            None => self.overflowed = true,
+        }
     }
 
     /// Copies `data` verbatim at the current, byte-aligned position.
@@ -236,6 +268,34 @@ mod tests {
     }
 
     #[test]
+    fn jumping_to_a_byte_boundary_clears_the_byte_landed_on() {
+        let mut storage = vec![0xFFu8; 16];
+        storage[0] = 0;
+        let mut writer = BitWriter::new(&mut storage, 0);
+        writer.write(3, 0b101);
+        writer.jump_to_byte_boundary();
+        assert_eq!(writer.position(), 8);
+        assert_eq!(storage[0], 0b101);
+        assert_eq!(storage[1], 0);
+    }
+
+    #[test]
+    fn preparing_storage_clears_only_the_current_byte() {
+        let mut storage = vec![0xFFu8; 4];
+        let mut writer = BitWriter::new(&mut storage, 16);
+        writer.prepare_storage();
+        assert_eq!(storage, vec![0xFF, 0xFF, 0x00, 0xFF]);
+    }
+
+    #[test]
+    fn preparing_storage_past_the_buffer_reports_an_overflow() {
+        let mut storage = vec![0u8; 1];
+        let mut writer = BitWriter::new(&mut storage, 64);
+        writer.prepare_storage();
+        assert!(writer.overflowed());
+    }
+
+    #[test]
     fn write_bytes_copies_verbatim_and_clears_the_next_byte() {
         let mut storage = vec![0xFFu8; 16];
         storage[0] = 0;
@@ -275,6 +335,17 @@ mod tests {
         let mut writer = BitWriter::new(&mut storage, 0);
         writer.rewind(64);
         assert!(writer.overflowed());
+    }
+
+    #[test]
+    fn set_byte_overwrites_and_reports_an_out_of_range_index() {
+        let mut storage = vec![0u8; 2];
+        let mut writer = BitWriter::new(&mut storage, 0);
+        writer.set_byte(1, 0xAB);
+        assert!(!writer.overflowed());
+        writer.set_byte(9, 0xCD);
+        assert!(writer.overflowed());
+        assert_eq!(storage[1], 0xAB);
     }
 
     #[test]

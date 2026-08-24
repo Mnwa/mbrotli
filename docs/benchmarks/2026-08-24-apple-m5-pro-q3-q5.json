@@ -1,0 +1,1302 @@
+[
+  {
+    "shape": "oneshot",
+    "quality": "q0",
+    "case": "binary-256KiB",
+    "mbrotli_seconds": 0.00029064,
+    "c_brotli_seconds": 0.00032543,
+    "ratio_c_over_rust": 1.1197013487475915,
+    "mbrotli_bytes": 142114,
+    "c_brotli_bytes": 142114
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q0",
+    "case": "compressible-256KiB",
+    "mbrotli_seconds": 4.0554e-05,
+    "c_brotli_seconds": 4.0554e-05,
+    "ratio_c_over_rust": 1.0,
+    "mbrotli_bytes": 220,
+    "c_brotli_bytes": 220
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q0",
+    "case": "incompressible-256KiB",
+    "mbrotli_seconds": 2.9041e-05,
+    "c_brotli_seconds": 1.8789999999999998e-05,
+    "ratio_c_over_rust": 0.6470162873179298,
+    "mbrotli_bytes": 262149,
+    "c_brotli_bytes": 262149
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q0",
+    "case": "text-1KiB",
+    "mbrotli_seconds": 1.7255e-06,
+    "c_brotli_seconds": 1.7464e-06,
+    "ratio_c_over_rust": 1.0121124311793683,
+    "mbrotli_bytes": 229,
+    "c_brotli_bytes": 229
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q0",
+    "case": "text-1MiB",
+    "mbrotli_seconds": 9.471299999999999e-05,
+    "c_brotli_seconds": 8.0935e-05,
+    "ratio_c_over_rust": 0.8545289453401329,
+    "mbrotli_bytes": 27963,
+    "c_brotli_bytes": 27963
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q0",
+    "case": "vendor-alice29.txt",
+    "mbrotli_seconds": 0.00019287,
+    "c_brotli_seconds": 0.00017486999999999998,
+    "ratio_c_over_rust": 0.9066728884741017,
+    "mbrotli_bytes": 65795,
+    "c_brotli_bytes": 65795
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q0",
+    "case": "vendor-lcet10.txt",
+    "mbrotli_seconds": 0.0006042599999999999,
+    "c_brotli_seconds": 0.00055118,
+    "ratio_c_over_rust": 0.9121570185019694,
+    "mbrotli_bytes": 173662,
+    "c_brotli_bytes": 173662
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q0",
+    "case": "vendor-mapsdatazrh",
+    "mbrotli_seconds": 0.00027006999999999997,
+    "c_brotli_seconds": 0.00035725,
+    "ratio_c_over_rust": 1.3228051986522014,
+    "mbrotli_bytes": 187191,
+    "c_brotli_bytes": 187191
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q0",
+    "case": "vendor-plrabn12.txt",
+    "mbrotli_seconds": 0.0009337999999999999,
+    "c_brotli_seconds": 0.0008577899999999999,
+    "ratio_c_over_rust": 0.9186014135789248,
+    "mbrotli_bytes": 235170,
+    "c_brotli_bytes": 235170
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q0",
+    "case": "vendor-quickfox_repeated",
+    "mbrotli_seconds": 1.8478999999999997e-05,
+    "c_brotli_seconds": 1.8296e-05,
+    "ratio_c_over_rust": 0.9900968667135669,
+    "mbrotli_bytes": 203,
+    "c_brotli_bytes": 203
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q0",
+    "case": "vendor-random_org_10k.bin",
+    "mbrotli_seconds": 9.5143e-06,
+    "c_brotli_seconds": 8.6553e-06,
+    "ratio_c_over_rust": 0.9097148502780026,
+    "mbrotli_bytes": 10004,
+    "c_brotli_bytes": 10004
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q1",
+    "case": "binary-256KiB",
+    "mbrotli_seconds": 0.00045782999999999994,
+    "c_brotli_seconds": 0.00064688,
+    "ratio_c_over_rust": 1.4129261953126708,
+    "mbrotli_bytes": 118708,
+    "c_brotli_bytes": 118708
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q1",
+    "case": "compressible-256KiB",
+    "mbrotli_seconds": 1.1374e-05,
+    "c_brotli_seconds": 1.1590999999999998e-05,
+    "ratio_c_over_rust": 1.019078600316511,
+    "mbrotli_bytes": 57,
+    "c_brotli_bytes": 57
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q1",
+    "case": "incompressible-256KiB",
+    "mbrotli_seconds": 3.0752e-05,
+    "c_brotli_seconds": 2.032e-05,
+    "ratio_c_over_rust": 0.6607700312174818,
+    "mbrotli_bytes": 262149,
+    "c_brotli_bytes": 262149
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q1",
+    "case": "text-1KiB",
+    "mbrotli_seconds": 2.3818999999999996e-06,
+    "c_brotli_seconds": 2.2497e-06,
+    "ratio_c_over_rust": 0.9444980897602755,
+    "mbrotli_bytes": 176,
+    "c_brotli_bytes": 176
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q1",
+    "case": "text-1MiB",
+    "mbrotli_seconds": 0.00016983,
+    "c_brotli_seconds": 0.00018657,
+    "ratio_c_over_rust": 1.0985691573926868,
+    "mbrotli_bytes": 10001,
+    "c_brotli_bytes": 10001
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q1",
+    "case": "vendor-alice29.txt",
+    "mbrotli_seconds": 0.00028134,
+    "c_brotli_seconds": 0.00034808999999999996,
+    "ratio_c_over_rust": 1.2372574109618255,
+    "mbrotli_bytes": 60292,
+    "c_brotli_bytes": 60292
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q1",
+    "case": "vendor-lcet10.txt",
+    "mbrotli_seconds": 0.0008648999999999999,
+    "c_brotli_seconds": 0.0009978099999999998,
+    "ratio_c_over_rust": 1.1536709446178748,
+    "mbrotli_bytes": 154908,
+    "c_brotli_bytes": 154908
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q1",
+    "case": "vendor-mapsdatazrh",
+    "mbrotli_seconds": 0.00038699,
+    "c_brotli_seconds": 0.0005627399999999999,
+    "ratio_c_over_rust": 1.454146101966459,
+    "mbrotli_bytes": 181028,
+    "c_brotli_bytes": 181028
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q1",
+    "case": "vendor-plrabn12.txt",
+    "mbrotli_seconds": 0.0012786,
+    "c_brotli_seconds": 0.0014537,
+    "ratio_c_over_rust": 1.1369466604098233,
+    "mbrotli_bytes": 206088,
+    "c_brotli_bytes": 206088
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q1",
+    "case": "vendor-quickfox_repeated",
+    "mbrotli_seconds": 9.7669e-06,
+    "c_brotli_seconds": 9.7599e-06,
+    "ratio_c_over_rust": 0.9992832935731911,
+    "mbrotli_bytes": 89,
+    "c_brotli_bytes": 89
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q1",
+    "case": "vendor-random_org_10k.bin",
+    "mbrotli_seconds": 1.3617999999999999e-05,
+    "c_brotli_seconds": 2.528e-05,
+    "ratio_c_over_rust": 1.8563665736525188,
+    "mbrotli_bytes": 10004,
+    "c_brotli_bytes": 10004
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q3",
+    "case": "binary-256KiB",
+    "mbrotli_seconds": 0.001159,
+    "c_brotli_seconds": 0.0010084,
+    "ratio_c_over_rust": 0.8700603968938739,
+    "mbrotli_bytes": 99347,
+    "c_brotli_bytes": 99347
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q3",
+    "case": "compressible-256KiB",
+    "mbrotli_seconds": 0.00018156999999999998,
+    "c_brotli_seconds": 0.00014013999999999997,
+    "ratio_c_over_rust": 0.7718235391309136,
+    "mbrotli_bytes": 19,
+    "c_brotli_bytes": 19
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q3",
+    "case": "incompressible-256KiB",
+    "mbrotli_seconds": 0.00014115999999999998,
+    "c_brotli_seconds": 9.0914e-05,
+    "ratio_c_over_rust": 0.6440493057523379,
+    "mbrotli_bytes": 262149,
+    "c_brotli_bytes": 262149
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q3",
+    "case": "text-1KiB",
+    "mbrotli_seconds": 8.1601e-06,
+    "c_brotli_seconds": 5.3901e-06,
+    "ratio_c_over_rust": 0.6605433756939254,
+    "mbrotli_bytes": 157,
+    "c_brotli_bytes": 157
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q3",
+    "case": "text-1MiB",
+    "mbrotli_seconds": 0.0007524999999999999,
+    "c_brotli_seconds": 0.0006175,
+    "ratio_c_over_rust": 0.8205980066445183,
+    "mbrotli_bytes": 8222,
+    "c_brotli_bytes": 8222
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q3",
+    "case": "vendor-alice29.txt",
+    "mbrotli_seconds": 0.00084307,
+    "c_brotli_seconds": 0.0006523599999999999,
+    "ratio_c_over_rust": 0.7737910256562325,
+    "mbrotli_bytes": 56863,
+    "c_brotli_bytes": 56863
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q3",
+    "case": "vendor-lcet10.txt",
+    "mbrotli_seconds": 0.0023146,
+    "c_brotli_seconds": 0.002056,
+    "ratio_c_over_rust": 0.8882744318672773,
+    "mbrotli_bytes": 146522,
+    "c_brotli_bytes": 146522
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q3",
+    "case": "vendor-mapsdatazrh",
+    "mbrotli_seconds": 0.0012245,
+    "c_brotli_seconds": 0.0010542000000000001,
+    "ratio_c_over_rust": 0.8609228256431198,
+    "mbrotli_bytes": 175749,
+    "c_brotli_bytes": 175749
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q3",
+    "case": "vendor-plrabn12.txt",
+    "mbrotli_seconds": 0.0031659,
+    "c_brotli_seconds": 0.0027881,
+    "ratio_c_over_rust": 0.8806658454152058,
+    "mbrotli_bytes": 198153,
+    "c_brotli_bytes": 198153
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q3",
+    "case": "vendor-quickfox_repeated",
+    "mbrotli_seconds": 0.00012966,
+    "c_brotli_seconds": 9.3019e-05,
+    "ratio_c_over_rust": 0.7174070646305722,
+    "mbrotli_bytes": 48,
+    "c_brotli_bytes": 48
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q3",
+    "case": "vendor-random_org_10k.bin",
+    "mbrotli_seconds": 3.3891e-05,
+    "c_brotli_seconds": 3.0200999999999998e-05,
+    "ratio_c_over_rust": 0.8911215366911569,
+    "mbrotli_bytes": 10004,
+    "c_brotli_bytes": 10004
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q4",
+    "case": "binary-256KiB",
+    "mbrotli_seconds": 0.0020604,
+    "c_brotli_seconds": 0.0016247,
+    "ratio_c_over_rust": 0.7885362065618327,
+    "mbrotli_bytes": 96205,
+    "c_brotli_bytes": 96205
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q4",
+    "case": "compressible-256KiB",
+    "mbrotli_seconds": 0.00016198,
+    "c_brotli_seconds": 0.00011754,
+    "ratio_c_over_rust": 0.7256451413754785,
+    "mbrotli_bytes": 19,
+    "c_brotli_bytes": 19
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q4",
+    "case": "incompressible-256KiB",
+    "mbrotli_seconds": 0.00016424,
+    "c_brotli_seconds": 0.0001032,
+    "ratio_c_over_rust": 0.6283487579152459,
+    "mbrotli_bytes": 262149,
+    "c_brotli_bytes": 262149
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q4",
+    "case": "text-1KiB",
+    "mbrotli_seconds": 1.2303e-05,
+    "c_brotli_seconds": 7.7538e-06,
+    "ratio_c_over_rust": 0.6302365276761766,
+    "mbrotli_bytes": 157,
+    "c_brotli_bytes": 157
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q4",
+    "case": "text-1MiB",
+    "mbrotli_seconds": 0.00086297,
+    "c_brotli_seconds": 0.00070682,
+    "ratio_c_over_rust": 0.8190551235848291,
+    "mbrotli_bytes": 7647,
+    "c_brotli_bytes": 7647
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q4",
+    "case": "vendor-alice29.txt",
+    "mbrotli_seconds": 0.0011765,
+    "c_brotli_seconds": 0.00090387,
+    "ratio_c_over_rust": 0.7682702932426689,
+    "mbrotli_bytes": 55504,
+    "c_brotli_bytes": 55504
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q4",
+    "case": "vendor-lcet10.txt",
+    "mbrotli_seconds": 0.0032378999999999997,
+    "c_brotli_seconds": 0.0026541000000000004,
+    "ratio_c_over_rust": 0.8196979523765405,
+    "mbrotli_bytes": 141896,
+    "c_brotli_bytes": 141896
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q4",
+    "case": "vendor-mapsdatazrh",
+    "mbrotli_seconds": 0.0015791,
+    "c_brotli_seconds": 0.0014142,
+    "ratio_c_over_rust": 0.8955734279019695,
+    "mbrotli_bytes": 172868,
+    "c_brotli_bytes": 172868
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q4",
+    "case": "vendor-plrabn12.txt",
+    "mbrotli_seconds": 0.0043354,
+    "c_brotli_seconds": 0.0035891000000000004,
+    "ratio_c_over_rust": 0.8278590210822533,
+    "mbrotli_bytes": 193873,
+    "c_brotli_bytes": 193873
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q4",
+    "case": "vendor-quickfox_repeated",
+    "mbrotli_seconds": 0.0001077,
+    "c_brotli_seconds": 7.2114e-05,
+    "ratio_c_over_rust": 0.6695821727019498,
+    "mbrotli_bytes": 52,
+    "c_brotli_bytes": 52
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q4",
+    "case": "vendor-random_org_10k.bin",
+    "mbrotli_seconds": 4.9610999999999996e-05,
+    "c_brotli_seconds": 4.9005e-05,
+    "ratio_c_over_rust": 0.9877849670435993,
+    "mbrotli_bytes": 10004,
+    "c_brotli_bytes": 10004
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q5",
+    "case": "binary-256KiB",
+    "mbrotli_seconds": 0.0032534,
+    "c_brotli_seconds": 0.0022733,
+    "ratio_c_over_rust": 0.6987459273375545,
+    "mbrotli_bytes": 94650,
+    "c_brotli_bytes": 94650
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q5",
+    "case": "compressible-256KiB",
+    "mbrotli_seconds": 0.00017147999999999998,
+    "c_brotli_seconds": 0.00012585,
+    "ratio_c_over_rust": 0.7339048285514347,
+    "mbrotli_bytes": 19,
+    "c_brotli_bytes": 19
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q5",
+    "case": "incompressible-256KiB",
+    "mbrotli_seconds": 0.00026836,
+    "c_brotli_seconds": 0.00016602,
+    "ratio_c_over_rust": 0.6186465941272917,
+    "mbrotli_bytes": 262149,
+    "c_brotli_bytes": 262149
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q5",
+    "case": "text-1KiB",
+    "mbrotli_seconds": 1.4984e-05,
+    "c_brotli_seconds": 8.749899999999999e-06,
+    "ratio_c_over_rust": 0.5839495461825948,
+    "mbrotli_bytes": 146,
+    "c_brotli_bytes": 146
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q5",
+    "case": "text-1MiB",
+    "mbrotli_seconds": 0.0014144000000000001,
+    "c_brotli_seconds": 0.0013712,
+    "ratio_c_over_rust": 0.9694570135746605,
+    "mbrotli_bytes": 8254,
+    "c_brotli_bytes": 8254
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q5",
+    "case": "vendor-alice29.txt",
+    "mbrotli_seconds": 0.001761,
+    "c_brotli_seconds": 0.0017226,
+    "ratio_c_over_rust": 0.9781942078364565,
+    "mbrotli_bytes": 52809,
+    "c_brotli_bytes": 52809
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q5",
+    "case": "vendor-lcet10.txt",
+    "mbrotli_seconds": 0.0048465,
+    "c_brotli_seconds": 0.00481,
+    "ratio_c_over_rust": 0.9924687919116888,
+    "mbrotli_bytes": 133991,
+    "c_brotli_bytes": 133991
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q5",
+    "case": "vendor-mapsdatazrh",
+    "mbrotli_seconds": 0.0028663,
+    "c_brotli_seconds": 0.0021697,
+    "ratio_c_over_rust": 0.7569689146286154,
+    "mbrotli_bytes": 167912,
+    "c_brotli_bytes": 167912
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q5",
+    "case": "vendor-plrabn12.txt",
+    "mbrotli_seconds": 0.0066438,
+    "c_brotli_seconds": 0.0065339000000000005,
+    "ratio_c_over_rust": 0.9834582618381048,
+    "mbrotli_bytes": 186038,
+    "c_brotli_bytes": 186038
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q5",
+    "case": "vendor-quickfox_repeated",
+    "mbrotli_seconds": 0.00011355,
+    "c_brotli_seconds": 7.5203e-05,
+    "ratio_c_over_rust": 0.662289740202554,
+    "mbrotli_bytes": 51,
+    "c_brotli_bytes": 51
+  },
+  {
+    "shape": "oneshot",
+    "quality": "q5",
+    "case": "vendor-random_org_10k.bin",
+    "mbrotli_seconds": 5.0066e-05,
+    "c_brotli_seconds": 4.9049e-05,
+    "ratio_c_over_rust": 0.9796868134063037,
+    "mbrotli_bytes": 10004,
+    "c_brotli_bytes": 10004
+  },
+  {
+    "shape": "presized",
+    "quality": "q0",
+    "case": "binary-256KiB",
+    "mbrotli_seconds": 0.00028988999999999995,
+    "c_brotli_seconds": 0.00032188,
+    "ratio_c_over_rust": 1.1103522025595918,
+    "mbrotli_bytes": 142114,
+    "c_brotli_bytes": 142114
+  },
+  {
+    "shape": "presized",
+    "quality": "q0",
+    "case": "compressible-256KiB",
+    "mbrotli_seconds": 3.7947e-05,
+    "c_brotli_seconds": 4.1515999999999994e-05,
+    "ratio_c_over_rust": 1.094052230742878,
+    "mbrotli_bytes": 220,
+    "c_brotli_bytes": 220
+  },
+  {
+    "shape": "presized",
+    "quality": "q0",
+    "case": "incompressible-256KiB",
+    "mbrotli_seconds": 2.0797e-05,
+    "c_brotli_seconds": 1.9606e-05,
+    "ratio_c_over_rust": 0.942732124825696,
+    "mbrotli_bytes": 262149,
+    "c_brotli_bytes": 262149
+  },
+  {
+    "shape": "presized",
+    "quality": "q0",
+    "case": "text-1KiB",
+    "mbrotli_seconds": 1.6853e-06,
+    "c_brotli_seconds": 1.7359e-06,
+    "ratio_c_over_rust": 1.0300243280128167,
+    "mbrotli_bytes": 229,
+    "c_brotli_bytes": 229
+  },
+  {
+    "shape": "presized",
+    "quality": "q0",
+    "case": "text-1MiB",
+    "mbrotli_seconds": 8.6233e-05,
+    "c_brotli_seconds": 8.3487e-05,
+    "ratio_c_over_rust": 0.9681560423503762,
+    "mbrotli_bytes": 27963,
+    "c_brotli_bytes": 27963
+  },
+  {
+    "shape": "presized",
+    "quality": "q0",
+    "case": "vendor-alice29.txt",
+    "mbrotli_seconds": 0.00019396,
+    "c_brotli_seconds": 0.00017842,
+    "ratio_c_over_rust": 0.9198803877088059,
+    "mbrotli_bytes": 65795,
+    "c_brotli_bytes": 65795
+  },
+  {
+    "shape": "presized",
+    "quality": "q0",
+    "case": "vendor-lcet10.txt",
+    "mbrotli_seconds": 0.0006209099999999999,
+    "c_brotli_seconds": 0.00053564,
+    "ratio_c_over_rust": 0.862669307951233,
+    "mbrotli_bytes": 173662,
+    "c_brotli_bytes": 173662
+  },
+  {
+    "shape": "presized",
+    "quality": "q0",
+    "case": "vendor-mapsdatazrh",
+    "mbrotli_seconds": 0.00026497,
+    "c_brotli_seconds": 0.00036553,
+    "ratio_c_over_rust": 1.3795146620372116,
+    "mbrotli_bytes": 187191,
+    "c_brotli_bytes": 187191
+  },
+  {
+    "shape": "presized",
+    "quality": "q0",
+    "case": "vendor-plrabn12.txt",
+    "mbrotli_seconds": 0.00096583,
+    "c_brotli_seconds": 0.0008995399999999999,
+    "ratio_c_over_rust": 0.9313647329240134,
+    "mbrotli_bytes": 235170,
+    "c_brotli_bytes": 235170
+  },
+  {
+    "shape": "presized",
+    "quality": "q0",
+    "case": "vendor-quickfox_repeated",
+    "mbrotli_seconds": 1.6643e-05,
+    "c_brotli_seconds": 1.8443999999999998e-05,
+    "ratio_c_over_rust": 1.1082136634020308,
+    "mbrotli_bytes": 203,
+    "c_brotli_bytes": 203
+  },
+  {
+    "shape": "presized",
+    "quality": "q0",
+    "case": "vendor-random_org_10k.bin",
+    "mbrotli_seconds": 9.1545e-06,
+    "c_brotli_seconds": 8.6844e-06,
+    "ratio_c_over_rust": 0.948648205800426,
+    "mbrotli_bytes": 10004,
+    "c_brotli_bytes": 10004
+  },
+  {
+    "shape": "presized",
+    "quality": "q1",
+    "case": "binary-256KiB",
+    "mbrotli_seconds": 0.00045119999999999996,
+    "c_brotli_seconds": 0.0006498799999999999,
+    "ratio_c_over_rust": 1.4403368794326241,
+    "mbrotli_bytes": 118708,
+    "c_brotli_bytes": 118708
+  },
+  {
+    "shape": "presized",
+    "quality": "q1",
+    "case": "compressible-256KiB",
+    "mbrotli_seconds": 8.8475e-06,
+    "c_brotli_seconds": 1.1444000000000001e-05,
+    "ratio_c_over_rust": 1.2934727324102855,
+    "mbrotli_bytes": 57,
+    "c_brotli_bytes": 57
+  },
+  {
+    "shape": "presized",
+    "quality": "q1",
+    "case": "incompressible-256KiB",
+    "mbrotli_seconds": 1.9492999999999998e-05,
+    "c_brotli_seconds": 2.0361e-05,
+    "ratio_c_over_rust": 1.0445288052121275,
+    "mbrotli_bytes": 262149,
+    "c_brotli_bytes": 262149
+  },
+  {
+    "shape": "presized",
+    "quality": "q1",
+    "case": "text-1KiB",
+    "mbrotli_seconds": 2.3231000000000003e-06,
+    "c_brotli_seconds": 2.2658999999999998e-06,
+    "ratio_c_over_rust": 0.975377728035814,
+    "mbrotli_bytes": 176,
+    "c_brotli_bytes": 176
+  },
+  {
+    "shape": "presized",
+    "quality": "q1",
+    "case": "text-1MiB",
+    "mbrotli_seconds": 0.00016286,
+    "c_brotli_seconds": 0.00018896,
+    "ratio_c_over_rust": 1.1602603463097139,
+    "mbrotli_bytes": 10001,
+    "c_brotli_bytes": 10001
+  },
+  {
+    "shape": "presized",
+    "quality": "q1",
+    "case": "vendor-alice29.txt",
+    "mbrotli_seconds": 0.00027964999999999994,
+    "c_brotli_seconds": 0.00035318,
+    "ratio_c_over_rust": 1.2629358126229218,
+    "mbrotli_bytes": 60292,
+    "c_brotli_bytes": 60292
+  },
+  {
+    "shape": "presized",
+    "quality": "q1",
+    "case": "vendor-lcet10.txt",
+    "mbrotli_seconds": 0.00086714,
+    "c_brotli_seconds": 0.0010279,
+    "ratio_c_over_rust": 1.1853910556542198,
+    "mbrotli_bytes": 154908,
+    "c_brotli_bytes": 154908
+  },
+  {
+    "shape": "presized",
+    "quality": "q1",
+    "case": "vendor-mapsdatazrh",
+    "mbrotli_seconds": 0.00037492,
+    "c_brotli_seconds": 0.00055823,
+    "ratio_c_over_rust": 1.4889309719406805,
+    "mbrotli_bytes": 181028,
+    "c_brotli_bytes": 181028
+  },
+  {
+    "shape": "presized",
+    "quality": "q1",
+    "case": "vendor-plrabn12.txt",
+    "mbrotli_seconds": 0.0012713000000000002,
+    "c_brotli_seconds": 0.0014822,
+    "ratio_c_over_rust": 1.1658931802092345,
+    "mbrotli_bytes": 206088,
+    "c_brotli_bytes": 206088
+  },
+  {
+    "shape": "presized",
+    "quality": "q1",
+    "case": "vendor-quickfox_repeated",
+    "mbrotli_seconds": 8.113899999999999e-06,
+    "c_brotli_seconds": 9.4966e-06,
+    "ratio_c_over_rust": 1.170411269549785,
+    "mbrotli_bytes": 89,
+    "c_brotli_bytes": 89
+  },
+  {
+    "shape": "presized",
+    "quality": "q1",
+    "case": "vendor-random_org_10k.bin",
+    "mbrotli_seconds": 1.2936999999999998e-05,
+    "c_brotli_seconds": 2.4381e-05,
+    "ratio_c_over_rust": 1.8845945737033316,
+    "mbrotli_bytes": 10004,
+    "c_brotli_bytes": 10004
+  },
+  {
+    "shape": "presized",
+    "quality": "q3",
+    "case": "binary-256KiB",
+    "mbrotli_seconds": 0.0011696,
+    "c_brotli_seconds": 0.0010123999999999999,
+    "ratio_c_over_rust": 0.8655950752393979,
+    "mbrotli_bytes": 99347,
+    "c_brotli_bytes": 99347
+  },
+  {
+    "shape": "presized",
+    "quality": "q3",
+    "case": "compressible-256KiB",
+    "mbrotli_seconds": 0.00018307,
+    "c_brotli_seconds": 0.00013999,
+    "ratio_c_over_rust": 0.7646801769814825,
+    "mbrotli_bytes": 19,
+    "c_brotli_bytes": 19
+  },
+  {
+    "shape": "presized",
+    "quality": "q3",
+    "case": "incompressible-256KiB",
+    "mbrotli_seconds": 0.00013975999999999998,
+    "c_brotli_seconds": 9.088e-05,
+    "ratio_c_over_rust": 0.6502575844304523,
+    "mbrotli_bytes": 262149,
+    "c_brotli_bytes": 262149
+  },
+  {
+    "shape": "presized",
+    "quality": "q3",
+    "case": "text-1KiB",
+    "mbrotli_seconds": 8.0918e-06,
+    "c_brotli_seconds": 5.5061e-06,
+    "ratio_c_over_rust": 0.6804542870560321,
+    "mbrotli_bytes": 157,
+    "c_brotli_bytes": 157
+  },
+  {
+    "shape": "presized",
+    "quality": "q3",
+    "case": "text-1MiB",
+    "mbrotli_seconds": 0.00072797,
+    "c_brotli_seconds": 0.0006253200000000001,
+    "ratio_c_over_rust": 0.8589914419550257,
+    "mbrotli_bytes": 8222,
+    "c_brotli_bytes": 8222
+  },
+  {
+    "shape": "presized",
+    "quality": "q3",
+    "case": "vendor-alice29.txt",
+    "mbrotli_seconds": 0.00076315,
+    "c_brotli_seconds": 0.00061946,
+    "ratio_c_over_rust": 0.8117146039441787,
+    "mbrotli_bytes": 56863,
+    "c_brotli_bytes": 56863
+  },
+  {
+    "shape": "presized",
+    "quality": "q3",
+    "case": "vendor-lcet10.txt",
+    "mbrotli_seconds": 0.0022158000000000004,
+    "c_brotli_seconds": 0.0019532,
+    "ratio_c_over_rust": 0.8814874988717392,
+    "mbrotli_bytes": 146522,
+    "c_brotli_bytes": 146522
+  },
+  {
+    "shape": "presized",
+    "quality": "q3",
+    "case": "vendor-mapsdatazrh",
+    "mbrotli_seconds": 0.0011496,
+    "c_brotli_seconds": 0.001027,
+    "ratio_c_over_rust": 0.8933542101600557,
+    "mbrotli_bytes": 175749,
+    "c_brotli_bytes": 175749
+  },
+  {
+    "shape": "presized",
+    "quality": "q3",
+    "case": "vendor-plrabn12.txt",
+    "mbrotli_seconds": 0.0031662,
+    "c_brotli_seconds": 0.0026618,
+    "ratio_c_over_rust": 0.8406923125513234,
+    "mbrotli_bytes": 198153,
+    "c_brotli_bytes": 198153
+  },
+  {
+    "shape": "presized",
+    "quality": "q3",
+    "case": "vendor-quickfox_repeated",
+    "mbrotli_seconds": 0.00012788,
+    "c_brotli_seconds": 9.156699999999999e-05,
+    "ratio_c_over_rust": 0.7160384735689708,
+    "mbrotli_bytes": 48,
+    "c_brotli_bytes": 48
+  },
+  {
+    "shape": "presized",
+    "quality": "q3",
+    "case": "vendor-random_org_10k.bin",
+    "mbrotli_seconds": 3.3799999999999995e-05,
+    "c_brotli_seconds": 2.9642e-05,
+    "ratio_c_over_rust": 0.8769822485207102,
+    "mbrotli_bytes": 10004,
+    "c_brotli_bytes": 10004
+  },
+  {
+    "shape": "presized",
+    "quality": "q4",
+    "case": "binary-256KiB",
+    "mbrotli_seconds": 0.0020713,
+    "c_brotli_seconds": 0.0016209,
+    "ratio_c_over_rust": 0.7825520204702361,
+    "mbrotli_bytes": 96205,
+    "c_brotli_bytes": 96205
+  },
+  {
+    "shape": "presized",
+    "quality": "q4",
+    "case": "compressible-256KiB",
+    "mbrotli_seconds": 0.00015997,
+    "c_brotli_seconds": 0.00011712,
+    "ratio_c_over_rust": 0.7321372757392011,
+    "mbrotli_bytes": 19,
+    "c_brotli_bytes": 19
+  },
+  {
+    "shape": "presized",
+    "quality": "q4",
+    "case": "incompressible-256KiB",
+    "mbrotli_seconds": 0.00016441999999999997,
+    "c_brotli_seconds": 0.00010290000000000001,
+    "ratio_c_over_rust": 0.6258362729594942,
+    "mbrotli_bytes": 262149,
+    "c_brotli_bytes": 262149
+  },
+  {
+    "shape": "presized",
+    "quality": "q4",
+    "case": "text-1KiB",
+    "mbrotli_seconds": 1.2268999999999999e-05,
+    "c_brotli_seconds": 7.6961e-06,
+    "ratio_c_over_rust": 0.6272801369304754,
+    "mbrotli_bytes": 157,
+    "c_brotli_bytes": 157
+  },
+  {
+    "shape": "presized",
+    "quality": "q4",
+    "case": "text-1MiB",
+    "mbrotli_seconds": 0.0008621699999999999,
+    "c_brotli_seconds": 0.0007052499999999999,
+    "ratio_c_over_rust": 0.8179941310878366,
+    "mbrotli_bytes": 7647,
+    "c_brotli_bytes": 7647
+  },
+  {
+    "shape": "presized",
+    "quality": "q4",
+    "case": "vendor-alice29.txt",
+    "mbrotli_seconds": 0.0011572,
+    "c_brotli_seconds": 0.00087157,
+    "ratio_c_over_rust": 0.7531714483235397,
+    "mbrotli_bytes": 55504,
+    "c_brotli_bytes": 55504
+  },
+  {
+    "shape": "presized",
+    "quality": "q4",
+    "case": "vendor-lcet10.txt",
+    "mbrotli_seconds": 0.0031728,
+    "c_brotli_seconds": 0.0026013000000000004,
+    "ratio_c_over_rust": 0.8198751891074132,
+    "mbrotli_bytes": 141896,
+    "c_brotli_bytes": 141896
+  },
+  {
+    "shape": "presized",
+    "quality": "q4",
+    "case": "vendor-mapsdatazrh",
+    "mbrotli_seconds": 0.0015365,
+    "c_brotli_seconds": 0.0013499000000000002,
+    "ratio_c_over_rust": 0.8785551578262285,
+    "mbrotli_bytes": 172868,
+    "c_brotli_bytes": 172868
+  },
+  {
+    "shape": "presized",
+    "quality": "q4",
+    "case": "vendor-plrabn12.txt",
+    "mbrotli_seconds": 0.0042288,
+    "c_brotli_seconds": 0.0035142000000000003,
+    "ratio_c_over_rust": 0.8310158910329173,
+    "mbrotli_bytes": 193873,
+    "c_brotli_bytes": 193873
+  },
+  {
+    "shape": "presized",
+    "quality": "q4",
+    "case": "vendor-quickfox_repeated",
+    "mbrotli_seconds": 0.00010967,
+    "c_brotli_seconds": 7.120399999999999e-05,
+    "ratio_c_over_rust": 0.6492568614935715,
+    "mbrotli_bytes": 52,
+    "c_brotli_bytes": 52
+  },
+  {
+    "shape": "presized",
+    "quality": "q4",
+    "case": "vendor-random_org_10k.bin",
+    "mbrotli_seconds": 4.9192e-05,
+    "c_brotli_seconds": 4.8219999999999996e-05,
+    "ratio_c_over_rust": 0.980240689543015,
+    "mbrotli_bytes": 10004,
+    "c_brotli_bytes": 10004
+  },
+  {
+    "shape": "presized",
+    "quality": "q5",
+    "case": "binary-256KiB",
+    "mbrotli_seconds": 0.0032081,
+    "c_brotli_seconds": 0.0022329,
+    "ratio_c_over_rust": 0.6960194507652504,
+    "mbrotli_bytes": 94650,
+    "c_brotli_bytes": 94650
+  },
+  {
+    "shape": "presized",
+    "quality": "q5",
+    "case": "compressible-256KiB",
+    "mbrotli_seconds": 0.00017091999999999997,
+    "c_brotli_seconds": 0.00012365,
+    "ratio_c_over_rust": 0.7234378656681489,
+    "mbrotli_bytes": 19,
+    "c_brotli_bytes": 19
+  },
+  {
+    "shape": "presized",
+    "quality": "q5",
+    "case": "incompressible-256KiB",
+    "mbrotli_seconds": 0.00026049,
+    "c_brotli_seconds": 0.0001634,
+    "ratio_c_over_rust": 0.6272793581327498,
+    "mbrotli_bytes": 262149,
+    "c_brotli_bytes": 262149
+  },
+  {
+    "shape": "presized",
+    "quality": "q5",
+    "case": "text-1KiB",
+    "mbrotli_seconds": 1.505e-05,
+    "c_brotli_seconds": 8.7263e-06,
+    "ratio_c_over_rust": 0.5798205980066445,
+    "mbrotli_bytes": 146,
+    "c_brotli_bytes": 146
+  },
+  {
+    "shape": "presized",
+    "quality": "q5",
+    "case": "text-1MiB",
+    "mbrotli_seconds": 0.0013847,
+    "c_brotli_seconds": 0.0013426,
+    "ratio_c_over_rust": 0.9695963024481837,
+    "mbrotli_bytes": 8254,
+    "c_brotli_bytes": 8254
+  },
+  {
+    "shape": "presized",
+    "quality": "q5",
+    "case": "vendor-alice29.txt",
+    "mbrotli_seconds": 0.0016722,
+    "c_brotli_seconds": 0.0016597,
+    "ratio_c_over_rust": 0.9925248176055497,
+    "mbrotli_bytes": 52809,
+    "c_brotli_bytes": 52809
+  },
+  {
+    "shape": "presized",
+    "quality": "q5",
+    "case": "vendor-lcet10.txt",
+    "mbrotli_seconds": 0.0046732,
+    "c_brotli_seconds": 0.0045949,
+    "ratio_c_over_rust": 0.9832448857314047,
+    "mbrotli_bytes": 133991,
+    "c_brotli_bytes": 133991
+  },
+  {
+    "shape": "presized",
+    "quality": "q5",
+    "case": "vendor-mapsdatazrh",
+    "mbrotli_seconds": 0.002827,
+    "c_brotli_seconds": 0.0022508,
+    "ratio_c_over_rust": 0.7961796957905907,
+    "mbrotli_bytes": 167912,
+    "c_brotli_bytes": 167912
+  },
+  {
+    "shape": "presized",
+    "quality": "q5",
+    "case": "vendor-plrabn12.txt",
+    "mbrotli_seconds": 0.0064717,
+    "c_brotli_seconds": 0.0063273,
+    "ratio_c_over_rust": 0.977687470061962,
+    "mbrotli_bytes": 186038,
+    "c_brotli_bytes": 186038
+  },
+  {
+    "shape": "presized",
+    "quality": "q5",
+    "case": "vendor-quickfox_repeated",
+    "mbrotli_seconds": 0.00011057999999999999,
+    "c_brotli_seconds": 7.5986e-05,
+    "ratio_c_over_rust": 0.687158618194972,
+    "mbrotli_bytes": 51,
+    "c_brotli_bytes": 51
+  },
+  {
+    "shape": "presized",
+    "quality": "q5",
+    "case": "vendor-random_org_10k.bin",
+    "mbrotli_seconds": 5.003e-05,
+    "c_brotli_seconds": 4.8012999999999996e-05,
+    "ratio_c_over_rust": 0.9596841894863081,
+    "mbrotli_bytes": 10004,
+    "c_brotli_bytes": 10004
+  },
+  {
+    "shape": "tiny",
+    "quality": "q0",
+    "case": "1024",
+    "mbrotli_seconds": 1.7185e-06,
+    "c_brotli_seconds": 1.7315999999999999e-06,
+    "ratio_c_over_rust": 1.0076229269711958,
+    "mbrotli_bytes": null,
+    "c_brotli_bytes": null
+  },
+  {
+    "shape": "tiny",
+    "quality": "q0",
+    "case": "16",
+    "mbrotli_seconds": 7.5106e-07,
+    "c_brotli_seconds": 6.910700000000001e-07,
+    "ratio_c_over_rust": 0.9201262216067959,
+    "mbrotli_bytes": null,
+    "c_brotli_bytes": null
+  },
+  {
+    "shape": "tiny",
+    "quality": "q0",
+    "case": "256",
+    "mbrotli_seconds": 1.3331999999999998e-06,
+    "c_brotli_seconds": 1.3413999999999998e-06,
+    "ratio_c_over_rust": 1.006150615061506,
+    "mbrotli_bytes": null,
+    "c_brotli_bytes": null
+  },
+  {
+    "shape": "tiny",
+    "quality": "q0",
+    "case": "64",
+    "mbrotli_seconds": 9.419e-07,
+    "c_brotli_seconds": 8.705300000000001e-07,
+    "ratio_c_over_rust": 0.924227625013271,
+    "mbrotli_bytes": null,
+    "c_brotli_bytes": null
+  },
+  {
+    "shape": "tiny",
+    "quality": "q1",
+    "case": "1024",
+    "mbrotli_seconds": 2.4148e-06,
+    "c_brotli_seconds": 2.2484e-06,
+    "ratio_c_over_rust": 0.931091601788968,
+    "mbrotli_bytes": null,
+    "c_brotli_bytes": null
+  },
+  {
+    "shape": "tiny",
+    "quality": "q1",
+    "case": "16",
+    "mbrotli_seconds": 1.6607e-06,
+    "c_brotli_seconds": 1.4313e-06,
+    "ratio_c_over_rust": 0.8618654784127174,
+    "mbrotli_bytes": null,
+    "c_brotli_bytes": null
+  },
+  {
+    "shape": "tiny",
+    "quality": "q1",
+    "case": "256",
+    "mbrotli_seconds": 2.2298e-06,
+    "c_brotli_seconds": 2.0716999999999996e-06,
+    "ratio_c_over_rust": 0.9290967799802672,
+    "mbrotli_bytes": null,
+    "c_brotli_bytes": null
+  },
+  {
+    "shape": "tiny",
+    "quality": "q1",
+    "case": "64",
+    "mbrotli_seconds": 1.858e-06,
+    "c_brotli_seconds": 1.6267e-06,
+    "ratio_c_over_rust": 0.8755113024757804,
+    "mbrotli_bytes": null,
+    "c_brotli_bytes": null
+  },
+  {
+    "shape": "tiny",
+    "quality": "q3",
+    "case": "1024",
+    "mbrotli_seconds": 8.3758e-06,
+    "c_brotli_seconds": 5.4831e-06,
+    "ratio_c_over_rust": 0.654635975071038,
+    "mbrotli_bytes": null,
+    "c_brotli_bytes": null
+  },
+  {
+    "shape": "tiny",
+    "quality": "q3",
+    "case": "16",
+    "mbrotli_seconds": 3.4304999999999996e-06,
+    "c_brotli_seconds": 1.6948e-06,
+    "ratio_c_over_rust": 0.4940387698586213,
+    "mbrotli_bytes": null,
+    "c_brotli_bytes": null
+  },
+  {
+    "shape": "tiny",
+    "quality": "q3",
+    "case": "256",
+    "mbrotli_seconds": 6.9123e-06,
+    "c_brotli_seconds": 4.2978e-06,
+    "ratio_c_over_rust": 0.6217612082808905,
+    "mbrotli_bytes": null,
+    "c_brotli_bytes": null
+  },
+  {
+    "shape": "tiny",
+    "quality": "q3",
+    "case": "64",
+    "mbrotli_seconds": 3.9613e-06,
+    "c_brotli_seconds": 1.997e-06,
+    "ratio_c_over_rust": 0.5041274329134375,
+    "mbrotli_bytes": null,
+    "c_brotli_bytes": null
+  },
+  {
+    "shape": "tiny",
+    "quality": "q4",
+    "case": "1024",
+    "mbrotli_seconds": 1.288e-05,
+    "c_brotli_seconds": 7.7723e-06,
+    "ratio_c_over_rust": 0.6034394409937888,
+    "mbrotli_bytes": null,
+    "c_brotli_bytes": null
+  },
+  {
+    "shape": "tiny",
+    "quality": "q4",
+    "case": "16",
+    "mbrotli_seconds": 5.713399999999999e-06,
+    "c_brotli_seconds": 2.7799999999999996e-06,
+    "ratio_c_over_rust": 0.48657541918997443,
+    "mbrotli_bytes": null,
+    "c_brotli_bytes": null
+  },
+  {
+    "shape": "tiny",
+    "quality": "q4",
+    "case": "256",
+    "mbrotli_seconds": 1.0906e-05,
+    "c_brotli_seconds": 6.9302999999999995e-06,
+    "ratio_c_over_rust": 0.6354575463047863,
+    "mbrotli_bytes": null,
+    "c_brotli_bytes": null
+  },
+  {
+    "shape": "tiny",
+    "quality": "q4",
+    "case": "64",
+    "mbrotli_seconds": 7.899e-06,
+    "c_brotli_seconds": 4.6486e-06,
+    "ratio_c_over_rust": 0.5885048740346879,
+    "mbrotli_bytes": null,
+    "c_brotli_bytes": null
+  },
+  {
+    "shape": "tiny",
+    "quality": "q5",
+    "case": "1024",
+    "mbrotli_seconds": 1.4992e-05,
+    "c_brotli_seconds": 8.9411e-06,
+    "ratio_c_over_rust": 0.596391408751334,
+    "mbrotli_bytes": null,
+    "c_brotli_bytes": null
+  },
+  {
+    "shape": "tiny",
+    "quality": "q5",
+    "case": "16",
+    "mbrotli_seconds": 8.036699999999999e-06,
+    "c_brotli_seconds": 2.9376e-06,
+    "ratio_c_over_rust": 0.3655231624920677,
+    "mbrotli_bytes": null,
+    "c_brotli_bytes": null
+  },
+  {
+    "shape": "tiny",
+    "quality": "q5",
+    "case": "256",
+    "mbrotli_seconds": 1.3593999999999999e-05,
+    "c_brotli_seconds": 7.421999999999999e-06,
+    "ratio_c_over_rust": 0.5459761659555686,
+    "mbrotli_bytes": null,
+    "c_brotli_bytes": null
+  },
+  {
+    "shape": "tiny",
+    "quality": "q5",
+    "case": "64",
+    "mbrotli_seconds": 1.0634e-05,
+    "c_brotli_seconds": 5.2050999999999995e-06,
+    "ratio_c_over_rust": 0.4894771487681023,
+    "mbrotli_bytes": null,
+    "c_brotli_bytes": null
+  }
+]

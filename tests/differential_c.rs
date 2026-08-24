@@ -8,13 +8,13 @@ mod support;
 
 use mbrotli::Brotli;
 use support::{
-    FAST_QUALITIES, boundary_corpora, c_compress, params, quality_number, structural_corpora,
+    IMPLEMENTED_QUALITIES, boundary_corpora, c_compress, params, quality_number, structural_corpora,
 };
 
 /// Compares one input against the C encoder for one parameter set.
 fn assert_matches_c(name: &str, data: &[u8], lgwin: usize) {
     let compressor = Brotli::default().compressor();
-    for quality in FAST_QUALITIES {
+    for quality in IMPLEMENTED_QUALITIES {
         let expected = c_compress(quality_number(quality), lgwin as i32, data);
         let actual = compressor
             .compress(params(quality, lgwin), data)

@@ -1,4 +1,4 @@
-//! Criterion benchmarks for Brotli quality 0 and 1.
+//! Criterion benchmarks for the Brotli qualities this crate implements.
 //!
 //! Every case feeds identical bytes, quality, window size, and encoder mode to
 //! this crate and to Google's C Brotli exposed by the `google-brotli-ffi`
@@ -32,8 +32,17 @@ use std::path::Path;
 /// Sliding window size used by every benchmark.
 const LGWIN: WindowBits = WindowBits::DEFAULT;
 
-/// Quality levels under measurement, paired with their numeric value.
-const QUALITIES: [QualityLevel; 2] = [QualityLevel::Q0, QualityLevel::Q1];
+/// Quality levels under measurement.
+///
+/// Every implemented quality is gated separately, so a gain at one may not be
+/// used to cover a loss at another.
+const QUALITIES: [QualityLevel; 5] = [
+    QualityLevel::Q0,
+    QualityLevel::Q1,
+    QualityLevel::Q3,
+    QualityLevel::Q4,
+    QualityLevel::Q5,
+];
 
 /// Safe wrappers over the raw C Brotli bindings.
 mod c_brotli {

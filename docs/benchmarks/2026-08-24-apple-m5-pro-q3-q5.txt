@@ -1,0 +1,3163 @@
+   Compiling mbrotli v0.1.0 (/Users/mnwa/RustroverProjects/mbrotli)
+    Finished `bench` profile [optimized] target(s) in 2.85s
+     Running benches/compress.rs (target/release/deps/compress-7007fb4290eae226)
+Gnuplot not found, using plotters backend
+corpus validation (lgwin 22, Brotli { level: Neon(Neon { _private: () }) })
+q0 text-1KiB                  c-brotli       229 bytes  mbrotli       229 bytes
+Benchmarking oneshot/q0/c-brotli/text-1KiB
+Benchmarking oneshot/q0/c-brotli/text-1KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q0/c-brotli/text-1KiB: Collecting 10 samples in estimated 3.0000 s (1.8M iterations)
+Benchmarking oneshot/q0/c-brotli/text-1KiB: Analyzing
+oneshot/q0/c-brotli/text-1KiB
+                        time:   [1.7356 µs 1.7464 µs 1.7588 µs]
+                        thrpt:  [555.23 MiB/s 559.19 MiB/s 562.67 MiB/s]
+                 change:
+                        time:   [+0.3954% +1.2390% +2.1287%] (p = 0.02 < 0.05)
+                        thrpt:  [−2.0844% −1.2238% −0.3939%]
+                        Change within noise threshold.
+Benchmarking oneshot/q0/mbrotli/text-1KiB
+Benchmarking oneshot/q0/mbrotli/text-1KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q0/mbrotli/text-1KiB: Collecting 10 samples in estimated 3.0000 s (1.7M iterations)
+Benchmarking oneshot/q0/mbrotli/text-1KiB: Analyzing
+oneshot/q0/mbrotli/text-1KiB
+                        time:   [1.7168 µs 1.7255 µs 1.7343 µs]
+                        thrpt:  [563.08 MiB/s 565.97 MiB/s 568.83 MiB/s]
+                 change:
+                        time:   [+0.3567% +0.8739% +1.3388%] (p = 0.00 < 0.05)
+                        thrpt:  [−1.3211% −0.8663% −0.3554%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+q0 text-1MiB                  c-brotli     27963 bytes  mbrotli     27963 bytes
+Benchmarking oneshot/q0/c-brotli/text-1MiB
+Benchmarking oneshot/q0/c-brotli/text-1MiB: Warming up for 1.0000 s
+Benchmarking oneshot/q0/c-brotli/text-1MiB: Collecting 10 samples in estimated 3.0009 s (37k iterations)
+Benchmarking oneshot/q0/c-brotli/text-1MiB: Analyzing
+oneshot/q0/c-brotli/text-1MiB
+                        time:   [80.424 µs 80.935 µs 81.547 µs]
+                        thrpt:  [11.975 GiB/s 12.066 GiB/s 12.143 GiB/s]
+                 change:
+                        time:   [+0.3319% +1.0836% +1.7931%] (p = 0.01 < 0.05)
+                        thrpt:  [−1.7615% −1.0720% −0.3308%]
+                        Change within noise threshold.
+Benchmarking oneshot/q0/mbrotli/text-1MiB
+Benchmarking oneshot/q0/mbrotli/text-1MiB: Warming up for 1.0000 s
+Benchmarking oneshot/q0/mbrotli/text-1MiB: Collecting 10 samples in estimated 3.0017 s (32k iterations)
+Benchmarking oneshot/q0/mbrotli/text-1MiB: Analyzing
+oneshot/q0/mbrotli/text-1MiB
+                        time:   [94.076 µs 94.713 µs 95.603 µs]
+                        thrpt:  [10.215 GiB/s 10.311 GiB/s 10.381 GiB/s]
+                 change:
+                        time:   [+0.8913% +1.7517% +2.7400%] (p = 0.00 < 0.05)
+                        thrpt:  [−2.6669% −1.7215% −0.8834%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+q0 binary-256KiB              c-brotli    142114 bytes  mbrotli    142114 bytes
+Benchmarking oneshot/q0/c-brotli/binary-256KiB
+Benchmarking oneshot/q0/c-brotli/binary-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q0/c-brotli/binary-256KiB: Collecting 10 samples in estimated 3.0089 s (8745 iterations)
+Benchmarking oneshot/q0/c-brotli/binary-256KiB: Analyzing
+oneshot/q0/c-brotli/binary-256KiB
+                        time:   [317.32 µs 325.43 µs 336.67 µs]
+                        thrpt:  [742.58 MiB/s 768.22 MiB/s 787.86 MiB/s]
+                 change:
+                        time:   [+1.0511% +3.3614% +6.0539%] (p = 0.01 < 0.05)
+                        thrpt:  [−5.7083% −3.2521% −1.0401%]
+                        Performance has regressed.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+Benchmarking oneshot/q0/mbrotli/binary-256KiB
+Benchmarking oneshot/q0/mbrotli/binary-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q0/mbrotli/binary-256KiB: Collecting 10 samples in estimated 3.0135 s (10k iterations)
+Benchmarking oneshot/q0/mbrotli/binary-256KiB: Analyzing
+oneshot/q0/mbrotli/binary-256KiB
+                        time:   [289.93 µs 290.64 µs 292.09 µs]
+                        thrpt:  [855.89 MiB/s 860.16 MiB/s 862.27 MiB/s]
+                 change:
+                        time:   [−0.9815% −0.5350% +0.0466%] (p = 0.05 > 0.05)
+                        thrpt:  [−0.0466% +0.5379% +0.9912%]
+                        No change in performance detected.
+q0 compressible-256KiB        c-brotli       220 bytes  mbrotli       220 bytes
+Benchmarking oneshot/q0/c-brotli/compressible-256KiB
+Benchmarking oneshot/q0/c-brotli/compressible-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q0/c-brotli/compressible-256KiB: Collecting 10 samples in estimated 3.0013 s (73k iterations)
+Benchmarking oneshot/q0/c-brotli/compressible-256KiB: Analyzing
+oneshot/q0/c-brotli/compressible-256KiB
+                        time:   [40.513 µs 40.554 µs 40.598 µs]
+                        thrpt:  [6.0136 GiB/s 6.0202 GiB/s 6.0262 GiB/s]
+                 change:
+                        time:   [−0.1794% +0.2436% +0.9598%] (p = 0.60 > 0.05)
+                        thrpt:  [−0.9507% −0.2430% +0.1797%]
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking oneshot/q0/mbrotli/compressible-256KiB
+Benchmarking oneshot/q0/mbrotli/compressible-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q0/mbrotli/compressible-256KiB: Collecting 10 samples in estimated 3.0016 s (73k iterations)
+Benchmarking oneshot/q0/mbrotli/compressible-256KiB: Analyzing
+oneshot/q0/mbrotli/compressible-256KiB
+                        time:   [40.527 µs 40.554 µs 40.586 µs]
+                        thrpt:  [6.0154 GiB/s 6.0202 GiB/s 6.0242 GiB/s]
+                 change:
+                        time:   [−0.6894% −0.1943% +0.1666%] (p = 0.49 > 0.05)
+                        thrpt:  [−0.1664% +0.1946% +0.6941%]
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+q0 incompressible-256KiB      c-brotli    262149 bytes  mbrotli    262149 bytes
+Benchmarking oneshot/q0/c-brotli/incompressible-256KiB
+Benchmarking oneshot/q0/c-brotli/incompressible-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q0/c-brotli/incompressible-256KiB: Collecting 10 samples in estimated 3.0006 s (159k iterations)
+Benchmarking oneshot/q0/c-brotli/incompressible-256KiB: Analyzing
+oneshot/q0/c-brotli/incompressible-256KiB
+                        time:   [18.766 µs 18.790 µs 18.804 µs]
+                        thrpt:  [12.983 GiB/s 12.993 GiB/s 13.010 GiB/s]
+                 change:
+                        time:   [−1.0178% −0.1881% +0.5244%] (p = 0.68 > 0.05)
+                        thrpt:  [−0.5217% +0.1885% +1.0283%]
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) low mild
+Benchmarking oneshot/q0/mbrotli/incompressible-256KiB
+Benchmarking oneshot/q0/mbrotli/incompressible-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q0/mbrotli/incompressible-256KiB: Collecting 10 samples in estimated 3.0009 s (103k iterations)
+Benchmarking oneshot/q0/mbrotli/incompressible-256KiB: Analyzing
+oneshot/q0/mbrotli/incompressible-256KiB
+                        time:   [28.944 µs 29.041 µs 29.250 µs]
+                        thrpt:  [8.3466 GiB/s 8.4069 GiB/s 8.4348 GiB/s]
+                 change:
+                        time:   [−2.0046% −0.9718% +0.0180%] (p = 0.09 > 0.05)
+                        thrpt:  [−0.0180% +0.9813% +2.0456%]
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+q0 vendor-alice29.txt         c-brotli     65795 bytes  mbrotli     65795 bytes
+Benchmarking oneshot/q0/c-brotli/vendor-alice29.txt
+Benchmarking oneshot/q0/c-brotli/vendor-alice29.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q0/c-brotli/vendor-alice29.txt: Collecting 10 samples in estimated 3.0047 s (17k iterations)
+Benchmarking oneshot/q0/c-brotli/vendor-alice29.txt: Analyzing
+oneshot/q0/c-brotli/vendor-alice29.txt
+                        time:   [173.62 µs 174.87 µs 176.65 µs]
+                        thrpt:  [821.06 MiB/s 829.43 MiB/s 835.41 MiB/s]
+                 change:
+                        time:   [−3.9675% −2.5912% −1.2119%] (p = 0.00 < 0.05)
+                        thrpt:  [+1.2268% +2.6601% +4.1314%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking oneshot/q0/mbrotli/vendor-alice29.txt
+Benchmarking oneshot/q0/mbrotli/vendor-alice29.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q0/mbrotli/vendor-alice29.txt: Collecting 10 samples in estimated 3.0063 s (15k iterations)
+Benchmarking oneshot/q0/mbrotli/vendor-alice29.txt: Analyzing
+oneshot/q0/mbrotli/vendor-alice29.txt
+                        time:   [192.35 µs 192.87 µs 193.96 µs]
+                        thrpt:  [747.82 MiB/s 752.01 MiB/s 754.06 MiB/s]
+                 change:
+                        time:   [−5.6842% −3.0805% −1.3596%] (p = 0.01 < 0.05)
+                        thrpt:  [+1.3783% +3.1785% +6.0267%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+q0 vendor-lcet10.txt          c-brotli    173662 bytes  mbrotli    173662 bytes
+Benchmarking oneshot/q0/c-brotli/vendor-lcet10.txt
+Benchmarking oneshot/q0/c-brotli/vendor-lcet10.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q0/c-brotli/vendor-lcet10.txt: Collecting 10 samples in estimated 3.0095 s (5445 iterations)
+Benchmarking oneshot/q0/c-brotli/vendor-lcet10.txt: Analyzing
+oneshot/q0/c-brotli/vendor-lcet10.txt
+                        time:   [530.98 µs 551.18 µs 570.88 µs]
+                        thrpt:  [712.90 MiB/s 738.38 MiB/s 766.48 MiB/s]
+                 change:
+                        time:   [−1.1084% +0.9650% +3.7979%] (p = 0.50 > 0.05)
+                        thrpt:  [−3.6590% −0.9558% +1.1208%]
+                        No change in performance detected.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+Benchmarking oneshot/q0/mbrotli/vendor-lcet10.txt
+Benchmarking oneshot/q0/mbrotli/vendor-lcet10.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q0/mbrotli/vendor-lcet10.txt: Collecting 10 samples in estimated 3.0157 s (4785 iterations)
+Benchmarking oneshot/q0/mbrotli/vendor-lcet10.txt: Analyzing
+oneshot/q0/mbrotli/vendor-lcet10.txt
+                        time:   [601.63 µs 604.26 µs 608.90 µs]
+                        thrpt:  [668.40 MiB/s 673.52 MiB/s 676.46 MiB/s]
+                 change:
+                        time:   [−7.3978% −5.2510% −3.3023%] (p = 0.00 < 0.05)
+                        thrpt:  [+3.4150% +5.5420% +7.9888%]
+                        Performance has improved.
+q0 vendor-plrabn12.txt        c-brotli    235170 bytes  mbrotli    235170 bytes
+Benchmarking oneshot/q0/c-brotli/vendor-plrabn12.txt
+Benchmarking oneshot/q0/c-brotli/vendor-plrabn12.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q0/c-brotli/vendor-plrabn12.txt: Collecting 10 samples in estimated 3.0272 s (3465 iterations)
+Benchmarking oneshot/q0/c-brotli/vendor-plrabn12.txt: Analyzing
+oneshot/q0/c-brotli/vendor-plrabn12.txt
+                        time:   [855.66 µs 857.79 µs 860.01 µs]
+                        thrpt:  [534.34 MiB/s 535.72 MiB/s 537.06 MiB/s]
+                 change:
+                        time:   [−17.294% −11.423% −6.1490%] (p = 0.00 < 0.05)
+                        thrpt:  [+6.5519% +12.896% +20.910%]
+                        Performance has improved.
+Found 4 outliers among 10 measurements (40.00%)
+  2 (20.00%) low mild
+  2 (20.00%) high mild
+Benchmarking oneshot/q0/mbrotli/vendor-plrabn12.txt
+Benchmarking oneshot/q0/mbrotli/vendor-plrabn12.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q0/mbrotli/vendor-plrabn12.txt: Collecting 10 samples in estimated 3.0164 s (3190 iterations)
+Benchmarking oneshot/q0/mbrotli/vendor-plrabn12.txt: Analyzing
+oneshot/q0/mbrotli/vendor-plrabn12.txt
+                        time:   [931.91 µs 933.80 µs 935.89 µs]
+                        thrpt:  [491.02 MiB/s 492.12 MiB/s 493.12 MiB/s]
+                 change:
+                        time:   [−4.7036% −3.7936% −2.8640%] (p = 0.00 < 0.05)
+                        thrpt:  [+2.9485% +3.9432% +4.9358%]
+                        Performance has improved.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high mild
+q0 vendor-mapsdatazrh         c-brotli    187191 bytes  mbrotli    187191 bytes
+Benchmarking oneshot/q0/c-brotli/vendor-mapsdatazrh
+Benchmarking oneshot/q0/c-brotli/vendor-mapsdatazrh: Warming up for 1.0000 s
+Benchmarking oneshot/q0/c-brotli/vendor-mapsdatazrh: Collecting 10 samples in estimated 3.0069 s (8195 iterations)
+Benchmarking oneshot/q0/c-brotli/vendor-mapsdatazrh: Analyzing
+oneshot/q0/c-brotli/vendor-mapsdatazrh
+                        time:   [356.99 µs 357.25 µs 357.52 µs]
+                        thrpt:  [762.59 MiB/s 763.17 MiB/s 763.73 MiB/s]
+                 change:
+                        time:   [−2.3341% −1.5926% −0.9245%] (p = 0.00 < 0.05)
+                        thrpt:  [+0.9331% +1.6183% +2.3899%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking oneshot/q0/mbrotli/vendor-mapsdatazrh
+Benchmarking oneshot/q0/mbrotli/vendor-mapsdatazrh: Warming up for 1.0000 s
+Benchmarking oneshot/q0/mbrotli/vendor-mapsdatazrh: Collecting 10 samples in estimated 3.0080 s (11k iterations)
+Benchmarking oneshot/q0/mbrotli/vendor-mapsdatazrh: Analyzing
+oneshot/q0/mbrotli/vendor-mapsdatazrh
+                        time:   [269.38 µs 270.07 µs 270.82 µs]
+                        thrpt:  [1006.7 MiB/s 1009.5 MiB/s 1012.1 MiB/s]
+                 change:
+                        time:   [−1.6970% −1.2893% −0.9202%] (p = 0.00 < 0.05)
+                        thrpt:  [+0.9288% +1.3062% +1.7263%]
+                        Change within noise threshold.
+q0 vendor-random_org_10k.bin  c-brotli     10004 bytes  mbrotli     10004 bytes
+Benchmarking oneshot/q0/c-brotli/vendor-random_org_10k.bin
+Benchmarking oneshot/q0/c-brotli/vendor-random_org_10k.bin: Warming up for 1.0000 s
+Benchmarking oneshot/q0/c-brotli/vendor-random_org_10k.bin: Collecting 10 samples in estimated 3.0002 s (346k iterations)
+Benchmarking oneshot/q0/c-brotli/vendor-random_org_10k.bin: Analyzing
+oneshot/q0/c-brotli/vendor-random_org_10k.bin
+                        time:   [8.6469 µs 8.6553 µs 8.6649 µs]
+                        thrpt:  [1.0748 GiB/s 1.0760 GiB/s 1.0771 GiB/s]
+                 change:
+                        time:   [−1.3039% −1.1183% −0.9328%] (p = 0.00 < 0.05)
+                        thrpt:  [+0.9416% +1.1309% +1.3211%]
+                        Change within noise threshold.
+Benchmarking oneshot/q0/mbrotli/vendor-random_org_10k.bin
+Benchmarking oneshot/q0/mbrotli/vendor-random_org_10k.bin: Warming up for 1.0000 s
+Benchmarking oneshot/q0/mbrotli/vendor-random_org_10k.bin: Collecting 10 samples in estimated 3.0003 s (315k iterations)
+Benchmarking oneshot/q0/mbrotli/vendor-random_org_10k.bin: Analyzing
+oneshot/q0/mbrotli/vendor-random_org_10k.bin
+                        time:   [9.4913 µs 9.5143 µs 9.5557 µs]
+                        thrpt:  [998.02 MiB/s 1002.4 MiB/s 1004.8 MiB/s]
+                 change:
+                        time:   [−1.4269% −0.3328% +0.3670%] (p = 0.65 > 0.05)
+                        thrpt:  [−0.3656% +0.3339% +1.4476%]
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+q0 vendor-quickfox_repeated   c-brotli       203 bytes  mbrotli       203 bytes
+Benchmarking oneshot/q0/c-brotli/vendor-quickfox_repeated
+Benchmarking oneshot/q0/c-brotli/vendor-quickfox_repeated: Warming up for 1.0000 s
+Benchmarking oneshot/q0/c-brotli/vendor-quickfox_repeated: Collecting 10 samples in estimated 3.0005 s (163k iterations)
+Benchmarking oneshot/q0/c-brotli/vendor-quickfox_repeated: Analyzing
+oneshot/q0/c-brotli/vendor-quickfox_repeated
+                        time:   [18.279 µs 18.296 µs 18.314 µs]
+                        thrpt:  [8.9566 GiB/s 8.9653 GiB/s 8.9736 GiB/s]
+                 change:
+                        time:   [−0.2696% −0.1000% +0.0624%] (p = 0.30 > 0.05)
+                        thrpt:  [−0.0623% +0.1001% +0.2704%]
+                        No change in performance detected.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high mild
+Benchmarking oneshot/q0/mbrotli/vendor-quickfox_repeated
+Benchmarking oneshot/q0/mbrotli/vendor-quickfox_repeated: Warming up for 1.0000 s
+Benchmarking oneshot/q0/mbrotli/vendor-quickfox_repeated: Collecting 10 samples in estimated 3.0001 s (162k iterations)
+Benchmarking oneshot/q0/mbrotli/vendor-quickfox_repeated: Analyzing
+oneshot/q0/mbrotli/vendor-quickfox_repeated
+                        time:   [18.460 µs 18.479 µs 18.505 µs]
+                        thrpt:  [8.8643 GiB/s 8.8768 GiB/s 8.8857 GiB/s]
+                 change:
+                        time:   [−0.7625% −0.5438% −0.3253%] (p = 0.00 < 0.05)
+                        thrpt:  [+0.3264% +0.5467% +0.7684%]
+                        Change within noise threshold.
+
+q1 text-1KiB                  c-brotli       176 bytes  mbrotli       176 bytes
+Benchmarking oneshot/q1/c-brotli/text-1KiB
+Benchmarking oneshot/q1/c-brotli/text-1KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q1/c-brotli/text-1KiB: Collecting 10 samples in estimated 3.0001 s (1.3M iterations)
+Benchmarking oneshot/q1/c-brotli/text-1KiB: Analyzing
+oneshot/q1/c-brotli/text-1KiB
+                        time:   [2.2470 µs 2.2497 µs 2.2516 µs]
+                        thrpt:  [433.73 MiB/s 434.08 MiB/s 434.61 MiB/s]
+                 change:
+                        time:   [−0.1067% +0.1078% +0.3520%] (p = 0.40 > 0.05)
+                        thrpt:  [−0.3507% −0.1077% +0.1068%]
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking oneshot/q1/mbrotli/text-1KiB
+Benchmarking oneshot/q1/mbrotli/text-1KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q1/mbrotli/text-1KiB: Collecting 10 samples in estimated 3.0001 s (1.3M iterations)
+Benchmarking oneshot/q1/mbrotli/text-1KiB: Analyzing
+oneshot/q1/mbrotli/text-1KiB
+                        time:   [2.3768 µs 2.3819 µs 2.3855 µs]
+                        thrpt:  [409.38 MiB/s 409.99 MiB/s 410.87 MiB/s]
+                 change:
+                        time:   [−4.9749% −3.8976% −2.9566%] (p = 0.00 < 0.05)
+                        thrpt:  [+3.0467% +4.0557% +5.2354%]
+                        Performance has improved.
+q1 text-1MiB                  c-brotli     10001 bytes  mbrotli     10001 bytes
+Benchmarking oneshot/q1/c-brotli/text-1MiB
+Benchmarking oneshot/q1/c-brotli/text-1MiB: Warming up for 1.0000 s
+Benchmarking oneshot/q1/c-brotli/text-1MiB: Collecting 10 samples in estimated 3.0029 s (16k iterations)
+Benchmarking oneshot/q1/c-brotli/text-1MiB: Analyzing
+oneshot/q1/c-brotli/text-1MiB
+                        time:   [186.20 µs 186.57 µs 187.34 µs]
+                        thrpt:  [5.2127 GiB/s 5.2343 GiB/s 5.2446 GiB/s]
+                 change:
+                        time:   [−0.3205% +0.1421% +0.6839%] (p = 0.66 > 0.05)
+                        thrpt:  [−0.6793% −0.1419% +0.3215%]
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking oneshot/q1/mbrotli/text-1MiB
+Benchmarking oneshot/q1/mbrotli/text-1MiB: Warming up for 1.0000 s
+Benchmarking oneshot/q1/mbrotli/text-1MiB: Collecting 10 samples in estimated 3.0026 s (18k iterations)
+Benchmarking oneshot/q1/mbrotli/text-1MiB: Analyzing
+oneshot/q1/mbrotli/text-1MiB
+                        time:   [169.71 µs 169.83 µs 170.02 µs]
+                        thrpt:  [5.7438 GiB/s 5.7501 GiB/s 5.7543 GiB/s]
+                 change:
+                        time:   [−1.2594% −1.1221% −0.9820%] (p = 0.00 < 0.05)
+                        thrpt:  [+0.9918% +1.1349% +1.2754%]
+                        Change within noise threshold.
+q1 binary-256KiB              c-brotli    118708 bytes  mbrotli    118708 bytes
+Benchmarking oneshot/q1/c-brotli/binary-256KiB
+Benchmarking oneshot/q1/c-brotli/binary-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q1/c-brotli/binary-256KiB: Collecting 10 samples in estimated 3.0346 s (4675 iterations)
+Benchmarking oneshot/q1/c-brotli/binary-256KiB: Analyzing
+oneshot/q1/c-brotli/binary-256KiB
+                        time:   [645.66 µs 646.88 µs 650.02 µs]
+                        thrpt:  [384.61 MiB/s 386.47 MiB/s 387.20 MiB/s]
+                 change:
+                        time:   [−0.5248% +0.0764% +0.6893%] (p = 0.83 > 0.05)
+                        thrpt:  [−0.6846% −0.0764% +0.5276%]
+                        No change in performance detected.
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high mild
+Benchmarking oneshot/q1/mbrotli/binary-256KiB
+Benchmarking oneshot/q1/mbrotli/binary-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q1/mbrotli/binary-256KiB: Collecting 10 samples in estimated 3.0069 s (6545 iterations)
+Benchmarking oneshot/q1/mbrotli/binary-256KiB: Analyzing
+oneshot/q1/mbrotli/binary-256KiB
+                        time:   [457.36 µs 457.83 µs 458.35 µs]
+                        thrpt:  [545.43 MiB/s 546.05 MiB/s 546.62 MiB/s]
+                 change:
+                        time:   [−0.6558% −0.5055% −0.3624%] (p = 0.00 < 0.05)
+                        thrpt:  [+0.3637% +0.5081% +0.6601%]
+                        Change within noise threshold.
+q1 compressible-256KiB        c-brotli        57 bytes  mbrotli        57 bytes
+Benchmarking oneshot/q1/c-brotli/compressible-256KiB
+Benchmarking oneshot/q1/c-brotli/compressible-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q1/c-brotli/compressible-256KiB: Collecting 10 samples in estimated 3.0002 s (258k iterations)
+Benchmarking oneshot/q1/c-brotli/compressible-256KiB: Analyzing
+oneshot/q1/c-brotli/compressible-256KiB
+                        time:   [11.573 µs 11.591 µs 11.620 µs]
+                        thrpt:  [21.011 GiB/s 21.063 GiB/s 21.095 GiB/s]
+                 change:
+                        time:   [−0.2518% +0.0784% +0.3861%] (p = 0.65 > 0.05)
+                        thrpt:  [−0.3846% −0.0784% +0.2525%]
+                        No change in performance detected.
+Benchmarking oneshot/q1/mbrotli/compressible-256KiB
+Benchmarking oneshot/q1/mbrotli/compressible-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q1/mbrotli/compressible-256KiB: Collecting 10 samples in estimated 3.0001 s (263k iterations)
+Benchmarking oneshot/q1/mbrotli/compressible-256KiB: Analyzing
+oneshot/q1/mbrotli/compressible-256KiB
+                        time:   [11.343 µs 11.374 µs 11.427 µs]
+                        thrpt:  [21.365 GiB/s 21.466 GiB/s 21.524 GiB/s]
+                 change:
+                        time:   [+0.0707% +0.3737% +0.7060%] (p = 0.04 < 0.05)
+                        thrpt:  [−0.7011% −0.3723% −0.0707%]
+                        Change within noise threshold.
+q1 incompressible-256KiB      c-brotli    262149 bytes  mbrotli    262149 bytes
+Benchmarking oneshot/q1/c-brotli/incompressible-256KiB
+Benchmarking oneshot/q1/c-brotli/incompressible-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q1/c-brotli/incompressible-256KiB: Collecting 10 samples in estimated 3.0004 s (147k iterations)
+Benchmarking oneshot/q1/c-brotli/incompressible-256KiB: Analyzing
+oneshot/q1/c-brotli/incompressible-256KiB
+                        time:   [20.301 µs 20.320 µs 20.338 µs]
+                        thrpt:  [12.004 GiB/s 12.015 GiB/s 12.026 GiB/s]
+                 change:
+                        time:   [−0.7074% −0.5055% −0.2902%] (p = 0.00 < 0.05)
+                        thrpt:  [+0.2911% +0.5080% +0.7124%]
+                        Change within noise threshold.
+Benchmarking oneshot/q1/mbrotli/incompressible-256KiB
+Benchmarking oneshot/q1/mbrotli/incompressible-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q1/mbrotli/incompressible-256KiB: Collecting 10 samples in estimated 3.0006 s (99k iterations)
+Benchmarking oneshot/q1/mbrotli/incompressible-256KiB: Analyzing
+oneshot/q1/mbrotli/incompressible-256KiB
+                        time:   [30.347 µs 30.752 µs 31.243 µs]
+                        thrpt:  [7.8142 GiB/s 7.9390 GiB/s 8.0449 GiB/s]
+                 change:
+                        time:   [+0.3687% +1.0475% +1.8888%] (p = 0.01 < 0.05)
+                        thrpt:  [−1.8538% −1.0366% −0.3673%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+q1 vendor-alice29.txt         c-brotli     60292 bytes  mbrotli     60292 bytes
+Benchmarking oneshot/q1/c-brotli/vendor-alice29.txt
+Benchmarking oneshot/q1/c-brotli/vendor-alice29.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q1/c-brotli/vendor-alice29.txt: Collecting 10 samples in estimated 3.0147 s (8525 iterations)
+Benchmarking oneshot/q1/c-brotli/vendor-alice29.txt: Analyzing
+oneshot/q1/c-brotli/vendor-alice29.txt
+                        time:   [346.90 µs 348.09 µs 350.16 µs]
+                        thrpt:  [414.22 MiB/s 416.68 MiB/s 418.11 MiB/s]
+                 change:
+                        time:   [+0.5154% +1.1058% +1.8447%] (p = 0.01 < 0.05)
+                        thrpt:  [−1.8112% −1.0937% −0.5127%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking oneshot/q1/mbrotli/vendor-alice29.txt
+Benchmarking oneshot/q1/mbrotli/vendor-alice29.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q1/mbrotli/vendor-alice29.txt: Collecting 10 samples in estimated 3.0075 s (10k iterations)
+Benchmarking oneshot/q1/mbrotli/vendor-alice29.txt: Analyzing
+oneshot/q1/mbrotli/vendor-alice29.txt
+                        time:   [280.18 µs 281.34 µs 282.33 µs]
+                        thrpt:  [513.73 MiB/s 515.54 MiB/s 517.68 MiB/s]
+                 change:
+                        time:   [−7.6569% −4.7389% −2.0651%] (p = 0.00 < 0.05)
+                        thrpt:  [+2.1086% +4.9746% +8.2918%]
+                        Performance has improved.
+q1 vendor-lcet10.txt          c-brotli    154908 bytes  mbrotli    154908 bytes
+Benchmarking oneshot/q1/c-brotli/vendor-lcet10.txt
+Benchmarking oneshot/q1/c-brotli/vendor-lcet10.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q1/c-brotli/vendor-lcet10.txt: Collecting 10 samples in estimated 3.0030 s (2860 iterations)
+Benchmarking oneshot/q1/c-brotli/vendor-lcet10.txt: Analyzing
+oneshot/q1/c-brotli/vendor-lcet10.txt
+                        time:   [993.16 µs 997.81 µs 1.0042 ms]
+                        thrpt:  [405.30 MiB/s 407.88 MiB/s 409.79 MiB/s]
+                 change:
+                        time:   [−1.2055% −0.7410% −0.2415%] (p = 0.01 < 0.05)
+                        thrpt:  [+0.2421% +0.7465% +1.2202%]
+                        Change within noise threshold.
+Benchmarking oneshot/q1/mbrotli/vendor-lcet10.txt
+Benchmarking oneshot/q1/mbrotli/vendor-lcet10.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q1/mbrotli/vendor-lcet10.txt: Collecting 10 samples in estimated 3.0276 s (3410 iterations)
+Benchmarking oneshot/q1/mbrotli/vendor-lcet10.txt: Analyzing
+oneshot/q1/mbrotli/vendor-lcet10.txt
+                        time:   [860.35 µs 864.90 µs 869.79 µs]
+                        thrpt:  [467.91 MiB/s 470.56 MiB/s 473.04 MiB/s]
+                 change:
+                        time:   [−1.7241% −0.9780% −0.1800%] (p = 0.03 < 0.05)
+                        thrpt:  [+0.1803% +0.9877% +1.7544%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+q1 vendor-plrabn12.txt        c-brotli    206088 bytes  mbrotli    206088 bytes
+Benchmarking oneshot/q1/c-brotli/vendor-plrabn12.txt
+Benchmarking oneshot/q1/c-brotli/vendor-plrabn12.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q1/c-brotli/vendor-plrabn12.txt: Collecting 10 samples in estimated 3.0743 s (2090 iterations)
+Benchmarking oneshot/q1/c-brotli/vendor-plrabn12.txt: Analyzing
+oneshot/q1/c-brotli/vendor-plrabn12.txt
+                        time:   [1.4470 ms 1.4537 ms 1.4609 ms]
+                        thrpt:  [314.56 MiB/s 316.11 MiB/s 317.57 MiB/s]
+                 change:
+                        time:   [−2.3975% −0.8320% +0.3874%] (p = 0.33 > 0.05)
+                        thrpt:  [−0.3859% +0.8389% +2.4564%]
+                        No change in performance detected.
+Benchmarking oneshot/q1/mbrotli/vendor-plrabn12.txt
+Benchmarking oneshot/q1/mbrotli/vendor-plrabn12.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q1/mbrotli/vendor-plrabn12.txt: Collecting 10 samples in estimated 3.0656 s (2310 iterations)
+Benchmarking oneshot/q1/mbrotli/vendor-plrabn12.txt: Analyzing
+oneshot/q1/mbrotli/vendor-plrabn12.txt
+                        time:   [1.2738 ms 1.2786 ms 1.2862 ms]
+                        thrpt:  [357.28 MiB/s 359.41 MiB/s 360.75 MiB/s]
+                 change:
+                        time:   [+0.9955% +1.8962% +2.9539%] (p = 0.00 < 0.05)
+                        thrpt:  [−2.8692% −1.8609% −0.9857%]
+                        Change within noise threshold.
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high severe
+q1 vendor-mapsdatazrh         c-brotli    181028 bytes  mbrotli    181028 bytes
+Benchmarking oneshot/q1/c-brotli/vendor-mapsdatazrh
+Benchmarking oneshot/q1/c-brotli/vendor-mapsdatazrh: Warming up for 1.0000 s
+Benchmarking oneshot/q1/c-brotli/vendor-mapsdatazrh: Collecting 10 samples in estimated 3.0011 s (5335 iterations)
+Benchmarking oneshot/q1/c-brotli/vendor-mapsdatazrh: Analyzing
+oneshot/q1/c-brotli/vendor-mapsdatazrh
+                        time:   [558.64 µs 562.74 µs 569.29 µs]
+                        thrpt:  [478.91 MiB/s 484.49 MiB/s 488.05 MiB/s]
+                 change:
+                        time:   [−0.1504% +0.6224% +1.5584%] (p = 0.19 > 0.05)
+                        thrpt:  [−1.5345% −0.6186% +0.1506%]
+                        No change in performance detected.
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high mild
+Benchmarking oneshot/q1/mbrotli/vendor-mapsdatazrh
+Benchmarking oneshot/q1/mbrotli/vendor-mapsdatazrh: Warming up for 1.0000 s
+Benchmarking oneshot/q1/mbrotli/vendor-mapsdatazrh: Collecting 10 samples in estimated 3.0093 s (7810 iterations)
+Benchmarking oneshot/q1/mbrotli/vendor-mapsdatazrh: Analyzing
+oneshot/q1/mbrotli/vendor-mapsdatazrh
+                        time:   [380.06 µs 386.99 µs 395.71 µs]
+                        thrpt:  [688.99 MiB/s 704.52 MiB/s 717.36 MiB/s]
+                 change:
+                        time:   [+2.7576% +4.7656% +6.9591%] (p = 0.00 < 0.05)
+                        thrpt:  [−6.5063% −4.5488% −2.6836%]
+                        Performance has regressed.
+q1 vendor-random_org_10k.bin  c-brotli     10004 bytes  mbrotli     10004 bytes
+Benchmarking oneshot/q1/c-brotli/vendor-random_org_10k.bin
+Benchmarking oneshot/q1/c-brotli/vendor-random_org_10k.bin: Warming up for 1.0000 s
+Benchmarking oneshot/q1/c-brotli/vendor-random_org_10k.bin: Collecting 10 samples in estimated 3.0009 s (122k iterations)
+Benchmarking oneshot/q1/c-brotli/vendor-random_org_10k.bin: Analyzing
+oneshot/q1/c-brotli/vendor-random_org_10k.bin
+                        time:   [24.899 µs 25.280 µs 25.610 µs]
+                        thrpt:  [372.39 MiB/s 377.24 MiB/s 383.02 MiB/s]
+                 change:
+                        time:   [+1.5751% +2.7687% +3.9319%] (p = 0.00 < 0.05)
+                        thrpt:  [−3.7831% −2.6941% −1.5507%]
+                        Performance has regressed.
+Benchmarking oneshot/q1/mbrotli/vendor-random_org_10k.bin
+Benchmarking oneshot/q1/mbrotli/vendor-random_org_10k.bin: Warming up for 1.0000 s
+Benchmarking oneshot/q1/mbrotli/vendor-random_org_10k.bin: Collecting 10 samples in estimated 3.0006 s (225k iterations)
+Benchmarking oneshot/q1/mbrotli/vendor-random_org_10k.bin: Analyzing
+oneshot/q1/mbrotli/vendor-random_org_10k.bin
+                        time:   [13.364 µs 13.618 µs 13.814 µs]
+                        thrpt:  [690.38 MiB/s 700.31 MiB/s 713.63 MiB/s]
+                 change:
+                        time:   [+0.9602% +2.4136% +4.2009%] (p = 0.01 < 0.05)
+                        thrpt:  [−4.0315% −2.3567% −0.9510%]
+                        Change within noise threshold.
+q1 vendor-quickfox_repeated   c-brotli        89 bytes  mbrotli        89 bytes
+Benchmarking oneshot/q1/c-brotli/vendor-quickfox_repeated
+Benchmarking oneshot/q1/c-brotli/vendor-quickfox_repeated: Warming up for 1.0000 s
+Benchmarking oneshot/q1/c-brotli/vendor-quickfox_repeated: Collecting 10 samples in estimated 3.0001 s (300k iterations)
+Benchmarking oneshot/q1/c-brotli/vendor-quickfox_repeated: Analyzing
+oneshot/q1/c-brotli/vendor-quickfox_repeated
+                        time:   [9.5876 µs 9.7599 µs 10.038 µs]
+                        thrpt:  [16.342 GiB/s 16.807 GiB/s 17.109 GiB/s]
+                 change:
+                        time:   [+1.0066% +2.2967% +3.8692%] (p = 0.00 < 0.05)
+                        thrpt:  [−3.7250% −2.2452% −0.9966%]
+                        Performance has regressed.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking oneshot/q1/mbrotli/vendor-quickfox_repeated
+Benchmarking oneshot/q1/mbrotli/vendor-quickfox_repeated: Warming up for 1.0000 s
+Benchmarking oneshot/q1/mbrotli/vendor-quickfox_repeated: Collecting 10 samples in estimated 3.0005 s (306k iterations)
+Benchmarking oneshot/q1/mbrotli/vendor-quickfox_repeated: Analyzing
+oneshot/q1/mbrotli/vendor-quickfox_repeated
+                        time:   [9.7301 µs 9.7669 µs 9.8118 µs]
+                        thrpt:  [16.718 GiB/s 16.795 GiB/s 16.858 GiB/s]
+                 change:
+                        time:   [−1.9633% −1.3837% −0.8760%] (p = 0.00 < 0.05)
+                        thrpt:  [+0.8838% +1.4031% +2.0027%]
+                        Change within noise threshold.
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high mild
+
+q3 text-1KiB                  c-brotli       157 bytes  mbrotli       157 bytes
+Benchmarking oneshot/q3/c-brotli/text-1KiB
+Benchmarking oneshot/q3/c-brotli/text-1KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q3/c-brotli/text-1KiB: Collecting 10 samples in estimated 3.0003 s (557k iterations)
+Benchmarking oneshot/q3/c-brotli/text-1KiB: Analyzing
+oneshot/q3/c-brotli/text-1KiB
+                        time:   [5.3772 µs 5.3901 µs 5.4060 µs]
+                        thrpt:  [180.65 MiB/s 181.18 MiB/s 181.61 MiB/s]
+                 change:
+                        time:   [−0.2118% +0.0197% +0.2661%] (p = 0.88 > 0.05)
+                        thrpt:  [−0.2654% −0.0197% +0.2123%]
+                        No change in performance detected.
+Benchmarking oneshot/q3/mbrotli/text-1KiB
+Benchmarking oneshot/q3/mbrotli/text-1KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q3/mbrotli/text-1KiB: Collecting 10 samples in estimated 3.0004 s (368k iterations)
+Benchmarking oneshot/q3/mbrotli/text-1KiB: Analyzing
+oneshot/q3/mbrotli/text-1KiB
+                        time:   [8.1047 µs 8.1601 µs 8.2786 µs]
+                        thrpt:  [117.96 MiB/s 119.67 MiB/s 120.49 MiB/s]
+                 change:
+                        time:   [−5.2138% −4.5127% −3.3449%] (p = 0.00 < 0.05)
+                        thrpt:  [+3.4607% +4.7259% +5.5006%]
+                        Performance has improved.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+q3 text-1MiB                  c-brotli      8222 bytes  mbrotli      8222 bytes
+Benchmarking oneshot/q3/c-brotli/text-1MiB
+Benchmarking oneshot/q3/c-brotli/text-1MiB: Warming up for 1.0000 s
+Benchmarking oneshot/q3/c-brotli/text-1MiB: Collecting 10 samples in estimated 3.0076 s (4840 iterations)
+Benchmarking oneshot/q3/c-brotli/text-1MiB: Analyzing
+oneshot/q3/c-brotli/text-1MiB
+                        time:   [616.45 µs 617.50 µs 618.59 µs]
+                        thrpt:  [1.5787 GiB/s 1.5815 GiB/s 1.5842 GiB/s]
+                 change:
+                        time:   [−1.9389% −0.4743% +0.4810%] (p = 0.63 > 0.05)
+                        thrpt:  [−0.4787% +0.4766% +1.9773%]
+                        No change in performance detected.
+Benchmarking oneshot/q3/mbrotli/text-1MiB
+Benchmarking oneshot/q3/mbrotli/text-1MiB: Warming up for 1.0000 s
+Benchmarking oneshot/q3/mbrotli/text-1MiB: Collecting 10 samples in estimated 3.0381 s (4125 iterations)
+Benchmarking oneshot/q3/mbrotli/text-1MiB: Analyzing
+oneshot/q3/mbrotli/text-1MiB
+                        time:   [738.59 µs 752.50 µs 778.08 µs]
+                        thrpt:  [1.2551 GiB/s 1.2978 GiB/s 1.3222 GiB/s]
+                 change:
+                        time:   [−10.140% −8.1686% −5.7899%] (p = 0.00 < 0.05)
+                        thrpt:  [+6.1458% +8.8952% +11.284%]
+                        Performance has improved.
+q3 binary-256KiB              c-brotli     99347 bytes  mbrotli     99347 bytes
+Benchmarking oneshot/q3/c-brotli/binary-256KiB
+Benchmarking oneshot/q3/c-brotli/binary-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q3/c-brotli/binary-256KiB: Collecting 10 samples in estimated 3.0134 s (2915 iterations)
+Benchmarking oneshot/q3/c-brotli/binary-256KiB: Analyzing
+oneshot/q3/c-brotli/binary-256KiB
+                        time:   [1.0025 ms 1.0084 ms 1.0232 ms]
+                        thrpt:  [244.32 MiB/s 247.92 MiB/s 249.38 MiB/s]
+                 change:
+                        time:   [+0.9110% +2.4650% +4.4967%] (p = 0.01 < 0.05)
+                        thrpt:  [−4.3032% −2.4057% −0.9028%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking oneshot/q3/mbrotli/binary-256KiB
+Benchmarking oneshot/q3/mbrotli/binary-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q3/mbrotli/binary-256KiB: Collecting 10 samples in estimated 3.0056 s (2585 iterations)
+Benchmarking oneshot/q3/mbrotli/binary-256KiB: Analyzing
+oneshot/q3/mbrotli/binary-256KiB
+                        time:   [1.1572 ms 1.1590 ms 1.1616 ms]
+                        thrpt:  [215.21 MiB/s 215.69 MiB/s 216.04 MiB/s]
+                 change:
+                        time:   [−24.367% −24.078% −23.836%] (p = 0.00 < 0.05)
+                        thrpt:  [+31.295% +31.714% +32.217%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) low mild
+q3 compressible-256KiB        c-brotli        19 bytes  mbrotli        19 bytes
+Benchmarking oneshot/q3/c-brotli/compressible-256KiB
+Benchmarking oneshot/q3/c-brotli/compressible-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q3/c-brotli/compressible-256KiB: Collecting 10 samples in estimated 3.0004 s (21k iterations)
+Benchmarking oneshot/q3/c-brotli/compressible-256KiB: Analyzing
+oneshot/q3/c-brotli/compressible-256KiB
+                        time:   [139.54 µs 140.14 µs 141.31 µs]
+                        thrpt:  [1.7277 GiB/s 1.7421 GiB/s 1.7496 GiB/s]
+                 change:
+                        time:   [−0.2125% +0.3975% +1.1974%] (p = 0.38 > 0.05)
+                        thrpt:  [−1.1833% −0.3960% +0.2130%]
+                        No change in performance detected.
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high severe
+Benchmarking oneshot/q3/mbrotli/compressible-256KiB
+Benchmarking oneshot/q3/mbrotli/compressible-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q3/mbrotli/compressible-256KiB: Collecting 10 samples in estimated 3.0027 s (16k iterations)
+Benchmarking oneshot/q3/mbrotli/compressible-256KiB: Analyzing
+oneshot/q3/mbrotli/compressible-256KiB
+                        time:   [181.27 µs 181.57 µs 182.06 µs]
+                        thrpt:  [1.3410 GiB/s 1.3446 GiB/s 1.3468 GiB/s]
+                 change:
+                        time:   [+1.4838% +1.6945% +1.9418%] (p = 0.00 < 0.05)
+                        thrpt:  [−1.9048% −1.6662% −1.4621%]
+                        Performance has regressed.
+q3 incompressible-256KiB      c-brotli    262149 bytes  mbrotli    262149 bytes
+Benchmarking oneshot/q3/c-brotli/incompressible-256KiB
+Benchmarking oneshot/q3/c-brotli/incompressible-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q3/c-brotli/incompressible-256KiB: Collecting 10 samples in estimated 3.0011 s (33k iterations)
+Benchmarking oneshot/q3/c-brotli/incompressible-256KiB: Analyzing
+oneshot/q3/c-brotli/incompressible-256KiB
+                        time:   [90.669 µs 90.914 µs 91.079 µs]
+                        thrpt:  [2.6806 GiB/s 2.6854 GiB/s 2.6927 GiB/s]
+                 change:
+                        time:   [+9.9857% +10.395% +10.759%] (p = 0.00 < 0.05)
+                        thrpt:  [−9.7138% −9.4159% −9.0791%]
+                        Performance has regressed.
+Benchmarking oneshot/q3/mbrotli/incompressible-256KiB
+Benchmarking oneshot/q3/mbrotli/incompressible-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q3/mbrotli/incompressible-256KiB: Collecting 10 samples in estimated 3.0011 s (21k iterations)
+Benchmarking oneshot/q3/mbrotli/incompressible-256KiB: Analyzing
+oneshot/q3/mbrotli/incompressible-256KiB
+                        time:   [140.60 µs 141.16 µs 141.69 µs]
+                        thrpt:  [1.7231 GiB/s 1.7296 GiB/s 1.7364 GiB/s]
+                 change:
+                        time:   [−9.7315% −9.4377% −9.1222%] (p = 0.00 < 0.05)
+                        thrpt:  [+10.038% +10.421% +10.781%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+q3 vendor-alice29.txt         c-brotli     56863 bytes  mbrotli     56863 bytes
+Benchmarking oneshot/q3/c-brotli/vendor-alice29.txt
+Benchmarking oneshot/q3/c-brotli/vendor-alice29.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q3/c-brotli/vendor-alice29.txt: Collecting 10 samples in estimated 3.0123 s (4565 iterations)
+Benchmarking oneshot/q3/c-brotli/vendor-alice29.txt: Analyzing
+oneshot/q3/c-brotli/vendor-alice29.txt
+                        time:   [645.39 µs 652.36 µs 655.99 µs]
+                        thrpt:  [221.11 MiB/s 222.34 MiB/s 224.74 MiB/s]
+                 change:
+                        time:   [+0.7228% +2.0920% +3.4044%] (p = 0.01 < 0.05)
+                        thrpt:  [−3.2923% −2.0491% −0.7177%]
+                        Change within noise threshold.
+Benchmarking oneshot/q3/mbrotli/vendor-alice29.txt
+Benchmarking oneshot/q3/mbrotli/vendor-alice29.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q3/mbrotli/vendor-alice29.txt: Collecting 10 samples in estimated 3.0054 s (3630 iterations)
+Benchmarking oneshot/q3/mbrotli/vendor-alice29.txt: Analyzing
+oneshot/q3/mbrotli/vendor-alice29.txt
+                        time:   [822.34 µs 843.07 µs 879.64 µs]
+                        thrpt:  [164.89 MiB/s 172.04 MiB/s 176.38 MiB/s]
+                 change:
+                        time:   [−16.234% −13.700% −10.636%] (p = 0.00 < 0.05)
+                        thrpt:  [+11.901% +15.875% +19.380%]
+                        Performance has improved.
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high mild
+q3 vendor-lcet10.txt          c-brotli    146522 bytes  mbrotli    146522 bytes
+Benchmarking oneshot/q3/c-brotli/vendor-lcet10.txt
+Benchmarking oneshot/q3/c-brotli/vendor-lcet10.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q3/c-brotli/vendor-lcet10.txt: Collecting 10 samples in estimated 3.0769 s (1485 iterations)
+Benchmarking oneshot/q3/c-brotli/vendor-lcet10.txt: Analyzing
+oneshot/q3/c-brotli/vendor-lcet10.txt
+                        time:   [2.0362 ms 2.0560 ms 2.0691 ms]
+                        thrpt:  [196.70 MiB/s 197.95 MiB/s 199.87 MiB/s]
+                 change:
+                        time:   [+1.6833% +2.7663% +3.8013%] (p = 0.00 < 0.05)
+                        thrpt:  [−3.6621% −2.6919% −1.6554%]
+                        Performance has regressed.
+Benchmarking oneshot/q3/mbrotli/vendor-lcet10.txt
+Benchmarking oneshot/q3/mbrotli/vendor-lcet10.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q3/mbrotli/vendor-lcet10.txt: Collecting 10 samples in estimated 3.1040 s (1320 iterations)
+Benchmarking oneshot/q3/mbrotli/vendor-lcet10.txt: Analyzing
+oneshot/q3/mbrotli/vendor-lcet10.txt
+                        time:   [2.2996 ms 2.3146 ms 2.3369 ms]
+                        thrpt:  [174.16 MiB/s 175.83 MiB/s 176.98 MiB/s]
+                 change:
+                        time:   [−15.800% −14.546% −13.439%] (p = 0.00 < 0.05)
+                        thrpt:  [+15.525% +17.022% +18.765%]
+                        Performance has improved.
+q3 vendor-plrabn12.txt        c-brotli    198153 bytes  mbrotli    198153 bytes
+Benchmarking oneshot/q3/c-brotli/vendor-plrabn12.txt
+Benchmarking oneshot/q3/c-brotli/vendor-plrabn12.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q3/c-brotli/vendor-plrabn12.txt: Collecting 10 samples in estimated 3.0705 s (1045 iterations)
+Benchmarking oneshot/q3/c-brotli/vendor-plrabn12.txt: Analyzing
+oneshot/q3/c-brotli/vendor-plrabn12.txt
+                        time:   [2.7516 ms 2.7881 ms 2.8243 ms]
+                        thrpt:  [162.71 MiB/s 164.82 MiB/s 167.01 MiB/s]
+                 change:
+                        time:   [+1.9502% +3.2532% +4.9559%] (p = 0.00 < 0.05)
+                        thrpt:  [−4.7218% −3.1507% −1.9128%]
+                        Performance has regressed.
+Benchmarking oneshot/q3/mbrotli/vendor-plrabn12.txt
+Benchmarking oneshot/q3/mbrotli/vendor-plrabn12.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q3/mbrotli/vendor-plrabn12.txt: Collecting 10 samples in estimated 3.1700 s (990 iterations)
+Benchmarking oneshot/q3/mbrotli/vendor-plrabn12.txt: Analyzing
+oneshot/q3/mbrotli/vendor-plrabn12.txt
+                        time:   [3.1209 ms 3.1659 ms 3.2212 ms]
+                        thrpt:  [142.66 MiB/s 145.15 MiB/s 147.24 MiB/s]
+                 change:
+                        time:   [−15.879% −14.352% −12.990%] (p = 0.00 < 0.05)
+                        thrpt:  [+14.929% +16.757% +18.876%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+q3 vendor-mapsdatazrh         c-brotli    175749 bytes  mbrotli    175749 bytes
+Benchmarking oneshot/q3/c-brotli/vendor-mapsdatazrh
+Benchmarking oneshot/q3/c-brotli/vendor-mapsdatazrh: Warming up for 1.0000 s
+Benchmarking oneshot/q3/c-brotli/vendor-mapsdatazrh: Collecting 10 samples in estimated 3.0287 s (2805 iterations)
+Benchmarking oneshot/q3/c-brotli/vendor-mapsdatazrh: Analyzing
+oneshot/q3/c-brotli/vendor-mapsdatazrh
+                        time:   [1.0332 ms 1.0542 ms 1.0779 ms]
+                        thrpt:  [252.93 MiB/s 258.64 MiB/s 263.87 MiB/s]
+                 change:
+                        time:   [−1.2112% +2.6898% +6.3171%] (p = 0.21 > 0.05)
+                        thrpt:  [−5.9417% −2.6194% +1.2261%]
+                        No change in performance detected.
+Benchmarking oneshot/q3/mbrotli/vendor-mapsdatazrh
+Benchmarking oneshot/q3/mbrotli/vendor-mapsdatazrh: Warming up for 1.0000 s
+Benchmarking oneshot/q3/mbrotli/vendor-mapsdatazrh: Collecting 10 samples in estimated 3.0159 s (2530 iterations)
+Benchmarking oneshot/q3/mbrotli/vendor-mapsdatazrh: Analyzing
+oneshot/q3/mbrotli/vendor-mapsdatazrh
+                        time:   [1.1996 ms 1.2245 ms 1.2457 ms]
+                        thrpt:  [218.86 MiB/s 222.66 MiB/s 227.28 MiB/s]
+                 change:
+                        time:   [−18.130% −16.150% −13.896%] (p = 0.00 < 0.05)
+                        thrpt:  [+16.139% +19.261% +22.145%]
+                        Performance has improved.
+q3 vendor-random_org_10k.bin  c-brotli     10004 bytes  mbrotli     10004 bytes
+Benchmarking oneshot/q3/c-brotli/vendor-random_org_10k.bin
+Benchmarking oneshot/q3/c-brotli/vendor-random_org_10k.bin: Warming up for 1.0000 s
+Benchmarking oneshot/q3/c-brotli/vendor-random_org_10k.bin: Collecting 10 samples in estimated 3.0011 s (100k iterations)
+Benchmarking oneshot/q3/c-brotli/vendor-random_org_10k.bin: Analyzing
+oneshot/q3/c-brotli/vendor-random_org_10k.bin
+                        time:   [29.833 µs 30.201 µs 30.498 µs]
+                        thrpt:  [312.70 MiB/s 315.78 MiB/s 319.67 MiB/s]
+                 change:
+                        time:   [+0.7111% +1.5993% +2.7432%] (p = 0.00 < 0.05)
+                        thrpt:  [−2.6699% −1.5741% −0.7061%]
+                        Change within noise threshold.
+Benchmarking oneshot/q3/mbrotli/vendor-random_org_10k.bin
+Benchmarking oneshot/q3/mbrotli/vendor-random_org_10k.bin: Warming up for 1.0000 s
+Benchmarking oneshot/q3/mbrotli/vendor-random_org_10k.bin: Collecting 10 samples in estimated 3.0009 s (87k iterations)
+Benchmarking oneshot/q3/mbrotli/vendor-random_org_10k.bin: Analyzing
+oneshot/q3/mbrotli/vendor-random_org_10k.bin
+                        time:   [33.785 µs 33.891 µs 33.999 µs]
+                        thrpt:  [280.50 MiB/s 281.39 MiB/s 282.28 MiB/s]
+                 change:
+                        time:   [−7.8968% −7.6578% −7.4115%] (p = 0.00 < 0.05)
+                        thrpt:  [+8.0047% +8.2929% +8.5739%]
+                        Performance has improved.
+q3 vendor-quickfox_repeated   c-brotli        48 bytes  mbrotli        48 bytes
+Benchmarking oneshot/q3/c-brotli/vendor-quickfox_repeated
+Benchmarking oneshot/q3/c-brotli/vendor-quickfox_repeated: Warming up for 1.0000 s
+Benchmarking oneshot/q3/c-brotli/vendor-quickfox_repeated: Collecting 10 samples in estimated 3.0040 s (33k iterations)
+Benchmarking oneshot/q3/c-brotli/vendor-quickfox_repeated: Analyzing
+oneshot/q3/c-brotli/vendor-quickfox_repeated
+                        time:   [92.381 µs 93.019 µs 93.437 µs]
+                        thrpt:  [1.7555 GiB/s 1.7634 GiB/s 1.7756 GiB/s]
+                 change:
+                        time:   [−1.1889% −0.4712% +0.1196%] (p = 0.20 > 0.05)
+                        thrpt:  [−0.1195% +0.4735% +1.2032%]
+                        No change in performance detected.
+Benchmarking oneshot/q3/mbrotli/vendor-quickfox_repeated
+Benchmarking oneshot/q3/mbrotli/vendor-quickfox_repeated: Warming up for 1.0000 s
+Benchmarking oneshot/q3/mbrotli/vendor-quickfox_repeated: Collecting 10 samples in estimated 3.0026 s (23k iterations)
+Benchmarking oneshot/q3/mbrotli/vendor-quickfox_repeated: Analyzing
+oneshot/q3/mbrotli/vendor-quickfox_repeated
+                        time:   [128.47 µs 129.66 µs 131.35 µs]
+                        thrpt:  [1.2488 GiB/s 1.2650 GiB/s 1.2768 GiB/s]
+                 change:
+                        time:   [−0.9331% −0.4149% +0.5745%] (p = 0.29 > 0.05)
+                        thrpt:  [−0.5712% +0.4167% +0.9419%]
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+
+q4 text-1KiB                  c-brotli       157 bytes  mbrotli       157 bytes
+Benchmarking oneshot/q4/c-brotli/text-1KiB
+Benchmarking oneshot/q4/c-brotli/text-1KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q4/c-brotli/text-1KiB: Collecting 10 samples in estimated 3.0000 s (387k iterations)
+Benchmarking oneshot/q4/c-brotli/text-1KiB: Analyzing
+oneshot/q4/c-brotli/text-1KiB
+                        time:   [7.6817 µs 7.7538 µs 7.8126 µs]
+                        thrpt:  [125.00 MiB/s 125.95 MiB/s 127.13 MiB/s]
+                 change:
+                        time:   [−0.2372% +0.6502% +1.6055%] (p = 0.21 > 0.05)
+                        thrpt:  [−1.5801% −0.6460% +0.2377%]
+                        No change in performance detected.
+Benchmarking oneshot/q4/mbrotli/text-1KiB
+Benchmarking oneshot/q4/mbrotli/text-1KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q4/mbrotli/text-1KiB: Collecting 10 samples in estimated 3.0001 s (236k iterations)
+Benchmarking oneshot/q4/mbrotli/text-1KiB: Analyzing
+oneshot/q4/mbrotli/text-1KiB
+                        time:   [12.251 µs 12.303 µs 12.400 µs]
+                        thrpt:  [78.753 MiB/s 79.379 MiB/s 79.715 MiB/s]
+                 change:
+                        time:   [−2.9934% −2.4745% −1.7793%] (p = 0.00 < 0.05)
+                        thrpt:  [+1.8115% +2.5373% +3.0858%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+q4 text-1MiB                  c-brotli      7647 bytes  mbrotli      7647 bytes
+Benchmarking oneshot/q4/c-brotli/text-1MiB
+Benchmarking oneshot/q4/c-brotli/text-1MiB: Warming up for 1.0000 s
+Benchmarking oneshot/q4/c-brotli/text-1MiB: Collecting 10 samples in estimated 3.0110 s (4235 iterations)
+Benchmarking oneshot/q4/c-brotli/text-1MiB: Analyzing
+oneshot/q4/c-brotli/text-1MiB
+                        time:   [705.51 µs 706.82 µs 707.78 µs]
+                        thrpt:  [1.3798 GiB/s 1.3816 GiB/s 1.3842 GiB/s]
+                 change:
+                        time:   [+0.3861% +0.6425% +0.8882%] (p = 0.00 < 0.05)
+                        thrpt:  [−0.8803% −0.6384% −0.3846%]
+                        Change within noise threshold.
+Benchmarking oneshot/q4/mbrotli/text-1MiB
+Benchmarking oneshot/q4/mbrotli/text-1MiB: Warming up for 1.0000 s
+Benchmarking oneshot/q4/mbrotli/text-1MiB: Collecting 10 samples in estimated 3.0441 s (3520 iterations)
+Benchmarking oneshot/q4/mbrotli/text-1MiB: Analyzing
+oneshot/q4/mbrotli/text-1MiB
+                        time:   [862.46 µs 862.97 µs 863.41 µs]
+                        thrpt:  [1.1311 GiB/s 1.1316 GiB/s 1.1323 GiB/s]
+                 change:
+                        time:   [−8.9890% −8.0442% −7.3919%] (p = 0.00 < 0.05)
+                        thrpt:  [+7.9819% +8.7479% +9.8769%]
+                        Performance has improved.
+q4 binary-256KiB              c-brotli     96205 bytes  mbrotli     96205 bytes
+Benchmarking oneshot/q4/c-brotli/binary-256KiB
+Benchmarking oneshot/q4/c-brotli/binary-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q4/c-brotli/binary-256KiB: Collecting 10 samples in estimated 3.0530 s (1870 iterations)
+Benchmarking oneshot/q4/c-brotli/binary-256KiB: Analyzing
+oneshot/q4/c-brotli/binary-256KiB
+                        time:   [1.6229 ms 1.6247 ms 1.6265 ms]
+                        thrpt:  [153.71 MiB/s 153.88 MiB/s 154.04 MiB/s]
+                 change:
+                        time:   [+0.4131% +0.5729% +0.7561%] (p = 0.00 < 0.05)
+                        thrpt:  [−0.7504% −0.5696% −0.4114%]
+                        Change within noise threshold.
+Benchmarking oneshot/q4/mbrotli/binary-256KiB
+Benchmarking oneshot/q4/mbrotli/binary-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q4/mbrotli/binary-256KiB: Collecting 10 samples in estimated 3.0778 s (1485 iterations)
+Benchmarking oneshot/q4/mbrotli/binary-256KiB: Analyzing
+oneshot/q4/mbrotli/binary-256KiB
+                        time:   [2.0584 ms 2.0604 ms 2.0633 ms]
+                        thrpt:  [121.17 MiB/s 121.34 MiB/s 121.45 MiB/s]
+                 change:
+                        time:   [−12.459% −12.215% −11.959%] (p = 0.00 < 0.05)
+                        thrpt:  [+13.583% +13.915% +14.232%]
+                        Performance has improved.
+Found 3 outliers among 10 measurements (30.00%)
+  1 (10.00%) low severe
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+q4 compressible-256KiB        c-brotli        19 bytes  mbrotli        19 bytes
+Benchmarking oneshot/q4/c-brotli/compressible-256KiB
+Benchmarking oneshot/q4/c-brotli/compressible-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q4/c-brotli/compressible-256KiB: Collecting 10 samples in estimated 3.0004 s (25k iterations)
+Benchmarking oneshot/q4/c-brotli/compressible-256KiB: Analyzing
+oneshot/q4/c-brotli/compressible-256KiB
+                        time:   [117.47 µs 117.54 µs 117.63 µs]
+                        thrpt:  [2.0755 GiB/s 2.0770 GiB/s 2.0783 GiB/s]
+                 change:
+                        time:   [−0.0753% +0.0911% +0.2139%] (p = 0.27 > 0.05)
+                        thrpt:  [−0.2135% −0.0910% +0.0754%]
+                        No change in performance detected.
+Benchmarking oneshot/q4/mbrotli/compressible-256KiB
+Benchmarking oneshot/q4/mbrotli/compressible-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q4/mbrotli/compressible-256KiB: Collecting 10 samples in estimated 3.0041 s (19k iterations)
+Benchmarking oneshot/q4/mbrotli/compressible-256KiB: Analyzing
+oneshot/q4/mbrotli/compressible-256KiB
+                        time:   [160.95 µs 161.98 µs 162.43 µs]
+                        thrpt:  [1.5030 GiB/s 1.5072 GiB/s 1.5168 GiB/s]
+                 change:
+                        time:   [+1.9677% +2.7037% +3.3519%] (p = 0.00 < 0.05)
+                        thrpt:  [−3.2432% −2.6325% −1.9297%]
+                        Performance has regressed.
+q4 incompressible-256KiB      c-brotli    262149 bytes  mbrotli    262149 bytes
+Benchmarking oneshot/q4/c-brotli/incompressible-256KiB
+Benchmarking oneshot/q4/c-brotli/incompressible-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q4/c-brotli/incompressible-256KiB: Collecting 10 samples in estimated 3.0050 s (29k iterations)
+Benchmarking oneshot/q4/c-brotli/incompressible-256KiB: Analyzing
+oneshot/q4/c-brotli/incompressible-256KiB
+                        time:   [103.09 µs 103.20 µs 103.30 µs]
+                        thrpt:  [2.3634 GiB/s 2.3658 GiB/s 2.3683 GiB/s]
+                 change:
+                        time:   [−0.1778% −0.0177% +0.1548%] (p = 0.84 > 0.05)
+                        thrpt:  [−0.1546% +0.0177% +0.1781%]
+                        No change in performance detected.
+Benchmarking oneshot/q4/mbrotli/incompressible-256KiB
+Benchmarking oneshot/q4/mbrotli/incompressible-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q4/mbrotli/incompressible-256KiB: Collecting 10 samples in estimated 3.0022 s (18k iterations)
+Benchmarking oneshot/q4/mbrotli/incompressible-256KiB: Analyzing
+oneshot/q4/mbrotli/incompressible-256KiB
+                        time:   [163.36 µs 164.24 µs 165.38 µs]
+                        thrpt:  [1.4763 GiB/s 1.4865 GiB/s 1.4945 GiB/s]
+                 change:
+                        time:   [−14.189% −13.580% −12.857%] (p = 0.00 < 0.05)
+                        thrpt:  [+14.754% +15.714% +16.535%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+q4 vendor-alice29.txt         c-brotli     55504 bytes  mbrotli     55504 bytes
+Benchmarking oneshot/q4/c-brotli/vendor-alice29.txt
+Benchmarking oneshot/q4/c-brotli/vendor-alice29.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q4/c-brotli/vendor-alice29.txt: Collecting 10 samples in estimated 3.0255 s (3300 iterations)
+Benchmarking oneshot/q4/c-brotli/vendor-alice29.txt: Analyzing
+oneshot/q4/c-brotli/vendor-alice29.txt
+                        time:   [899.04 µs 903.87 µs 909.25 µs]
+                        thrpt:  [159.52 MiB/s 160.47 MiB/s 161.33 MiB/s]
+                 change:
+                        time:   [−1.9522% −0.0857% +1.4328%] (p = 0.93 > 0.05)
+                        thrpt:  [−1.4126% +0.0858% +1.9911%]
+                        No change in performance detected.
+Benchmarking oneshot/q4/mbrotli/vendor-alice29.txt
+Benchmarking oneshot/q4/mbrotli/vendor-alice29.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q4/mbrotli/vendor-alice29.txt: Collecting 10 samples in estimated 3.0453 s (2530 iterations)
+Benchmarking oneshot/q4/mbrotli/vendor-alice29.txt: Analyzing
+oneshot/q4/mbrotli/vendor-alice29.txt
+                        time:   [1.1716 ms 1.1765 ms 1.1804 ms]
+                        thrpt:  [122.87 MiB/s 123.28 MiB/s 123.80 MiB/s]
+                 change:
+                        time:   [−11.254% −10.816% −10.355%] (p = 0.00 < 0.05)
+                        thrpt:  [+11.551% +12.128% +12.681%]
+                        Performance has improved.
+q4 vendor-lcet10.txt          c-brotli    141896 bytes  mbrotli    141896 bytes
+Benchmarking oneshot/q4/c-brotli/vendor-lcet10.txt
+Benchmarking oneshot/q4/c-brotli/vendor-lcet10.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q4/c-brotli/vendor-lcet10.txt: Collecting 10 samples in estimated 3.0755 s (1155 iterations)
+Benchmarking oneshot/q4/c-brotli/vendor-lcet10.txt: Analyzing
+oneshot/q4/c-brotli/vendor-lcet10.txt
+                        time:   [2.6457 ms 2.6541 ms 2.6652 ms]
+                        thrpt:  [152.70 MiB/s 153.34 MiB/s 153.83 MiB/s]
+                 change:
+                        time:   [+0.3533% +0.8122% +1.2729%] (p = 0.00 < 0.05)
+                        thrpt:  [−1.2569% −0.8057% −0.3521%]
+                        Change within noise threshold.
+Benchmarking oneshot/q4/mbrotli/vendor-lcet10.txt
+Benchmarking oneshot/q4/mbrotli/vendor-lcet10.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q4/mbrotli/vendor-lcet10.txt: Collecting 10 samples in estimated 3.0518 s (935 iterations)
+Benchmarking oneshot/q4/mbrotli/vendor-lcet10.txt: Analyzing
+oneshot/q4/mbrotli/vendor-lcet10.txt
+                        time:   [3.2290 ms 3.2379 ms 3.2495 ms]
+                        thrpt:  [125.24 MiB/s 125.69 MiB/s 126.04 MiB/s]
+                 change:
+                        time:   [−7.2543% −6.7351% −6.2490%] (p = 0.00 < 0.05)
+                        thrpt:  [+6.6655% +7.2215% +7.8217%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+q4 vendor-plrabn12.txt        c-brotli    193873 bytes  mbrotli    193873 bytes
+Benchmarking oneshot/q4/c-brotli/vendor-plrabn12.txt
+Benchmarking oneshot/q4/c-brotli/vendor-plrabn12.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q4/c-brotli/vendor-plrabn12.txt: Collecting 10 samples in estimated 3.1701 s (880 iterations)
+Benchmarking oneshot/q4/c-brotli/vendor-plrabn12.txt: Analyzing
+oneshot/q4/c-brotli/vendor-plrabn12.txt
+                        time:   [3.5818 ms 3.5891 ms 3.5979 ms]
+                        thrpt:  [127.72 MiB/s 128.04 MiB/s 128.30 MiB/s]
+                 change:
+                        time:   [+0.0053% +0.5033% +0.9989%] (p = 0.08 > 0.05)
+                        thrpt:  [−0.9891% −0.5008% −0.0053%]
+                        No change in performance detected.
+Benchmarking oneshot/q4/mbrotli/vendor-plrabn12.txt
+Benchmarking oneshot/q4/mbrotli/vendor-plrabn12.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q4/mbrotli/vendor-plrabn12.txt: Collecting 10 samples in estimated 3.1638 s (715 iterations)
+Benchmarking oneshot/q4/mbrotli/vendor-plrabn12.txt: Analyzing
+oneshot/q4/mbrotli/vendor-plrabn12.txt
+                        time:   [4.3202 ms 4.3354 ms 4.3536 ms]
+                        thrpt:  [105.55 MiB/s 106.00 MiB/s 106.37 MiB/s]
+                 change:
+                        time:   [−7.8837% −7.5664% −7.2019%] (p = 0.00 < 0.05)
+                        thrpt:  [+7.7608% +8.1857% +8.5584%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+q4 vendor-mapsdatazrh         c-brotli    172868 bytes  mbrotli    172868 bytes
+Benchmarking oneshot/q4/c-brotli/vendor-mapsdatazrh
+Benchmarking oneshot/q4/c-brotli/vendor-mapsdatazrh: Warming up for 1.0000 s
+Benchmarking oneshot/q4/c-brotli/vendor-mapsdatazrh: Collecting 10 samples in estimated 3.0442 s (2200 iterations)
+Benchmarking oneshot/q4/c-brotli/vendor-mapsdatazrh: Analyzing
+oneshot/q4/c-brotli/vendor-mapsdatazrh
+                        time:   [1.3901 ms 1.4142 ms 1.4451 ms]
+                        thrpt:  [188.67 MiB/s 192.79 MiB/s 196.13 MiB/s]
+                 change:
+                        time:   [+0.7900% +2.4468% +4.4562%] (p = 0.01 < 0.05)
+                        thrpt:  [−4.2661% −2.3883% −0.7838%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking oneshot/q4/mbrotli/vendor-mapsdatazrh
+Benchmarking oneshot/q4/mbrotli/vendor-mapsdatazrh: Warming up for 1.0000 s
+Benchmarking oneshot/q4/mbrotli/vendor-mapsdatazrh: Collecting 10 samples in estimated 3.0521 s (1870 iterations)
+Benchmarking oneshot/q4/mbrotli/vendor-mapsdatazrh: Analyzing
+oneshot/q4/mbrotli/vendor-mapsdatazrh
+                        time:   [1.5680 ms 1.5791 ms 1.5870 ms]
+                        thrpt:  [171.80 MiB/s 172.65 MiB/s 173.87 MiB/s]
+                 change:
+                        time:   [−9.5174% −8.9036% −8.2836%] (p = 0.00 < 0.05)
+                        thrpt:  [+9.0317% +9.7738% +10.518%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+q4 vendor-random_org_10k.bin  c-brotli     10004 bytes  mbrotli     10004 bytes
+Benchmarking oneshot/q4/c-brotli/vendor-random_org_10k.bin
+Benchmarking oneshot/q4/c-brotli/vendor-random_org_10k.bin: Warming up for 1.0000 s
+Benchmarking oneshot/q4/c-brotli/vendor-random_org_10k.bin: Collecting 10 samples in estimated 3.0006 s (61k iterations)
+Benchmarking oneshot/q4/c-brotli/vendor-random_org_10k.bin: Analyzing
+oneshot/q4/c-brotli/vendor-random_org_10k.bin
+                        time:   [48.914 µs 49.005 µs 49.173 µs]
+                        thrpt:  [193.94 MiB/s 194.61 MiB/s 194.97 MiB/s]
+                 change:
+                        time:   [+0.2458% +1.2787% +2.2763%] (p = 0.03 < 0.05)
+                        thrpt:  [−2.2257% −1.2626% −0.2452%]
+                        Change within noise threshold.
+Benchmarking oneshot/q4/mbrotli/vendor-random_org_10k.bin
+Benchmarking oneshot/q4/mbrotli/vendor-random_org_10k.bin: Warming up for 1.0000 s
+Benchmarking oneshot/q4/mbrotli/vendor-random_org_10k.bin: Collecting 10 samples in estimated 3.0027 s (60k iterations)
+Benchmarking oneshot/q4/mbrotli/vendor-random_org_10k.bin: Analyzing
+oneshot/q4/mbrotli/vendor-random_org_10k.bin
+                        time:   [49.507 µs 49.611 µs 49.745 µs]
+                        thrpt:  [191.71 MiB/s 192.23 MiB/s 192.64 MiB/s]
+                 change:
+                        time:   [−1.4795% −1.2234% −0.9959%] (p = 0.00 < 0.05)
+                        thrpt:  [+1.0059% +1.2386% +1.5017%]
+                        Change within noise threshold.
+Found 3 outliers among 10 measurements (30.00%)
+  2 (20.00%) low mild
+  1 (10.00%) high mild
+q4 vendor-quickfox_repeated   c-brotli        52 bytes  mbrotli        52 bytes
+Benchmarking oneshot/q4/c-brotli/vendor-quickfox_repeated
+Benchmarking oneshot/q4/c-brotli/vendor-quickfox_repeated: Warming up for 1.0000 s
+Benchmarking oneshot/q4/c-brotli/vendor-quickfox_repeated: Collecting 10 samples in estimated 3.0025 s (41k iterations)
+Benchmarking oneshot/q4/c-brotli/vendor-quickfox_repeated: Analyzing
+oneshot/q4/c-brotli/vendor-quickfox_repeated
+                        time:   [71.970 µs 72.114 µs 72.501 µs]
+                        thrpt:  [2.2625 GiB/s 2.2746 GiB/s 2.2792 GiB/s]
+                 change:
+                        time:   [+0.5148% +1.5259% +2.7066%] (p = 0.01 < 0.05)
+                        thrpt:  [−2.6353% −1.5029% −0.5122%]
+                        Change within noise threshold.
+Benchmarking oneshot/q4/mbrotli/vendor-quickfox_repeated
+Benchmarking oneshot/q4/mbrotli/vendor-quickfox_repeated: Warming up for 1.0000 s
+Benchmarking oneshot/q4/mbrotli/vendor-quickfox_repeated: Collecting 10 samples in estimated 3.0016 s (28k iterations)
+Benchmarking oneshot/q4/mbrotli/vendor-quickfox_repeated: Analyzing
+oneshot/q4/mbrotli/vendor-quickfox_repeated
+                        time:   [106.86 µs 107.70 µs 109.39 µs]
+                        thrpt:  [1.4996 GiB/s 1.5230 GiB/s 1.5351 GiB/s]
+                 change:
+                        time:   [+0.7017% +2.1307% +4.2610%] (p = 0.02 < 0.05)
+                        thrpt:  [−4.0868% −2.0862% −0.6969%]
+                        Change within noise threshold.
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high severe
+
+q5 text-1KiB                  c-brotli       146 bytes  mbrotli       146 bytes
+Benchmarking oneshot/q5/c-brotli/text-1KiB
+Benchmarking oneshot/q5/c-brotli/text-1KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q5/c-brotli/text-1KiB: Collecting 10 samples in estimated 3.0002 s (338k iterations)
+Benchmarking oneshot/q5/c-brotli/text-1KiB: Analyzing
+oneshot/q5/c-brotli/text-1KiB
+                        time:   [8.7413 µs 8.7499 µs 8.7585 µs]
+                        thrpt:  [111.50 MiB/s 111.61 MiB/s 111.72 MiB/s]
+                 change:
+                        time:   [−0.5302% −0.4017% −0.2752%] (p = 0.00 < 0.05)
+                        thrpt:  [+0.2760% +0.4033% +0.5330%]
+                        Change within noise threshold.
+Benchmarking oneshot/q5/mbrotli/text-1KiB
+Benchmarking oneshot/q5/mbrotli/text-1KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q5/mbrotli/text-1KiB: Collecting 10 samples in estimated 3.0004 s (201k iterations)
+Benchmarking oneshot/q5/mbrotli/text-1KiB: Analyzing
+oneshot/q5/mbrotli/text-1KiB
+                        time:   [14.893 µs 14.984 µs 15.095 µs]
+                        thrpt:  [64.693 MiB/s 65.173 MiB/s 65.572 MiB/s]
+                 change:
+                        time:   [−3.8523% −1.8791% −0.5822%] (p = 0.04 < 0.05)
+                        thrpt:  [+0.5856% +1.9151% +4.0066%]
+                        Change within noise threshold.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+q5 text-1MiB                  c-brotli      8254 bytes  mbrotli      8254 bytes
+Benchmarking oneshot/q5/c-brotli/text-1MiB
+Benchmarking oneshot/q5/c-brotli/text-1MiB: Warming up for 1.0000 s
+Benchmarking oneshot/q5/c-brotli/text-1MiB: Collecting 10 samples in estimated 3.0099 s (2200 iterations)
+Benchmarking oneshot/q5/c-brotli/text-1MiB: Analyzing
+oneshot/q5/c-brotli/text-1MiB
+                        time:   [1.3617 ms 1.3712 ms 1.3779 ms]
+                        thrpt:  [725.75 MiB/s 729.29 MiB/s 734.36 MiB/s]
+                 change:
+                        time:   [+1.1012% +1.5706% +2.0641%] (p = 0.00 < 0.05)
+                        thrpt:  [−2.0223% −1.5463% −1.0892%]
+                        Performance has regressed.
+Benchmarking oneshot/q5/mbrotli/text-1MiB
+Benchmarking oneshot/q5/mbrotli/text-1MiB: Warming up for 1.0000 s
+Benchmarking oneshot/q5/mbrotli/text-1MiB: Collecting 10 samples in estimated 3.0437 s (2145 iterations)
+Benchmarking oneshot/q5/mbrotli/text-1MiB: Analyzing
+oneshot/q5/mbrotli/text-1MiB
+                        time:   [1.4035 ms 1.4144 ms 1.4316 ms]
+                        thrpt:  [698.50 MiB/s 707.01 MiB/s 712.53 MiB/s]
+                 change:
+                        time:   [−0.7257% +0.2077% +1.3233%] (p = 0.74 > 0.05)
+                        thrpt:  [−1.3060% −0.2073% +0.7310%]
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+q5 binary-256KiB              c-brotli     94650 bytes  mbrotli     94650 bytes
+Benchmarking oneshot/q5/c-brotli/binary-256KiB
+Benchmarking oneshot/q5/c-brotli/binary-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q5/c-brotli/binary-256KiB: Collecting 10 samples in estimated 3.0134 s (1320 iterations)
+Benchmarking oneshot/q5/c-brotli/binary-256KiB: Analyzing
+oneshot/q5/c-brotli/binary-256KiB
+                        time:   [2.2604 ms 2.2733 ms 2.2908 ms]
+                        thrpt:  [109.13 MiB/s 109.97 MiB/s 110.60 MiB/s]
+                 change:
+                        time:   [+0.7754% +1.3588% +1.9886%] (p = 0.00 < 0.05)
+                        thrpt:  [−1.9498% −1.3406% −0.7695%]
+                        Change within noise threshold.
+Benchmarking oneshot/q5/mbrotli/binary-256KiB
+Benchmarking oneshot/q5/mbrotli/binary-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q5/mbrotli/binary-256KiB: Collecting 10 samples in estimated 3.0813 s (935 iterations)
+Benchmarking oneshot/q5/mbrotli/binary-256KiB: Analyzing
+oneshot/q5/mbrotli/binary-256KiB
+                        time:   [3.2199 ms 3.2534 ms 3.2895 ms]
+                        thrpt:  [75.999 MiB/s 76.842 MiB/s 77.641 MiB/s]
+                 change:
+                        time:   [−7.3079% −6.4201% −5.6511%] (p = 0.00 < 0.05)
+                        thrpt:  [+5.9895% +6.8605% +7.8841%]
+                        Performance has improved.
+q5 compressible-256KiB        c-brotli        19 bytes  mbrotli        19 bytes
+Benchmarking oneshot/q5/c-brotli/compressible-256KiB
+Benchmarking oneshot/q5/c-brotli/compressible-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q5/c-brotli/compressible-256KiB: Collecting 10 samples in estimated 3.0069 s (24k iterations)
+Benchmarking oneshot/q5/c-brotli/compressible-256KiB: Analyzing
+oneshot/q5/c-brotli/compressible-256KiB
+                        time:   [125.27 µs 125.85 µs 126.58 µs]
+                        thrpt:  [1.9287 GiB/s 1.9399 GiB/s 1.9490 GiB/s]
+                 change:
+                        time:   [+1.1022% +1.6359% +2.1812%] (p = 0.00 < 0.05)
+                        thrpt:  [−2.1347% −1.6096% −1.0902%]
+                        Performance has regressed.
+Benchmarking oneshot/q5/mbrotli/compressible-256KiB
+Benchmarking oneshot/q5/mbrotli/compressible-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q5/mbrotli/compressible-256KiB: Collecting 10 samples in estimated 3.0004 s (18k iterations)
+Benchmarking oneshot/q5/mbrotli/compressible-256KiB: Analyzing
+oneshot/q5/mbrotli/compressible-256KiB
+                        time:   [169.77 µs 171.48 µs 173.14 µs]
+                        thrpt:  [1.4101 GiB/s 1.4238 GiB/s 1.4381 GiB/s]
+                 change:
+                        time:   [+3.7546% +4.3561% +5.0414%] (p = 0.00 < 0.05)
+                        thrpt:  [−4.7995% −4.1743% −3.6187%]
+                        Performance has regressed.
+q5 incompressible-256KiB      c-brotli    262149 bytes  mbrotli    262149 bytes
+Benchmarking oneshot/q5/c-brotli/incompressible-256KiB
+Benchmarking oneshot/q5/c-brotli/incompressible-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q5/c-brotli/incompressible-256KiB: Collecting 10 samples in estimated 3.0054 s (18k iterations)
+Benchmarking oneshot/q5/c-brotli/incompressible-256KiB: Analyzing
+oneshot/q5/c-brotli/incompressible-256KiB
+                        time:   [165.21 µs 166.02 µs 166.50 µs]
+                        thrpt:  [1.4663 GiB/s 1.4705 GiB/s 1.4777 GiB/s]
+                 change:
+                        time:   [+6.2754% +6.6922% +7.0826%] (p = 0.00 < 0.05)
+                        thrpt:  [−6.6142% −6.2724% −5.9049%]
+                        Performance has regressed.
+Benchmarking oneshot/q5/mbrotli/incompressible-256KiB
+Benchmarking oneshot/q5/mbrotli/incompressible-256KiB: Warming up for 1.0000 s
+Benchmarking oneshot/q5/mbrotli/incompressible-256KiB: Collecting 10 samples in estimated 3.0117 s (11k iterations)
+Benchmarking oneshot/q5/mbrotli/incompressible-256KiB: Analyzing
+oneshot/q5/mbrotli/incompressible-256KiB
+                        time:   [266.30 µs 268.36 µs 270.36 µs]
+                        thrpt:  [924.68 MiB/s 931.58 MiB/s 938.79 MiB/s]
+                 change:
+                        time:   [−11.589% −10.593% −9.6757%] (p = 0.00 < 0.05)
+                        thrpt:  [+10.712% +11.849% +13.109%]
+                        Performance has improved.
+q5 vendor-alice29.txt         c-brotli     52809 bytes  mbrotli     52809 bytes
+Benchmarking oneshot/q5/c-brotli/vendor-alice29.txt
+Benchmarking oneshot/q5/c-brotli/vendor-alice29.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q5/c-brotli/vendor-alice29.txt: Collecting 10 samples in estimated 3.0398 s (1760 iterations)
+Benchmarking oneshot/q5/c-brotli/vendor-alice29.txt: Analyzing
+oneshot/q5/c-brotli/vendor-alice29.txt
+                        time:   [1.7096 ms 1.7226 ms 1.7324 ms]
+                        thrpt:  [83.724 MiB/s 84.202 MiB/s 84.840 MiB/s]
+                 change:
+                        time:   [+4.2773% +5.1584% +6.0830%] (p = 0.00 < 0.05)
+                        thrpt:  [−5.7342% −4.9054% −4.1019%]
+                        Performance has regressed.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking oneshot/q5/mbrotli/vendor-alice29.txt
+Benchmarking oneshot/q5/mbrotli/vendor-alice29.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q5/mbrotli/vendor-alice29.txt: Collecting 10 samples in estimated 3.0949 s (1760 iterations)
+Benchmarking oneshot/q5/mbrotli/vendor-alice29.txt: Analyzing
+oneshot/q5/mbrotli/vendor-alice29.txt
+                        time:   [1.7416 ms 1.7610 ms 1.7867 ms]
+                        thrpt:  [81.181 MiB/s 82.363 MiB/s 83.281 MiB/s]
+                 change:
+                        time:   [−6.1678% −4.5842% −3.0725%] (p = 0.00 < 0.05)
+                        thrpt:  [+3.1699% +4.8045% +6.5732%]
+                        Performance has improved.
+q5 vendor-lcet10.txt          c-brotli    133991 bytes  mbrotli    133991 bytes
+Benchmarking oneshot/q5/c-brotli/vendor-lcet10.txt
+Benchmarking oneshot/q5/c-brotli/vendor-lcet10.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q5/c-brotli/vendor-lcet10.txt: Collecting 10 samples in estimated 3.1949 s (660 iterations)
+Benchmarking oneshot/q5/c-brotli/vendor-lcet10.txt: Analyzing
+oneshot/q5/c-brotli/vendor-lcet10.txt
+                        time:   [4.7654 ms 4.8100 ms 4.8529 ms]
+                        thrpt:  [83.865 MiB/s 84.613 MiB/s 85.403 MiB/s]
+                 change:
+                        time:   [+2.7853% +3.7372% +4.7603%] (p = 0.00 < 0.05)
+                        thrpt:  [−4.5440% −3.6026% −2.7098%]
+                        Performance has regressed.
+Benchmarking oneshot/q5/mbrotli/vendor-lcet10.txt
+Benchmarking oneshot/q5/mbrotli/vendor-lcet10.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q5/mbrotli/vendor-lcet10.txt: Collecting 10 samples in estimated 3.2542 s (660 iterations)
+Benchmarking oneshot/q5/mbrotli/vendor-lcet10.txt: Analyzing
+oneshot/q5/mbrotli/vendor-lcet10.txt
+                        time:   [4.8189 ms 4.8465 ms 4.8761 ms]
+                        thrpt:  [83.465 MiB/s 83.976 MiB/s 84.456 MiB/s]
+                 change:
+                        time:   [−4.3869% −3.8312% −3.3084%] (p = 0.00 < 0.05)
+                        thrpt:  [+3.4216% +3.9839% +4.5882%]
+                        Performance has improved.
+q5 vendor-plrabn12.txt        c-brotli    186038 bytes  mbrotli    186038 bytes
+Benchmarking oneshot/q5/c-brotli/vendor-plrabn12.txt
+Benchmarking oneshot/q5/c-brotli/vendor-plrabn12.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q5/c-brotli/vendor-plrabn12.txt: Collecting 10 samples in estimated 3.3273 s (495 iterations)
+Benchmarking oneshot/q5/c-brotli/vendor-plrabn12.txt: Analyzing
+oneshot/q5/c-brotli/vendor-plrabn12.txt
+                        time:   [6.4758 ms 6.5339 ms 6.5693 ms]
+                        thrpt:  [69.952 MiB/s 70.331 MiB/s 70.962 MiB/s]
+                 change:
+                        time:   [+1.4961% +2.0176% +2.5666%] (p = 0.00 < 0.05)
+                        thrpt:  [−2.5024% −1.9777% −1.4740%]
+                        Performance has regressed.
+Benchmarking oneshot/q5/mbrotli/vendor-plrabn12.txt
+Benchmarking oneshot/q5/mbrotli/vendor-plrabn12.txt: Warming up for 1.0000 s
+Benchmarking oneshot/q5/mbrotli/vendor-plrabn12.txt: Collecting 10 samples in estimated 3.3464 s (495 iterations)
+Benchmarking oneshot/q5/mbrotli/vendor-plrabn12.txt: Analyzing
+oneshot/q5/mbrotli/vendor-plrabn12.txt
+                        time:   [6.6013 ms 6.6438 ms 6.6829 ms]
+                        thrpt:  [68.763 MiB/s 69.168 MiB/s 69.614 MiB/s]
+                 change:
+                        time:   [−5.2600% −4.6551% −4.0440%] (p = 0.00 < 0.05)
+                        thrpt:  [+4.2145% +4.8824% +5.5520%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+q5 vendor-mapsdatazrh         c-brotli    167912 bytes  mbrotli    167912 bytes
+Benchmarking oneshot/q5/c-brotli/vendor-mapsdatazrh
+Benchmarking oneshot/q5/c-brotli/vendor-mapsdatazrh: Warming up for 1.0000 s
+Benchmarking oneshot/q5/c-brotli/vendor-mapsdatazrh: Collecting 10 samples in estimated 3.0250 s (1375 iterations)
+Benchmarking oneshot/q5/c-brotli/vendor-mapsdatazrh: Analyzing
+oneshot/q5/c-brotli/vendor-mapsdatazrh
+                        time:   [2.1605 ms 2.1697 ms 2.1840 ms]
+                        thrpt:  [124.84 MiB/s 125.66 MiB/s 126.19 MiB/s]
+                 change:
+                        time:   [−3.2755% −2.1435% −0.9431%] (p = 0.00 < 0.05)
+                        thrpt:  [+0.9521% +2.1904% +3.3864%]
+                        Change within noise threshold.
+Benchmarking oneshot/q5/mbrotli/vendor-mapsdatazrh
+Benchmarking oneshot/q5/mbrotli/vendor-mapsdatazrh: Warming up for 1.0000 s
+Benchmarking oneshot/q5/mbrotli/vendor-mapsdatazrh: Collecting 10 samples in estimated 3.0154 s (1045 iterations)
+Benchmarking oneshot/q5/mbrotli/vendor-mapsdatazrh: Analyzing
+oneshot/q5/mbrotli/vendor-mapsdatazrh
+                        time:   [2.8311 ms 2.8663 ms 2.9124 ms]
+                        thrpt:  [93.613 MiB/s 95.121 MiB/s 96.303 MiB/s]
+                 change:
+                        time:   [−4.2627% −3.1091% −1.8173%] (p = 0.00 < 0.05)
+                        thrpt:  [+1.8510% +3.2088% +4.4525%]
+                        Performance has improved.
+q5 vendor-random_org_10k.bin  c-brotli     10004 bytes  mbrotli     10004 bytes
+Benchmarking oneshot/q5/c-brotli/vendor-random_org_10k.bin
+Benchmarking oneshot/q5/c-brotli/vendor-random_org_10k.bin: Warming up for 1.0000 s
+Benchmarking oneshot/q5/c-brotli/vendor-random_org_10k.bin: Collecting 10 samples in estimated 3.0010 s (61k iterations)
+Benchmarking oneshot/q5/c-brotli/vendor-random_org_10k.bin: Analyzing
+oneshot/q5/c-brotli/vendor-random_org_10k.bin
+                        time:   [48.637 µs 49.049 µs 49.641 µs]
+                        thrpt:  [192.11 MiB/s 194.43 MiB/s 196.08 MiB/s]
+                 change:
+                        time:   [+2.9140% +3.7825% +4.5461%] (p = 0.00 < 0.05)
+                        thrpt:  [−4.3484% −3.6447% −2.8314%]
+                        Performance has regressed.
+Benchmarking oneshot/q5/mbrotli/vendor-random_org_10k.bin
+Benchmarking oneshot/q5/mbrotli/vendor-random_org_10k.bin: Warming up for 1.0000 s
+Benchmarking oneshot/q5/mbrotli/vendor-random_org_10k.bin: Collecting 10 samples in estimated 3.0024 s (60k iterations)
+Benchmarking oneshot/q5/mbrotli/vendor-random_org_10k.bin: Analyzing
+oneshot/q5/mbrotli/vendor-random_org_10k.bin
+                        time:   [49.979 µs 50.066 µs 50.190 µs]
+                        thrpt:  [190.01 MiB/s 190.48 MiB/s 190.82 MiB/s]
+                 change:
+                        time:   [−1.8854% −1.4461% −0.9101%] (p = 0.00 < 0.05)
+                        thrpt:  [+0.9185% +1.4673% +1.9216%]
+                        Change within noise threshold.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+q5 vendor-quickfox_repeated   c-brotli        51 bytes  mbrotli        51 bytes
+Benchmarking oneshot/q5/c-brotli/vendor-quickfox_repeated
+Benchmarking oneshot/q5/c-brotli/vendor-quickfox_repeated: Warming up for 1.0000 s
+Benchmarking oneshot/q5/c-brotli/vendor-quickfox_repeated: Collecting 10 samples in estimated 3.0010 s (40k iterations)
+Benchmarking oneshot/q5/c-brotli/vendor-quickfox_repeated: Analyzing
+oneshot/q5/c-brotli/vendor-quickfox_repeated
+                        time:   [75.077 µs 75.203 µs 75.381 µs]
+                        thrpt:  [2.1760 GiB/s 2.1812 GiB/s 2.1848 GiB/s]
+                 change:
+                        time:   [−0.8058% −0.5737% −0.2767%] (p = 0.00 < 0.05)
+                        thrpt:  [+0.2775% +0.5770% +0.8124%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking oneshot/q5/mbrotli/vendor-quickfox_repeated
+Benchmarking oneshot/q5/mbrotli/vendor-quickfox_repeated: Warming up for 1.0000 s
+Benchmarking oneshot/q5/mbrotli/vendor-quickfox_repeated: Collecting 10 samples in estimated 3.0026 s (27k iterations)
+Benchmarking oneshot/q5/mbrotli/vendor-quickfox_repeated: Analyzing
+oneshot/q5/mbrotli/vendor-quickfox_repeated
+                        time:   [112.79 µs 113.55 µs 114.64 µs]
+                        thrpt:  [1.4308 GiB/s 1.4446 GiB/s 1.4543 GiB/s]
+                 change:
+                        time:   [+3.1951% +4.1418% +5.1476%] (p = 0.00 < 0.05)
+                        thrpt:  [−4.8956% −3.9771% −3.0962%]
+                        Performance has regressed.
+
+Benchmarking presized/q0/c-brotli/text-1KiB
+Benchmarking presized/q0/c-brotli/text-1KiB: Warming up for 1.0000 s
+Benchmarking presized/q0/c-brotli/text-1KiB: Collecting 10 samples in estimated 3.0001 s (1.7M iterations)
+Benchmarking presized/q0/c-brotli/text-1KiB: Analyzing
+presized/q0/c-brotli/text-1KiB
+                        time:   [1.7151 µs 1.7359 µs 1.7566 µs]
+                        thrpt:  [555.93 MiB/s 562.55 MiB/s 569.38 MiB/s]
+                 change:
+                        time:   [+1.2346% +2.1493% +3.0841%] (p = 0.00 < 0.05)
+                        thrpt:  [−2.9918% −2.1041% −1.2195%]
+                        Performance has regressed.
+Benchmarking presized/q0/mbrotli/text-1KiB
+Benchmarking presized/q0/mbrotli/text-1KiB: Warming up for 1.0000 s
+Benchmarking presized/q0/mbrotli/text-1KiB: Collecting 10 samples in estimated 3.0000 s (1.8M iterations)
+Benchmarking presized/q0/mbrotli/text-1KiB: Analyzing
+presized/q0/mbrotli/text-1KiB
+                        time:   [1.6705 µs 1.6853 µs 1.7117 µs]
+                        thrpt:  [570.54 MiB/s 579.47 MiB/s 584.59 MiB/s]
+                 change:
+                        time:   [+0.4283% +1.6853% +3.0024%] (p = 0.02 < 0.05)
+                        thrpt:  [−2.9149% −1.6573% −0.4265%]
+                        Change within noise threshold.
+Benchmarking presized/q0/c-brotli/text-1MiB
+Benchmarking presized/q0/c-brotli/text-1MiB: Warming up for 1.0000 s
+Benchmarking presized/q0/c-brotli/text-1MiB: Collecting 10 samples in estimated 3.0038 s (36k iterations)
+Benchmarking presized/q0/c-brotli/text-1MiB: Analyzing
+presized/q0/c-brotli/text-1MiB
+                        time:   [82.730 µs 83.487 µs 84.162 µs]
+                        thrpt:  [11.603 GiB/s 11.697 GiB/s 11.804 GiB/s]
+                 change:
+                        time:   [+1.1116% +1.9893% +2.7875%] (p = 0.00 < 0.05)
+                        thrpt:  [−2.7119% −1.9505% −1.0994%]
+                        Performance has regressed.
+Benchmarking presized/q0/mbrotli/text-1MiB
+Benchmarking presized/q0/mbrotli/text-1MiB: Warming up for 1.0000 s
+Benchmarking presized/q0/mbrotli/text-1MiB: Collecting 10 samples in estimated 3.0005 s (34k iterations)
+Benchmarking presized/q0/mbrotli/text-1MiB: Analyzing
+presized/q0/mbrotli/text-1MiB
+                        time:   [85.746 µs 86.233 µs 86.587 µs]
+                        thrpt:  [11.278 GiB/s 11.325 GiB/s 11.389 GiB/s]
+                 change:
+                        time:   [+0.0593% +0.5966% +1.1762%] (p = 0.08 > 0.05)
+                        thrpt:  [−1.1625% −0.5931% −0.0592%]
+                        No change in performance detected.
+Benchmarking presized/q0/c-brotli/binary-256KiB
+Benchmarking presized/q0/c-brotli/binary-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q0/c-brotli/binary-256KiB: Collecting 10 samples in estimated 3.0079 s (9185 iterations)
+Benchmarking presized/q0/c-brotli/binary-256KiB: Analyzing
+presized/q0/c-brotli/binary-256KiB
+                        time:   [320.01 µs 321.88 µs 323.86 µs]
+                        thrpt:  [771.94 MiB/s 776.69 MiB/s 781.23 MiB/s]
+                 change:
+                        time:   [+0.4213% +0.9551% +1.5116%] (p = 0.00 < 0.05)
+                        thrpt:  [−1.4891% −0.9461% −0.4195%]
+                        Change within noise threshold.
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high mild
+Benchmarking presized/q0/mbrotli/binary-256KiB
+Benchmarking presized/q0/mbrotli/binary-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q0/mbrotli/binary-256KiB: Collecting 10 samples in estimated 3.0053 s (11k iterations)
+Benchmarking presized/q0/mbrotli/binary-256KiB: Analyzing
+presized/q0/mbrotli/binary-256KiB
+                        time:   [286.40 µs 289.89 µs 293.96 µs]
+                        thrpt:  [850.46 MiB/s 862.40 MiB/s 872.89 MiB/s]
+                 change:
+                        time:   [−1.3172% −0.3849% +0.6262%] (p = 0.49 > 0.05)
+                        thrpt:  [−0.6223% +0.3863% +1.3348%]
+                        No change in performance detected.
+Benchmarking presized/q0/c-brotli/compressible-256KiB
+Benchmarking presized/q0/c-brotli/compressible-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q0/c-brotli/compressible-256KiB: Collecting 10 samples in estimated 3.0020 s (73k iterations)
+Benchmarking presized/q0/c-brotli/compressible-256KiB: Analyzing
+presized/q0/c-brotli/compressible-256KiB
+                        time:   [40.978 µs 41.516 µs 41.848 µs]
+                        thrpt:  [5.8340 GiB/s 5.8806 GiB/s 5.9579 GiB/s]
+                 change:
+                        time:   [−1.9059% −0.4358% +1.0190%] (p = 0.59 > 0.05)
+                        thrpt:  [−1.0087% +0.4377% +1.9429%]
+                        No change in performance detected.
+Benchmarking presized/q0/mbrotli/compressible-256KiB
+Benchmarking presized/q0/mbrotli/compressible-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q0/mbrotli/compressible-256KiB: Collecting 10 samples in estimated 3.0018 s (77k iterations)
+Benchmarking presized/q0/mbrotli/compressible-256KiB: Analyzing
+presized/q0/mbrotli/compressible-256KiB
+                        time:   [37.882 µs 37.947 µs 38.029 µs]
+                        thrpt:  [6.4199 GiB/s 6.4337 GiB/s 6.4448 GiB/s]
+                 change:
+                        time:   [−0.0254% +0.2058% +0.4437%] (p = 0.13 > 0.05)
+                        thrpt:  [−0.4418% −0.2054% +0.0254%]
+                        No change in performance detected.
+Benchmarking presized/q0/c-brotli/incompressible-256KiB
+Benchmarking presized/q0/c-brotli/incompressible-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q0/c-brotli/incompressible-256KiB: Collecting 10 samples in estimated 3.0003 s (154k iterations)
+Benchmarking presized/q0/c-brotli/incompressible-256KiB: Analyzing
+presized/q0/c-brotli/incompressible-256KiB
+                        time:   [19.391 µs 19.606 µs 19.768 µs]
+                        thrpt:  [12.350 GiB/s 12.453 GiB/s 12.590 GiB/s]
+                 change:
+                        time:   [+1.1801% +2.2196% +3.3755%] (p = 0.00 < 0.05)
+                        thrpt:  [−3.2653% −2.1714% −1.1664%]
+                        Performance has regressed.
+Benchmarking presized/q0/mbrotli/incompressible-256KiB
+Benchmarking presized/q0/mbrotli/incompressible-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q0/mbrotli/incompressible-256KiB: Collecting 10 samples in estimated 3.0009 s (142k iterations)
+Benchmarking presized/q0/mbrotli/incompressible-256KiB: Analyzing
+presized/q0/mbrotli/incompressible-256KiB
+                        time:   [20.768 µs 20.797 µs 20.829 µs]
+                        thrpt:  [11.721 GiB/s 11.739 GiB/s 11.756 GiB/s]
+                 change:
+                        time:   [+0.1713% +0.5182% +0.8982%] (p = 0.01 < 0.05)
+                        thrpt:  [−0.8902% −0.5155% −0.1710%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q0/c-brotli/vendor-alice29.txt
+Benchmarking presized/q0/c-brotli/vendor-alice29.txt: Warming up for 1.0000 s
+Benchmarking presized/q0/c-brotli/vendor-alice29.txt: Collecting 10 samples in estimated 3.0027 s (16k iterations)
+Benchmarking presized/q0/c-brotli/vendor-alice29.txt: Analyzing
+presized/q0/c-brotli/vendor-alice29.txt
+                        time:   [177.82 µs 178.42 µs 179.11 µs]
+                        thrpt:  [809.81 MiB/s 812.91 MiB/s 815.68 MiB/s]
+                 change:
+                        time:   [+2.4877% +3.0438% +3.6738%] (p = 0.00 < 0.05)
+                        thrpt:  [−3.5436% −2.9539% −2.4273%]
+                        Performance has regressed.
+Benchmarking presized/q0/mbrotli/vendor-alice29.txt
+Benchmarking presized/q0/mbrotli/vendor-alice29.txt: Warming up for 1.0000 s
+Benchmarking presized/q0/mbrotli/vendor-alice29.txt: Collecting 10 samples in estimated 3.0001 s (15k iterations)
+Benchmarking presized/q0/mbrotli/vendor-alice29.txt: Analyzing
+presized/q0/mbrotli/vendor-alice29.txt
+                        time:   [192.64 µs 193.96 µs 195.96 µs]
+                        thrpt:  [740.18 MiB/s 747.80 MiB/s 752.93 MiB/s]
+                 change:
+                        time:   [−1.7514% −0.6332% +0.5747%] (p = 0.30 > 0.05)
+                        thrpt:  [−0.5715% +0.6372% +1.7827%]
+                        No change in performance detected.
+Benchmarking presized/q0/c-brotli/vendor-lcet10.txt
+Benchmarking presized/q0/c-brotli/vendor-lcet10.txt: Warming up for 1.0000 s
+Benchmarking presized/q0/c-brotli/vendor-lcet10.txt: Collecting 10 samples in estimated 3.0196 s (5390 iterations)
+Benchmarking presized/q0/c-brotli/vendor-lcet10.txt: Analyzing
+presized/q0/c-brotli/vendor-lcet10.txt
+                        time:   [531.71 µs 535.64 µs 542.39 µs]
+                        thrpt:  [750.35 MiB/s 759.81 MiB/s 765.42 MiB/s]
+                 change:
+                        time:   [−8.6136% −4.1606% +0.0520%] (p = 0.11 > 0.05)
+                        thrpt:  [−0.0520% +4.3412% +9.4255%]
+                        No change in performance detected.
+Benchmarking presized/q0/mbrotli/vendor-lcet10.txt
+Benchmarking presized/q0/mbrotli/vendor-lcet10.txt: Warming up for 1.0000 s
+Benchmarking presized/q0/mbrotli/vendor-lcet10.txt: Collecting 10 samples in estimated 3.0268 s (4950 iterations)
+Benchmarking presized/q0/mbrotli/vendor-lcet10.txt: Analyzing
+presized/q0/mbrotli/vendor-lcet10.txt
+                        time:   [612.33 µs 620.91 µs 625.04 µs]
+                        thrpt:  [651.13 MiB/s 655.46 MiB/s 664.65 MiB/s]
+                 change:
+                        time:   [−2.6177% −0.0473% +2.2606%] (p = 0.97 > 0.05)
+                        thrpt:  [−2.2106% +0.0473% +2.6881%]
+                        No change in performance detected.
+Benchmarking presized/q0/c-brotli/vendor-plrabn12.txt
+Benchmarking presized/q0/c-brotli/vendor-plrabn12.txt: Warming up for 1.0000 s
+Benchmarking presized/q0/c-brotli/vendor-plrabn12.txt: Collecting 10 samples in estimated 3.0176 s (3245 iterations)
+Benchmarking presized/q0/c-brotli/vendor-plrabn12.txt: Analyzing
+presized/q0/c-brotli/vendor-plrabn12.txt
+                        time:   [892.22 µs 899.54 µs 903.04 µs]
+                        thrpt:  [508.88 MiB/s 510.86 MiB/s 515.05 MiB/s]
+                 change:
+                        time:   [−0.1956% +2.7019% +5.1232%] (p = 0.07 > 0.05)
+                        thrpt:  [−4.8736% −2.6308% +0.1960%]
+                        No change in performance detected.
+Benchmarking presized/q0/mbrotli/vendor-plrabn12.txt
+Benchmarking presized/q0/mbrotli/vendor-plrabn12.txt: Warming up for 1.0000 s
+Benchmarking presized/q0/mbrotli/vendor-plrabn12.txt: Collecting 10 samples in estimated 3.0121 s (3080 iterations)
+Benchmarking presized/q0/mbrotli/vendor-plrabn12.txt: Analyzing
+presized/q0/mbrotli/vendor-plrabn12.txt
+                        time:   [951.98 µs 965.83 µs 989.66 µs]
+                        thrpt:  [464.34 MiB/s 475.80 MiB/s 482.72 MiB/s]
+                 change:
+                        time:   [+1.9636% +4.0370% +6.0983%] (p = 0.00 < 0.05)
+                        thrpt:  [−5.7478% −3.8803% −1.9258%]
+                        Performance has regressed.
+Benchmarking presized/q0/c-brotli/vendor-mapsdatazrh
+Benchmarking presized/q0/c-brotli/vendor-mapsdatazrh: Warming up for 1.0000 s
+Benchmarking presized/q0/c-brotli/vendor-mapsdatazrh: Collecting 10 samples in estimated 3.0069 s (8250 iterations)
+Benchmarking presized/q0/c-brotli/vendor-mapsdatazrh: Analyzing
+presized/q0/c-brotli/vendor-mapsdatazrh
+                        time:   [363.26 µs 365.53 µs 369.10 µs]
+                        thrpt:  [738.66 MiB/s 745.89 MiB/s 750.54 MiB/s]
+                 change:
+                        time:   [+1.8270% +2.5667% +3.4075%] (p = 0.00 < 0.05)
+                        thrpt:  [−3.2952% −2.5025% −1.7942%]
+                        Performance has regressed.
+Benchmarking presized/q0/mbrotli/vendor-mapsdatazrh
+Benchmarking presized/q0/mbrotli/vendor-mapsdatazrh: Warming up for 1.0000 s
+Benchmarking presized/q0/mbrotli/vendor-mapsdatazrh: Collecting 10 samples in estimated 3.0004 s (11k iterations)
+Benchmarking presized/q0/mbrotli/vendor-mapsdatazrh: Analyzing
+presized/q0/mbrotli/vendor-mapsdatazrh
+                        time:   [263.40 µs 264.97 µs 266.72 µs]
+                        thrpt:  [1022.2 MiB/s 1.0049 GiB/s 1.0108 GiB/s]
+                 change:
+                        time:   [−0.9301% −0.3153% +0.2858%] (p = 0.33 > 0.05)
+                        thrpt:  [−0.2849% +0.3163% +0.9388%]
+                        No change in performance detected.
+Benchmarking presized/q0/c-brotli/vendor-random_org_10k.bin
+Benchmarking presized/q0/c-brotli/vendor-random_org_10k.bin: Warming up for 1.0000 s
+Benchmarking presized/q0/c-brotli/vendor-random_org_10k.bin: Collecting 10 samples in estimated 3.0000 s (344k iterations)
+Benchmarking presized/q0/c-brotli/vendor-random_org_10k.bin: Analyzing
+presized/q0/c-brotli/vendor-random_org_10k.bin
+                        time:   [8.6695 µs 8.6844 µs 8.6986 µs]
+                        thrpt:  [1.0707 GiB/s 1.0724 GiB/s 1.0743 GiB/s]
+                 change:
+                        time:   [−2.7203% −1.6856% −0.8253%] (p = 0.00 < 0.05)
+                        thrpt:  [+0.8322% +1.7145% +2.7963%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q0/mbrotli/vendor-random_org_10k.bin
+Benchmarking presized/q0/mbrotli/vendor-random_org_10k.bin: Warming up for 1.0000 s
+Benchmarking presized/q0/mbrotli/vendor-random_org_10k.bin: Collecting 10 samples in estimated 3.0005 s (328k iterations)
+Benchmarking presized/q0/mbrotli/vendor-random_org_10k.bin: Analyzing
+presized/q0/mbrotli/vendor-random_org_10k.bin
+                        time:   [9.1408 µs 9.1545 µs 9.1633 µs]
+                        thrpt:  [1.0164 GiB/s 1.0173 GiB/s 1.0189 GiB/s]
+                 change:
+                        time:   [+0.2759% +0.5397% +0.7507%] (p = 0.00 < 0.05)
+                        thrpt:  [−0.7451% −0.5368% −0.2752%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) low mild
+Benchmarking presized/q0/c-brotli/vendor-quickfox_repeated
+Benchmarking presized/q0/c-brotli/vendor-quickfox_repeated: Warming up for 1.0000 s
+Benchmarking presized/q0/c-brotli/vendor-quickfox_repeated: Collecting 10 samples in estimated 3.0002 s (163k iterations)
+Benchmarking presized/q0/c-brotli/vendor-quickfox_repeated: Analyzing
+presized/q0/c-brotli/vendor-quickfox_repeated
+                        time:   [18.382 µs 18.444 µs 18.482 µs]
+                        thrpt:  [8.8753 GiB/s 8.8933 GiB/s 8.9236 GiB/s]
+                 change:
+                        time:   [+0.9860% +1.2866% +1.5777%] (p = 0.00 < 0.05)
+                        thrpt:  [−1.5532% −1.2703% −0.9764%]
+                        Change within noise threshold.
+Benchmarking presized/q0/mbrotli/vendor-quickfox_repeated
+Benchmarking presized/q0/mbrotli/vendor-quickfox_repeated: Warming up for 1.0000 s
+Benchmarking presized/q0/mbrotli/vendor-quickfox_repeated: Collecting 10 samples in estimated 3.0008 s (176k iterations)
+Benchmarking presized/q0/mbrotli/vendor-quickfox_repeated: Analyzing
+presized/q0/mbrotli/vendor-quickfox_repeated
+                        time:   [16.592 µs 16.643 µs 16.723 µs]
+                        thrpt:  [9.8085 GiB/s 9.8558 GiB/s 9.8864 GiB/s]
+                 change:
+                        time:   [+0.1741% +0.5458% +0.8750%] (p = 0.01 < 0.05)
+                        thrpt:  [−0.8674% −0.5428% −0.1738%]
+                        Change within noise threshold.
+
+Benchmarking presized/q1/c-brotli/text-1KiB
+Benchmarking presized/q1/c-brotli/text-1KiB: Warming up for 1.0000 s
+Benchmarking presized/q1/c-brotli/text-1KiB: Collecting 10 samples in estimated 3.0000 s (1.3M iterations)
+Benchmarking presized/q1/c-brotli/text-1KiB: Analyzing
+presized/q1/c-brotli/text-1KiB
+                        time:   [2.2557 µs 2.2659 µs 2.2751 µs]
+                        thrpt:  [429.23 MiB/s 430.99 MiB/s 432.92 MiB/s]
+                 change:
+                        time:   [+1.3030% +1.8204% +2.2752%] (p = 0.00 < 0.05)
+                        thrpt:  [−2.2245% −1.7879% −1.2862%]
+                        Performance has regressed.
+Benchmarking presized/q1/mbrotli/text-1KiB
+Benchmarking presized/q1/mbrotli/text-1KiB: Warming up for 1.0000 s
+Benchmarking presized/q1/mbrotli/text-1KiB: Collecting 10 samples in estimated 3.0001 s (1.3M iterations)
+Benchmarking presized/q1/mbrotli/text-1KiB: Analyzing
+presized/q1/mbrotli/text-1KiB
+                        time:   [2.3054 µs 2.3231 µs 2.3358 µs]
+                        thrpt:  [418.08 MiB/s 420.36 MiB/s 423.60 MiB/s]
+                 change:
+                        time:   [−2.5068% −1.7705% −1.0367%] (p = 0.00 < 0.05)
+                        thrpt:  [+1.0476% +1.8025% +2.5713%]
+                        Performance has improved.
+Benchmarking presized/q1/c-brotli/text-1MiB
+Benchmarking presized/q1/c-brotli/text-1MiB: Warming up for 1.0000 s
+Benchmarking presized/q1/c-brotli/text-1MiB: Collecting 10 samples in estimated 3.0012 s (16k iterations)
+Benchmarking presized/q1/c-brotli/text-1MiB: Analyzing
+presized/q1/c-brotli/text-1MiB
+                        time:   [187.52 µs 188.96 µs 190.42 µs]
+                        thrpt:  [5.1285 GiB/s 5.1681 GiB/s 5.2079 GiB/s]
+                 change:
+                        time:   [+0.9744% +1.5683% +2.1663%] (p = 0.00 < 0.05)
+                        thrpt:  [−2.1203% −1.5441% −0.9650%]
+                        Change within noise threshold.
+Benchmarking presized/q1/mbrotli/text-1MiB
+Benchmarking presized/q1/mbrotli/text-1MiB: Warming up for 1.0000 s
+Benchmarking presized/q1/mbrotli/text-1MiB: Collecting 10 samples in estimated 3.0013 s (18k iterations)
+Benchmarking presized/q1/mbrotli/text-1MiB: Analyzing
+presized/q1/mbrotli/text-1MiB
+                        time:   [162.37 µs 162.86 µs 163.39 µs]
+                        thrpt:  [5.9769 GiB/s 5.9964 GiB/s 6.0143 GiB/s]
+                 change:
+                        time:   [−0.9731% +0.2883% +1.2349%] (p = 0.68 > 0.05)
+                        thrpt:  [−1.2198% −0.2874% +0.9827%]
+                        No change in performance detected.
+Benchmarking presized/q1/c-brotli/binary-256KiB
+Benchmarking presized/q1/c-brotli/binary-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q1/c-brotli/binary-256KiB: Collecting 10 samples in estimated 3.0123 s (4620 iterations)
+Benchmarking presized/q1/c-brotli/binary-256KiB: Analyzing
+presized/q1/c-brotli/binary-256KiB
+                        time:   [648.23 µs 649.88 µs 651.57 µs]
+                        thrpt:  [383.69 MiB/s 384.69 MiB/s 385.66 MiB/s]
+                 change:
+                        time:   [+0.6589% +0.9312% +1.2414%] (p = 0.00 < 0.05)
+                        thrpt:  [−1.2262% −0.9226% −0.6545%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q1/mbrotli/binary-256KiB
+Benchmarking presized/q1/mbrotli/binary-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q1/mbrotli/binary-256KiB: Collecting 10 samples in estimated 3.0140 s (6655 iterations)
+Benchmarking presized/q1/mbrotli/binary-256KiB: Analyzing
+presized/q1/mbrotli/binary-256KiB
+                        time:   [450.45 µs 451.20 µs 451.90 µs]
+                        thrpt:  [553.22 MiB/s 554.08 MiB/s 555.00 MiB/s]
+                 change:
+                        time:   [+1.1063% +1.4686% +1.8084%] (p = 0.00 < 0.05)
+                        thrpt:  [−1.7762% −1.4474% −1.0942%]
+                        Performance has regressed.
+Found 3 outliers among 10 measurements (30.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+Benchmarking presized/q1/c-brotli/compressible-256KiB
+Benchmarking presized/q1/c-brotli/compressible-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q1/c-brotli/compressible-256KiB: Collecting 10 samples in estimated 3.0004 s (261k iterations)
+Benchmarking presized/q1/c-brotli/compressible-256KiB: Analyzing
+presized/q1/c-brotli/compressible-256KiB
+                        time:   [11.413 µs 11.444 µs 11.474 µs]
+                        thrpt:  [21.278 GiB/s 21.333 GiB/s 21.392 GiB/s]
+                 change:
+                        time:   [−0.0696% +0.3578% +0.7301%] (p = 0.12 > 0.05)
+                        thrpt:  [−0.7248% −0.3565% +0.0697%]
+                        No change in performance detected.
+Benchmarking presized/q1/mbrotli/compressible-256KiB
+Benchmarking presized/q1/mbrotli/compressible-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q1/mbrotli/compressible-256KiB: Collecting 10 samples in estimated 3.0003 s (338k iterations)
+Benchmarking presized/q1/mbrotli/compressible-256KiB: Analyzing
+presized/q1/mbrotli/compressible-256KiB
+                        time:   [8.8249 µs 8.8475 µs 8.8718 µs]
+                        thrpt:  [27.519 GiB/s 27.594 GiB/s 27.665 GiB/s]
+                 change:
+                        time:   [+0.7594% +1.7437% +2.4401%] (p = 0.00 < 0.05)
+                        thrpt:  [−2.3820% −1.7138% −0.7537%]
+                        Change within noise threshold.
+Benchmarking presized/q1/c-brotli/incompressible-256KiB
+Benchmarking presized/q1/c-brotli/incompressible-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q1/c-brotli/incompressible-256KiB: Collecting 10 samples in estimated 3.0005 s (147k iterations)
+Benchmarking presized/q1/c-brotli/incompressible-256KiB: Analyzing
+presized/q1/c-brotli/incompressible-256KiB
+                        time:   [20.215 µs 20.361 µs 20.494 µs]
+                        thrpt:  [11.913 GiB/s 11.990 GiB/s 12.077 GiB/s]
+                 change:
+                        time:   [−10.359% −4.1946% +0.2114%] (p = 0.21 > 0.05)
+                        thrpt:  [−0.2110% +4.3782% +11.556%]
+                        No change in performance detected.
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high mild
+Benchmarking presized/q1/mbrotli/incompressible-256KiB
+Benchmarking presized/q1/mbrotli/incompressible-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q1/mbrotli/incompressible-256KiB: Collecting 10 samples in estimated 3.0003 s (153k iterations)
+Benchmarking presized/q1/mbrotli/incompressible-256KiB: Analyzing
+presized/q1/mbrotli/incompressible-256KiB
+                        time:   [19.386 µs 19.493 µs 19.605 µs]
+                        thrpt:  [12.453 GiB/s 12.525 GiB/s 12.594 GiB/s]
+                 change:
+                        time:   [−2.0188% −1.6447% −1.2005%] (p = 0.00 < 0.05)
+                        thrpt:  [+1.2151% +1.6722% +2.0604%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q1/c-brotli/vendor-alice29.txt
+Benchmarking presized/q1/c-brotli/vendor-alice29.txt: Warming up for 1.0000 s
+Benchmarking presized/q1/c-brotli/vendor-alice29.txt: Collecting 10 samples in estimated 3.0058 s (8525 iterations)
+Benchmarking presized/q1/c-brotli/vendor-alice29.txt: Analyzing
+presized/q1/c-brotli/vendor-alice29.txt
+                        time:   [348.38 µs 353.18 µs 358.01 µs]
+                        thrpt:  [405.14 MiB/s 410.68 MiB/s 416.33 MiB/s]
+                 change:
+                        time:   [−6.6986% −5.7097% −4.7285%] (p = 0.00 < 0.05)
+                        thrpt:  [+4.9631% +6.0555% +7.1795%]
+                        Performance has improved.
+Benchmarking presized/q1/mbrotli/vendor-alice29.txt
+Benchmarking presized/q1/mbrotli/vendor-alice29.txt: Warming up for 1.0000 s
+Benchmarking presized/q1/mbrotli/vendor-alice29.txt: Collecting 10 samples in estimated 3.0104 s (10k iterations)
+Benchmarking presized/q1/mbrotli/vendor-alice29.txt: Analyzing
+presized/q1/mbrotli/vendor-alice29.txt
+                        time:   [277.69 µs 279.65 µs 283.15 µs]
+                        thrpt:  [512.26 MiB/s 518.66 MiB/s 522.32 MiB/s]
+                 change:
+                        time:   [−16.807% −11.557% −6.2842%] (p = 0.00 < 0.05)
+                        thrpt:  [+6.7056% +13.067% +20.202%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q1/c-brotli/vendor-lcet10.txt
+Benchmarking presized/q1/c-brotli/vendor-lcet10.txt: Warming up for 1.0000 s
+Benchmarking presized/q1/c-brotli/vendor-lcet10.txt: Collecting 10 samples in estimated 3.0474 s (2915 iterations)
+Benchmarking presized/q1/c-brotli/vendor-lcet10.txt: Analyzing
+presized/q1/c-brotli/vendor-lcet10.txt
+                        time:   [1.0219 ms 1.0279 ms 1.0381 ms]
+                        thrpt:  [392.06 MiB/s 395.95 MiB/s 398.26 MiB/s]
+                 change:
+                        time:   [−9.6281% −8.6219% −7.5000%] (p = 0.00 < 0.05)
+                        thrpt:  [+8.1081% +9.4354% +10.654%]
+                        Performance has improved.
+Benchmarking presized/q1/mbrotli/vendor-lcet10.txt
+Benchmarking presized/q1/mbrotli/vendor-lcet10.txt: Warming up for 1.0000 s
+Benchmarking presized/q1/mbrotli/vendor-lcet10.txt: Collecting 10 samples in estimated 3.0341 s (3465 iterations)
+Benchmarking presized/q1/mbrotli/vendor-lcet10.txt: Analyzing
+presized/q1/mbrotli/vendor-lcet10.txt
+                        time:   [859.61 µs 867.14 µs 874.11 µs]
+                        thrpt:  [465.60 MiB/s 469.34 MiB/s 473.45 MiB/s]
+                 change:
+                        time:   [−9.7318% −8.2282% −6.9163%] (p = 0.00 < 0.05)
+                        thrpt:  [+7.4302% +8.9660% +10.781%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q1/c-brotli/vendor-plrabn12.txt
+Benchmarking presized/q1/c-brotli/vendor-plrabn12.txt: Warming up for 1.0000 s
+Benchmarking presized/q1/c-brotli/vendor-plrabn12.txt: Collecting 10 samples in estimated 3.0345 s (2035 iterations)
+Benchmarking presized/q1/c-brotli/vendor-plrabn12.txt: Analyzing
+presized/q1/c-brotli/vendor-plrabn12.txt
+                        time:   [1.4667 ms 1.4822 ms 1.4984 ms]
+                        thrpt:  [306.69 MiB/s 310.04 MiB/s 313.31 MiB/s]
+                 change:
+                        time:   [−5.7738% −5.1229% −4.4580%] (p = 0.00 < 0.05)
+                        thrpt:  [+4.6660% +5.3995% +6.1276%]
+                        Performance has improved.
+Benchmarking presized/q1/mbrotli/vendor-plrabn12.txt
+Benchmarking presized/q1/mbrotli/vendor-plrabn12.txt: Warming up for 1.0000 s
+Benchmarking presized/q1/mbrotli/vendor-plrabn12.txt: Collecting 10 samples in estimated 3.0518 s (2310 iterations)
+Benchmarking presized/q1/mbrotli/vendor-plrabn12.txt: Analyzing
+presized/q1/mbrotli/vendor-plrabn12.txt
+                        time:   [1.2636 ms 1.2713 ms 1.2813 ms]
+                        thrpt:  [358.66 MiB/s 361.46 MiB/s 363.69 MiB/s]
+                 change:
+                        time:   [−6.7682% −5.4558% −4.1850%] (p = 0.00 < 0.05)
+                        thrpt:  [+4.3678% +5.7707% +7.2595%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q1/c-brotli/vendor-mapsdatazrh
+Benchmarking presized/q1/c-brotli/vendor-mapsdatazrh: Warming up for 1.0000 s
+Benchmarking presized/q1/c-brotli/vendor-mapsdatazrh: Collecting 10 samples in estimated 3.0100 s (5335 iterations)
+Benchmarking presized/q1/c-brotli/vendor-mapsdatazrh: Analyzing
+presized/q1/c-brotli/vendor-mapsdatazrh
+                        time:   [557.19 µs 558.23 µs 559.35 µs]
+                        thrpt:  [487.43 MiB/s 488.40 MiB/s 489.32 MiB/s]
+                 change:
+                        time:   [−9.6929% −8.3182% −7.2791%] (p = 0.00 < 0.05)
+                        thrpt:  [+7.8505% +9.0729% +10.733%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q1/mbrotli/vendor-mapsdatazrh
+Benchmarking presized/q1/mbrotli/vendor-mapsdatazrh: Warming up for 1.0000 s
+Benchmarking presized/q1/mbrotli/vendor-mapsdatazrh: Collecting 10 samples in estimated 3.0040 s (7920 iterations)
+Benchmarking presized/q1/mbrotli/vendor-mapsdatazrh: Analyzing
+presized/q1/mbrotli/vendor-mapsdatazrh
+                        time:   [371.31 µs 374.92 µs 376.95 µs]
+                        thrpt:  [723.28 MiB/s 727.21 MiB/s 734.26 MiB/s]
+                 change:
+                        time:   [−8.0295% −7.0571% −6.0578%] (p = 0.00 < 0.05)
+                        thrpt:  [+6.4485% +7.5930% +8.7305%]
+                        Performance has improved.
+Benchmarking presized/q1/c-brotli/vendor-random_org_10k.bin
+Benchmarking presized/q1/c-brotli/vendor-random_org_10k.bin: Warming up for 1.0000 s
+Benchmarking presized/q1/c-brotli/vendor-random_org_10k.bin: Collecting 10 samples in estimated 3.0002 s (123k iterations)
+Benchmarking presized/q1/c-brotli/vendor-random_org_10k.bin: Analyzing
+presized/q1/c-brotli/vendor-random_org_10k.bin
+                        time:   [24.319 µs 24.381 µs 24.475 µs]
+                        thrpt:  [389.66 MiB/s 391.15 MiB/s 392.15 MiB/s]
+                 change:
+                        time:   [−6.1383% −5.7946% −5.4052%] (p = 0.00 < 0.05)
+                        thrpt:  [+5.7140% +6.1510% +6.5397%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q1/mbrotli/vendor-random_org_10k.bin
+Benchmarking presized/q1/mbrotli/vendor-random_org_10k.bin: Warming up for 1.0000 s
+Benchmarking presized/q1/mbrotli/vendor-random_org_10k.bin: Collecting 10 samples in estimated 3.0001 s (232k iterations)
+Benchmarking presized/q1/mbrotli/vendor-random_org_10k.bin: Analyzing
+presized/q1/mbrotli/vendor-random_org_10k.bin
+                        time:   [12.883 µs 12.937 µs 13.018 µs]
+                        thrpt:  [732.61 MiB/s 737.19 MiB/s 740.23 MiB/s]
+                 change:
+                        time:   [−5.1964% −4.4397% −3.7667%] (p = 0.00 < 0.05)
+                        thrpt:  [+3.9141% +4.6460% +5.4812%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q1/c-brotli/vendor-quickfox_repeated
+Benchmarking presized/q1/c-brotli/vendor-quickfox_repeated: Warming up for 1.0000 s
+Benchmarking presized/q1/c-brotli/vendor-quickfox_repeated: Collecting 10 samples in estimated 3.0002 s (316k iterations)
+Benchmarking presized/q1/c-brotli/vendor-quickfox_repeated: Analyzing
+presized/q1/c-brotli/vendor-quickfox_repeated
+                        time:   [9.4548 µs 9.4966 µs 9.5406 µs]
+                        thrpt:  [17.193 GiB/s 17.273 GiB/s 17.349 GiB/s]
+                 change:
+                        time:   [−8.9395% −7.3471% −6.1730%] (p = 0.00 < 0.05)
+                        thrpt:  [+6.5792% +7.9297% +9.8171%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking presized/q1/mbrotli/vendor-quickfox_repeated
+Benchmarking presized/q1/mbrotli/vendor-quickfox_repeated: Warming up for 1.0000 s
+Benchmarking presized/q1/mbrotli/vendor-quickfox_repeated: Collecting 10 samples in estimated 3.0002 s (375k iterations)
+Benchmarking presized/q1/mbrotli/vendor-quickfox_repeated: Analyzing
+presized/q1/mbrotli/vendor-quickfox_repeated
+                        time:   [7.9850 µs 8.1139 µs 8.2405 µs]
+                        thrpt:  [19.905 GiB/s 20.216 GiB/s 20.542 GiB/s]
+                 change:
+                        time:   [−6.4832% −5.5984% −4.3633%] (p = 0.00 < 0.05)
+                        thrpt:  [+4.5624% +5.9304% +6.9327%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+
+Benchmarking presized/q3/c-brotli/text-1KiB
+Benchmarking presized/q3/c-brotli/text-1KiB: Warming up for 1.0000 s
+Benchmarking presized/q3/c-brotli/text-1KiB: Collecting 10 samples in estimated 3.0002 s (544k iterations)
+Benchmarking presized/q3/c-brotli/text-1KiB: Analyzing
+presized/q3/c-brotli/text-1KiB
+                        time:   [5.4316 µs 5.5061 µs 5.5676 µs]
+                        thrpt:  [175.40 MiB/s 177.36 MiB/s 179.79 MiB/s]
+                 change:
+                        time:   [−4.4080% −3.3336% −2.1960%] (p = 0.00 < 0.05)
+                        thrpt:  [+2.2453% +3.4485% +4.6113%]
+                        Performance has improved.
+Benchmarking presized/q3/mbrotli/text-1KiB
+Benchmarking presized/q3/mbrotli/text-1KiB: Warming up for 1.0000 s
+Benchmarking presized/q3/mbrotli/text-1KiB: Collecting 10 samples in estimated 3.0004 s (363k iterations)
+Benchmarking presized/q3/mbrotli/text-1KiB: Analyzing
+presized/q3/mbrotli/text-1KiB
+                        time:   [8.0652 µs 8.0918 µs 8.1403 µs]
+                        thrpt:  [119.97 MiB/s 120.69 MiB/s 121.08 MiB/s]
+                 change:
+                        time:   [−10.211% −9.8208% −9.3726%] (p = 0.00 < 0.05)
+                        thrpt:  [+10.342% +10.890% +11.373%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q3/c-brotli/text-1MiB
+Benchmarking presized/q3/c-brotli/text-1MiB: Warming up for 1.0000 s
+Benchmarking presized/q3/c-brotli/text-1MiB: Collecting 10 samples in estimated 3.0306 s (4565 iterations)
+Benchmarking presized/q3/c-brotli/text-1MiB: Analyzing
+presized/q3/c-brotli/text-1MiB
+                        time:   [621.28 µs 625.32 µs 635.29 µs]
+                        thrpt:  [1.5372 GiB/s 1.5617 GiB/s 1.5719 GiB/s]
+                 change:
+                        time:   [−1.8132% −0.5370% +1.0727%] (p = 0.59 > 0.05)
+                        thrpt:  [−1.0613% +0.5399% +1.8467%]
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking presized/q3/mbrotli/text-1MiB
+Benchmarking presized/q3/mbrotli/text-1MiB: Warming up for 1.0000 s
+Benchmarking presized/q3/mbrotli/text-1MiB: Collecting 10 samples in estimated 3.0067 s (4015 iterations)
+Benchmarking presized/q3/mbrotli/text-1MiB: Analyzing
+presized/q3/mbrotli/text-1MiB
+                        time:   [727.33 µs 727.97 µs 729.08 µs]
+                        thrpt:  [1.3394 GiB/s 1.3415 GiB/s 1.3427 GiB/s]
+                 change:
+                        time:   [−15.153% −14.848% −14.525%] (p = 0.00 < 0.05)
+                        thrpt:  [+16.993% +17.437% +17.859%]
+                        Performance has improved.
+Benchmarking presized/q3/c-brotli/binary-256KiB
+Benchmarking presized/q3/c-brotli/binary-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q3/c-brotli/binary-256KiB: Collecting 10 samples in estimated 3.0146 s (2970 iterations)
+Benchmarking presized/q3/c-brotli/binary-256KiB: Analyzing
+presized/q3/c-brotli/binary-256KiB
+                        time:   [1.0081 ms 1.0124 ms 1.0192 ms]
+                        thrpt:  [245.28 MiB/s 246.93 MiB/s 248.00 MiB/s]
+                 change:
+                        time:   [−5.8358% −3.8362% −1.8616%] (p = 0.00 < 0.05)
+                        thrpt:  [+1.8969% +3.9893% +6.1975%]
+                        Performance has improved.
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high severe
+Benchmarking presized/q3/mbrotli/binary-256KiB
+Benchmarking presized/q3/mbrotli/binary-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q3/mbrotli/binary-256KiB: Collecting 10 samples in estimated 3.0376 s (2585 iterations)
+Benchmarking presized/q3/mbrotli/binary-256KiB: Analyzing
+presized/q3/mbrotli/binary-256KiB
+                        time:   [1.1651 ms 1.1696 ms 1.1760 ms]
+                        thrpt:  [212.58 MiB/s 213.74 MiB/s 214.58 MiB/s]
+                 change:
+                        time:   [−26.487% −26.075% −25.675%] (p = 0.00 < 0.05)
+                        thrpt:  [+34.545% +35.272% +36.031%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking presized/q3/c-brotli/compressible-256KiB
+Benchmarking presized/q3/c-brotli/compressible-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q3/c-brotli/compressible-256KiB: Collecting 10 samples in estimated 3.0031 s (21k iterations)
+Benchmarking presized/q3/c-brotli/compressible-256KiB: Analyzing
+presized/q3/c-brotli/compressible-256KiB
+                        time:   [139.93 µs 139.99 µs 140.06 µs]
+                        thrpt:  [1.7431 GiB/s 1.7440 GiB/s 1.7448 GiB/s]
+                 change:
+                        time:   [−2.2585% −2.1197% −2.0032%] (p = 0.00 < 0.05)
+                        thrpt:  [+2.0442% +2.1656% +2.3107%]
+                        Performance has improved.
+Benchmarking presized/q3/mbrotli/compressible-256KiB
+Benchmarking presized/q3/mbrotli/compressible-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q3/mbrotli/compressible-256KiB: Collecting 10 samples in estimated 3.0000 s (16k iterations)
+Benchmarking presized/q3/mbrotli/compressible-256KiB: Analyzing
+presized/q3/mbrotli/compressible-256KiB
+                        time:   [182.82 µs 183.07 µs 183.48 µs]
+                        thrpt:  [1.3306 GiB/s 1.3336 GiB/s 1.3354 GiB/s]
+                 change:
+                        time:   [−1.9850% −1.3877% −0.8511%] (p = 0.00 < 0.05)
+                        thrpt:  [+0.8584% +1.4072% +2.0253%]
+                        Change within noise threshold.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+Benchmarking presized/q3/c-brotli/incompressible-256KiB
+Benchmarking presized/q3/c-brotli/incompressible-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q3/c-brotli/incompressible-256KiB: Collecting 10 samples in estimated 3.0046 s (33k iterations)
+Benchmarking presized/q3/c-brotli/incompressible-256KiB: Analyzing
+presized/q3/c-brotli/incompressible-256KiB
+                        time:   [90.709 µs 90.880 µs 91.154 µs]
+                        thrpt:  [2.6783 GiB/s 2.6864 GiB/s 2.6915 GiB/s]
+                 change:
+                        time:   [+8.7107% +9.0163% +9.3454%] (p = 0.00 < 0.05)
+                        thrpt:  [−8.5466% −8.2706% −8.0127%]
+                        Performance has regressed.
+Benchmarking presized/q3/mbrotli/incompressible-256KiB
+Benchmarking presized/q3/mbrotli/incompressible-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q3/mbrotli/incompressible-256KiB: Collecting 10 samples in estimated 3.0023 s (21k iterations)
+Benchmarking presized/q3/mbrotli/incompressible-256KiB: Analyzing
+presized/q3/mbrotli/incompressible-256KiB
+                        time:   [139.56 µs 139.76 µs 140.11 µs]
+                        thrpt:  [1.7425 GiB/s 1.7468 GiB/s 1.7494 GiB/s]
+                 change:
+                        time:   [−11.605% −11.234% −10.876%] (p = 0.00 < 0.05)
+                        thrpt:  [+12.203% +12.656% +13.129%]
+                        Performance has improved.
+Benchmarking presized/q3/c-brotli/vendor-alice29.txt
+Benchmarking presized/q3/c-brotli/vendor-alice29.txt: Warming up for 1.0000 s
+Benchmarking presized/q3/c-brotli/vendor-alice29.txt: Collecting 10 samples in estimated 3.0349 s (4675 iterations)
+Benchmarking presized/q3/c-brotli/vendor-alice29.txt: Analyzing
+presized/q3/c-brotli/vendor-alice29.txt
+                        time:   [616.94 µs 619.46 µs 622.71 µs]
+                        thrpt:  [232.92 MiB/s 234.15 MiB/s 235.10 MiB/s]
+                 change:
+                        time:   [−4.1391% −3.6973% −3.2728%] (p = 0.00 < 0.05)
+                        thrpt:  [+3.3835% +3.8393% +4.3179%]
+                        Performance has improved.
+Benchmarking presized/q3/mbrotli/vendor-alice29.txt
+Benchmarking presized/q3/mbrotli/vendor-alice29.txt: Warming up for 1.0000 s
+Benchmarking presized/q3/mbrotli/vendor-alice29.txt: Collecting 10 samples in estimated 3.0158 s (3850 iterations)
+Benchmarking presized/q3/mbrotli/vendor-alice29.txt: Analyzing
+presized/q3/mbrotli/vendor-alice29.txt
+                        time:   [761.08 µs 763.15 µs 766.16 µs]
+                        thrpt:  [189.31 MiB/s 190.06 MiB/s 190.58 MiB/s]
+                 change:
+                        time:   [−27.807% −25.853% −24.327%] (p = 0.00 < 0.05)
+                        thrpt:  [+32.148% +34.868% +38.517%]
+                        Performance has improved.
+Benchmarking presized/q3/c-brotli/vendor-lcet10.txt
+Benchmarking presized/q3/c-brotli/vendor-lcet10.txt: Warming up for 1.0000 s
+Benchmarking presized/q3/c-brotli/vendor-lcet10.txt: Collecting 10 samples in estimated 3.0961 s (1540 iterations)
+Benchmarking presized/q3/c-brotli/vendor-lcet10.txt: Analyzing
+presized/q3/c-brotli/vendor-lcet10.txt
+                        time:   [1.9431 ms 1.9532 ms 1.9648 ms]
+                        thrpt:  [207.13 MiB/s 208.37 MiB/s 209.45 MiB/s]
+                 change:
+                        time:   [−3.7380% −3.2859% −2.8473%] (p = 0.00 < 0.05)
+                        thrpt:  [+2.9308% +3.3976% +3.8831%]
+                        Performance has improved.
+Benchmarking presized/q3/mbrotli/vendor-lcet10.txt
+Benchmarking presized/q3/mbrotli/vendor-lcet10.txt: Warming up for 1.0000 s
+Benchmarking presized/q3/mbrotli/vendor-lcet10.txt: Collecting 10 samples in estimated 3.0992 s (1375 iterations)
+Benchmarking presized/q3/mbrotli/vendor-lcet10.txt: Analyzing
+presized/q3/mbrotli/vendor-lcet10.txt
+                        time:   [2.2076 ms 2.2158 ms 2.2337 ms]
+                        thrpt:  [182.20 MiB/s 183.67 MiB/s 184.36 MiB/s]
+                 change:
+                        time:   [−25.244% −21.322% −18.358%] (p = 0.00 < 0.05)
+                        thrpt:  [+22.486% +27.101% +33.768%]
+                        Performance has improved.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+Benchmarking presized/q3/c-brotli/vendor-plrabn12.txt
+Benchmarking presized/q3/c-brotli/vendor-plrabn12.txt: Warming up for 1.0000 s
+Benchmarking presized/q3/c-brotli/vendor-plrabn12.txt: Collecting 10 samples in estimated 3.1207 s (1155 iterations)
+Benchmarking presized/q3/c-brotli/vendor-plrabn12.txt: Analyzing
+presized/q3/c-brotli/vendor-plrabn12.txt
+                        time:   [2.6587 ms 2.6618 ms 2.6657 ms]
+                        thrpt:  [172.39 MiB/s 172.65 MiB/s 172.84 MiB/s]
+                 change:
+                        time:   [−8.9910% −8.3238% −7.7008%] (p = 0.00 < 0.05)
+                        thrpt:  [+8.3432% +9.0796% +9.8793%]
+                        Performance has improved.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high mild
+Benchmarking presized/q3/mbrotli/vendor-plrabn12.txt
+Benchmarking presized/q3/mbrotli/vendor-plrabn12.txt: Warming up for 1.0000 s
+Benchmarking presized/q3/mbrotli/vendor-plrabn12.txt: Collecting 10 samples in estimated 3.0298 s (990 iterations)
+Benchmarking presized/q3/mbrotli/vendor-plrabn12.txt: Analyzing
+presized/q3/mbrotli/vendor-plrabn12.txt
+                        time:   [3.0680 ms 3.1662 ms 3.2968 ms]
+                        thrpt:  [139.39 MiB/s 145.14 MiB/s 149.78 MiB/s]
+                 change:
+                        time:   [−18.118% −16.309% −14.381%] (p = 0.00 < 0.05)
+                        thrpt:  [+16.797% +19.487% +22.127%]
+                        Performance has improved.
+Benchmarking presized/q3/c-brotli/vendor-mapsdatazrh
+Benchmarking presized/q3/c-brotli/vendor-mapsdatazrh: Warming up for 1.0000 s
+Benchmarking presized/q3/c-brotli/vendor-mapsdatazrh: Collecting 10 samples in estimated 3.0472 s (2915 iterations)
+Benchmarking presized/q3/c-brotli/vendor-mapsdatazrh: Analyzing
+presized/q3/c-brotli/vendor-mapsdatazrh
+                        time:   [1.0137 ms 1.0270 ms 1.0427 ms]
+                        thrpt:  [261.47 MiB/s 265.46 MiB/s 268.95 MiB/s]
+                 change:
+                        time:   [−16.096% −12.193% −7.9823%] (p = 0.00 < 0.05)
+                        thrpt:  [+8.6747% +13.886% +19.183%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q3/mbrotli/vendor-mapsdatazrh
+Benchmarking presized/q3/mbrotli/vendor-mapsdatazrh: Warming up for 1.0000 s
+Benchmarking presized/q3/mbrotli/vendor-mapsdatazrh: Collecting 10 samples in estimated 3.0300 s (2420 iterations)
+Benchmarking presized/q3/mbrotli/vendor-mapsdatazrh: Analyzing
+presized/q3/mbrotli/vendor-mapsdatazrh
+                        time:   [1.1435 ms 1.1496 ms 1.1559 ms]
+                        thrpt:  [235.86 MiB/s 237.17 MiB/s 238.43 MiB/s]
+                 change:
+                        time:   [−26.484% −25.506% −24.400%] (p = 0.00 < 0.05)
+                        thrpt:  [+32.276% +34.238% +36.024%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q3/c-brotli/vendor-random_org_10k.bin
+Benchmarking presized/q3/c-brotli/vendor-random_org_10k.bin: Warming up for 1.0000 s
+Benchmarking presized/q3/c-brotli/vendor-random_org_10k.bin: Collecting 10 samples in estimated 3.0013 s (100k iterations)
+Benchmarking presized/q3/c-brotli/vendor-random_org_10k.bin: Analyzing
+presized/q3/c-brotli/vendor-random_org_10k.bin
+                        time:   [29.578 µs 29.642 µs 29.780 µs]
+                        thrpt:  [320.25 MiB/s 321.73 MiB/s 322.42 MiB/s]
+                 change:
+                        time:   [−5.0914% −4.6968% −4.2349%] (p = 0.00 < 0.05)
+                        thrpt:  [+4.4222% +4.9283% +5.3645%]
+                        Performance has improved.
+Benchmarking presized/q3/mbrotli/vendor-random_org_10k.bin
+Benchmarking presized/q3/mbrotli/vendor-random_org_10k.bin: Warming up for 1.0000 s
+Benchmarking presized/q3/mbrotli/vendor-random_org_10k.bin: Collecting 10 samples in estimated 3.0015 s (88k iterations)
+Benchmarking presized/q3/mbrotli/vendor-random_org_10k.bin: Analyzing
+presized/q3/mbrotli/vendor-random_org_10k.bin
+                        time:   [33.731 µs 33.800 µs 33.971 µs]
+                        thrpt:  [280.73 MiB/s 282.16 MiB/s 282.73 MiB/s]
+                 change:
+                        time:   [−12.656% −11.858% −10.826%] (p = 0.00 < 0.05)
+                        thrpt:  [+12.140% +13.453% +14.490%]
+                        Performance has improved.
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high severe
+Benchmarking presized/q3/c-brotli/vendor-quickfox_repeated
+Benchmarking presized/q3/c-brotli/vendor-quickfox_repeated: Warming up for 1.0000 s
+Benchmarking presized/q3/c-brotli/vendor-quickfox_repeated: Collecting 10 samples in estimated 3.0049 s (33k iterations)
+Benchmarking presized/q3/c-brotli/vendor-quickfox_repeated: Analyzing
+presized/q3/c-brotli/vendor-quickfox_repeated
+                        time:   [91.397 µs 91.567 µs 91.983 µs]
+                        thrpt:  [1.7833 GiB/s 1.7914 GiB/s 1.7947 GiB/s]
+                 change:
+                        time:   [−3.0426% −2.7823% −2.3957%] (p = 0.00 < 0.05)
+                        thrpt:  [+2.4545% +2.8619% +3.1381%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking presized/q3/mbrotli/vendor-quickfox_repeated
+Benchmarking presized/q3/mbrotli/vendor-quickfox_repeated: Warming up for 1.0000 s
+Benchmarking presized/q3/mbrotli/vendor-quickfox_repeated: Collecting 10 samples in estimated 3.0022 s (23k iterations)
+Benchmarking presized/q3/mbrotli/vendor-quickfox_repeated: Analyzing
+presized/q3/mbrotli/vendor-quickfox_repeated
+                        time:   [127.68 µs 127.88 µs 128.10 µs]
+                        thrpt:  [1.2805 GiB/s 1.2827 GiB/s 1.2848 GiB/s]
+                 change:
+                        time:   [−8.9473% −7.1376% −5.7535%] (p = 0.00 < 0.05)
+                        thrpt:  [+6.1048% +7.6862% +9.8265%]
+                        Performance has improved.
+
+Benchmarking presized/q4/c-brotli/text-1KiB
+Benchmarking presized/q4/c-brotli/text-1KiB: Warming up for 1.0000 s
+Benchmarking presized/q4/c-brotli/text-1KiB: Collecting 10 samples in estimated 3.0003 s (389k iterations)
+Benchmarking presized/q4/c-brotli/text-1KiB: Analyzing
+presized/q4/c-brotli/text-1KiB
+                        time:   [7.6506 µs 7.6961 µs 7.8071 µs]
+                        thrpt:  [125.09 MiB/s 126.89 MiB/s 127.65 MiB/s]
+                 change:
+                        time:   [−6.2908% −5.4672% −4.0424%] (p = 0.00 < 0.05)
+                        thrpt:  [+4.2127% +5.7834% +6.7131%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking presized/q4/mbrotli/text-1KiB
+Benchmarking presized/q4/mbrotli/text-1KiB: Warming up for 1.0000 s
+Benchmarking presized/q4/mbrotli/text-1KiB: Collecting 10 samples in estimated 3.0003 s (242k iterations)
+Benchmarking presized/q4/mbrotli/text-1KiB: Analyzing
+presized/q4/mbrotli/text-1KiB
+                        time:   [12.243 µs 12.269 µs 12.300 µs]
+                        thrpt:  [79.397 MiB/s 79.598 MiB/s 79.762 MiB/s]
+                 change:
+                        time:   [−8.3362% −8.1626% −7.9801%] (p = 0.00 < 0.05)
+                        thrpt:  [+8.6722% +8.8881% +9.0943%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q4/c-brotli/text-1MiB
+Benchmarking presized/q4/c-brotli/text-1MiB: Warming up for 1.0000 s
+Benchmarking presized/q4/c-brotli/text-1MiB: Collecting 10 samples in estimated 3.0005 s (4235 iterations)
+Benchmarking presized/q4/c-brotli/text-1MiB: Analyzing
+presized/q4/c-brotli/text-1MiB
+                        time:   [704.82 µs 705.25 µs 706.09 µs]
+                        thrpt:  [1.3831 GiB/s 1.3847 GiB/s 1.3856 GiB/s]
+                 change:
+                        time:   [−4.1944% −3.5683% −3.1243%] (p = 0.00 < 0.05)
+                        thrpt:  [+3.2251% +3.7004% +4.3780%]
+                        Performance has improved.
+Benchmarking presized/q4/mbrotli/text-1MiB
+Benchmarking presized/q4/mbrotli/text-1MiB: Warming up for 1.0000 s
+Benchmarking presized/q4/mbrotli/text-1MiB: Collecting 10 samples in estimated 3.0013 s (3465 iterations)
+Benchmarking presized/q4/mbrotli/text-1MiB: Analyzing
+presized/q4/mbrotli/text-1MiB
+                        time:   [861.84 µs 862.17 µs 862.76 µs]
+                        thrpt:  [1.1319 GiB/s 1.1327 GiB/s 1.1331 GiB/s]
+                 change:
+                        time:   [−13.926% −13.168% −12.292%] (p = 0.00 < 0.05)
+                        thrpt:  [+14.015% +15.165% +16.179%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking presized/q4/c-brotli/binary-256KiB
+Benchmarking presized/q4/c-brotli/binary-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q4/c-brotli/binary-256KiB: Collecting 10 samples in estimated 3.0527 s (1870 iterations)
+Benchmarking presized/q4/c-brotli/binary-256KiB: Analyzing
+presized/q4/c-brotli/binary-256KiB
+                        time:   [1.6188 ms 1.6209 ms 1.6228 ms]
+                        thrpt:  [154.06 MiB/s 154.23 MiB/s 154.44 MiB/s]
+                 change:
+                        time:   [−3.6165% −3.4208% −3.2487%] (p = 0.00 < 0.05)
+                        thrpt:  [+3.3577% +3.5420% +3.7522%]
+                        Performance has improved.
+Benchmarking presized/q4/mbrotli/binary-256KiB
+Benchmarking presized/q4/mbrotli/binary-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q4/mbrotli/binary-256KiB: Collecting 10 samples in estimated 3.0782 s (1485 iterations)
+Benchmarking presized/q4/mbrotli/binary-256KiB: Analyzing
+presized/q4/mbrotli/binary-256KiB
+                        time:   [2.0622 ms 2.0713 ms 2.0855 ms]
+                        thrpt:  [119.87 MiB/s 120.70 MiB/s 121.23 MiB/s]
+                 change:
+                        time:   [−14.494% −14.154% −13.672%] (p = 0.00 < 0.05)
+                        thrpt:  [+15.837% +16.488% +16.951%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking presized/q4/c-brotli/compressible-256KiB
+Benchmarking presized/q4/c-brotli/compressible-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q4/c-brotli/compressible-256KiB: Collecting 10 samples in estimated 3.0031 s (26k iterations)
+Benchmarking presized/q4/c-brotli/compressible-256KiB: Analyzing
+presized/q4/c-brotli/compressible-256KiB
+                        time:   [117.03 µs 117.12 µs 117.25 µs]
+                        thrpt:  [2.0823 GiB/s 2.0845 GiB/s 2.0862 GiB/s]
+                 change:
+                        time:   [−3.8241% −3.1630% −2.7335%] (p = 0.00 < 0.05)
+                        thrpt:  [+2.8103% +3.2663% +3.9762%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking presized/q4/mbrotli/compressible-256KiB
+Benchmarking presized/q4/mbrotli/compressible-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q4/mbrotli/compressible-256KiB: Collecting 10 samples in estimated 3.0066 s (19k iterations)
+Benchmarking presized/q4/mbrotli/compressible-256KiB: Analyzing
+presized/q4/mbrotli/compressible-256KiB
+                        time:   [158.87 µs 159.97 µs 161.33 µs]
+                        thrpt:  [1.5133 GiB/s 1.5261 GiB/s 1.5368 GiB/s]
+                 change:
+                        time:   [−2.1424% −1.7002% −1.1172%] (p = 0.00 < 0.05)
+                        thrpt:  [+1.1299% +1.7296% +2.1893%]
+                        Performance has improved.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+Benchmarking presized/q4/c-brotli/incompressible-256KiB
+Benchmarking presized/q4/c-brotli/incompressible-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q4/c-brotli/incompressible-256KiB: Collecting 10 samples in estimated 3.0046 s (29k iterations)
+Benchmarking presized/q4/c-brotli/incompressible-256KiB: Analyzing
+presized/q4/c-brotli/incompressible-256KiB
+                        time:   [102.86 µs 102.90 µs 102.93 µs]
+                        thrpt:  [2.3719 GiB/s 2.3725 GiB/s 2.3736 GiB/s]
+                 change:
+                        time:   [−1.3173% −1.2422% −1.1621%] (p = 0.00 < 0.05)
+                        thrpt:  [+1.1758% +1.2579% +1.3349%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q4/mbrotli/incompressible-256KiB
+Benchmarking presized/q4/mbrotli/incompressible-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q4/mbrotli/incompressible-256KiB: Collecting 10 samples in estimated 3.0075 s (18k iterations)
+Benchmarking presized/q4/mbrotli/incompressible-256KiB: Analyzing
+presized/q4/mbrotli/incompressible-256KiB
+                        time:   [164.32 µs 164.42 µs 164.56 µs]
+                        thrpt:  [1.4836 GiB/s 1.4849 GiB/s 1.4857 GiB/s]
+                 change:
+                        time:   [−15.364% −15.017% −14.695%] (p = 0.00 < 0.05)
+                        thrpt:  [+17.226% +17.670% +18.153%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) low mild
+Benchmarking presized/q4/c-brotli/vendor-alice29.txt
+Benchmarking presized/q4/c-brotli/vendor-alice29.txt: Warming up for 1.0000 s
+Benchmarking presized/q4/c-brotli/vendor-alice29.txt: Collecting 10 samples in estimated 3.0366 s (3410 iterations)
+Benchmarking presized/q4/c-brotli/vendor-alice29.txt: Analyzing
+presized/q4/c-brotli/vendor-alice29.txt
+                        time:   [870.39 µs 871.57 µs 872.90 µs]
+                        thrpt:  [166.16 MiB/s 166.42 MiB/s 166.64 MiB/s]
+                 change:
+                        time:   [−12.405% −11.460% −10.524%] (p = 0.00 < 0.05)
+                        thrpt:  [+11.761% +12.944% +14.161%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking presized/q4/mbrotli/vendor-alice29.txt
+Benchmarking presized/q4/mbrotli/vendor-alice29.txt: Warming up for 1.0000 s
+Benchmarking presized/q4/mbrotli/vendor-alice29.txt: Collecting 10 samples in estimated 3.0030 s (2530 iterations)
+Benchmarking presized/q4/mbrotli/vendor-alice29.txt: Analyzing
+presized/q4/mbrotli/vendor-alice29.txt
+                        time:   [1.1522 ms 1.1572 ms 1.1629 ms]
+                        thrpt:  [124.72 MiB/s 125.34 MiB/s 125.89 MiB/s]
+                 change:
+                        time:   [−17.256% −16.946% −16.574%] (p = 0.00 < 0.05)
+                        thrpt:  [+19.867% +20.403% +20.855%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking presized/q4/c-brotli/vendor-lcet10.txt
+Benchmarking presized/q4/c-brotli/vendor-lcet10.txt: Warming up for 1.0000 s
+Benchmarking presized/q4/c-brotli/vendor-lcet10.txt: Collecting 10 samples in estimated 3.0176 s (1155 iterations)
+Benchmarking presized/q4/c-brotli/vendor-lcet10.txt: Analyzing
+presized/q4/c-brotli/vendor-lcet10.txt
+                        time:   [2.5734 ms 2.6013 ms 2.6305 ms]
+                        thrpt:  [154.72 MiB/s 156.46 MiB/s 158.15 MiB/s]
+                 change:
+                        time:   [−7.4425% −6.5086% −5.4562%] (p = 0.00 < 0.05)
+                        thrpt:  [+5.7711% +6.9617% +8.0410%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking presized/q4/mbrotli/vendor-lcet10.txt
+Benchmarking presized/q4/mbrotli/vendor-lcet10.txt: Warming up for 1.0000 s
+Benchmarking presized/q4/mbrotli/vendor-lcet10.txt: Collecting 10 samples in estimated 3.1735 s (990 iterations)
+Benchmarking presized/q4/mbrotli/vendor-lcet10.txt: Analyzing
+presized/q4/mbrotli/vendor-lcet10.txt
+                        time:   [3.1597 ms 3.1728 ms 3.1977 ms]
+                        thrpt:  [127.27 MiB/s 128.27 MiB/s 128.80 MiB/s]
+                 change:
+                        time:   [−12.199% −11.743% −11.176%] (p = 0.00 < 0.05)
+                        thrpt:  [+12.582% +13.305% +13.894%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking presized/q4/c-brotli/vendor-plrabn12.txt
+Benchmarking presized/q4/c-brotli/vendor-plrabn12.txt: Warming up for 1.0000 s
+Benchmarking presized/q4/c-brotli/vendor-plrabn12.txt: Collecting 10 samples in estimated 3.1146 s (880 iterations)
+Benchmarking presized/q4/c-brotli/vendor-plrabn12.txt: Analyzing
+presized/q4/c-brotli/vendor-plrabn12.txt
+                        time:   [3.5108 ms 3.5142 ms 3.5178 ms]
+                        thrpt:  [130.63 MiB/s 130.77 MiB/s 130.89 MiB/s]
+                 change:
+                        time:   [−4.7124% −4.3533% −3.9864%] (p = 0.00 < 0.05)
+                        thrpt:  [+4.1519% +4.5514% +4.9455%]
+                        Performance has improved.
+Benchmarking presized/q4/mbrotli/vendor-plrabn12.txt
+Benchmarking presized/q4/mbrotli/vendor-plrabn12.txt: Warming up for 1.0000 s
+Benchmarking presized/q4/mbrotli/vendor-plrabn12.txt: Collecting 10 samples in estimated 3.0449 s (715 iterations)
+Benchmarking presized/q4/mbrotli/vendor-plrabn12.txt: Analyzing
+presized/q4/mbrotli/vendor-plrabn12.txt
+                        time:   [4.2266 ms 4.2288 ms 4.2324 ms]
+                        thrpt:  [108.58 MiB/s 108.67 MiB/s 108.73 MiB/s]
+                 change:
+                        time:   [−12.670% −11.856% −11.242%] (p = 0.00 < 0.05)
+                        thrpt:  [+12.666% +13.450% +14.508%]
+                        Performance has improved.
+Benchmarking presized/q4/c-brotli/vendor-mapsdatazrh
+Benchmarking presized/q4/c-brotli/vendor-mapsdatazrh: Warming up for 1.0000 s
+Benchmarking presized/q4/c-brotli/vendor-mapsdatazrh: Collecting 10 samples in estimated 3.0665 s (2255 iterations)
+Benchmarking presized/q4/c-brotli/vendor-mapsdatazrh: Analyzing
+presized/q4/c-brotli/vendor-mapsdatazrh
+                        time:   [1.3397 ms 1.3499 ms 1.3629 ms]
+                        thrpt:  [200.04 MiB/s 201.97 MiB/s 203.51 MiB/s]
+                 change:
+                        time:   [−3.6022% −3.2056% −2.6331%] (p = 0.00 < 0.05)
+                        thrpt:  [+2.7043% +3.3118% +3.7368%]
+                        Performance has improved.
+Found 3 outliers among 10 measurements (30.00%)
+  1 (10.00%) low mild
+  2 (20.00%) high severe
+Benchmarking presized/q4/mbrotli/vendor-mapsdatazrh
+Benchmarking presized/q4/mbrotli/vendor-mapsdatazrh: Warming up for 1.0000 s
+Benchmarking presized/q4/mbrotli/vendor-mapsdatazrh: Collecting 10 samples in estimated 3.0841 s (1980 iterations)
+Benchmarking presized/q4/mbrotli/vendor-mapsdatazrh: Analyzing
+presized/q4/mbrotli/vendor-mapsdatazrh
+                        time:   [1.5342 ms 1.5365 ms 1.5392 ms]
+                        thrpt:  [177.14 MiB/s 177.45 MiB/s 177.71 MiB/s]
+                 change:
+                        time:   [−15.045% −14.727% −14.426%] (p = 0.00 < 0.05)
+                        thrpt:  [+16.859% +17.271% +17.709%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q4/c-brotli/vendor-random_org_10k.bin
+Benchmarking presized/q4/c-brotli/vendor-random_org_10k.bin: Warming up for 1.0000 s
+Benchmarking presized/q4/c-brotli/vendor-random_org_10k.bin: Collecting 10 samples in estimated 3.0015 s (62k iterations)
+Benchmarking presized/q4/c-brotli/vendor-random_org_10k.bin: Analyzing
+presized/q4/c-brotli/vendor-random_org_10k.bin
+                        time:   [48.171 µs 48.220 µs 48.295 µs]
+                        thrpt:  [197.47 MiB/s 197.78 MiB/s 197.98 MiB/s]
+                 change:
+                        time:   [−1.7091% −1.3509% −1.0243%] (p = 0.00 < 0.05)
+                        thrpt:  [+1.0349% +1.3694% +1.7388%]
+                        Performance has improved.
+Benchmarking presized/q4/mbrotli/vendor-random_org_10k.bin
+Benchmarking presized/q4/mbrotli/vendor-random_org_10k.bin: Warming up for 1.0000 s
+Benchmarking presized/q4/mbrotli/vendor-random_org_10k.bin: Collecting 10 samples in estimated 3.0022 s (61k iterations)
+Benchmarking presized/q4/mbrotli/vendor-random_org_10k.bin: Analyzing
+presized/q4/mbrotli/vendor-random_org_10k.bin
+                        time:   [49.133 µs 49.192 µs 49.297 µs]
+                        thrpt:  [193.46 MiB/s 193.87 MiB/s 194.10 MiB/s]
+                 change:
+                        time:   [−5.3248% −5.1287% −4.9028%] (p = 0.00 < 0.05)
+                        thrpt:  [+5.1556% +5.4059% +5.6242%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q4/c-brotli/vendor-quickfox_repeated
+Benchmarking presized/q4/c-brotli/vendor-quickfox_repeated: Warming up for 1.0000 s
+Benchmarking presized/q4/c-brotli/vendor-quickfox_repeated: Collecting 10 samples in estimated 3.0025 s (42k iterations)
+Benchmarking presized/q4/c-brotli/vendor-quickfox_repeated: Analyzing
+presized/q4/c-brotli/vendor-quickfox_repeated
+                        time:   [71.164 µs 71.204 µs 71.279 µs]
+                        thrpt:  [2.3013 GiB/s 2.3037 GiB/s 2.3050 GiB/s]
+                 change:
+                        time:   [−2.7005% −2.4812% −2.2079%] (p = 0.00 < 0.05)
+                        thrpt:  [+2.2577% +2.5444% +2.7755%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q4/mbrotli/vendor-quickfox_repeated
+Benchmarking presized/q4/mbrotli/vendor-quickfox_repeated: Warming up for 1.0000 s
+Benchmarking presized/q4/mbrotli/vendor-quickfox_repeated: Collecting 10 samples in estimated 3.0049 s (27k iterations)
+Benchmarking presized/q4/mbrotli/vendor-quickfox_repeated: Analyzing
+presized/q4/mbrotli/vendor-quickfox_repeated
+                        time:   [107.71 µs 109.67 µs 111.71 µs]
+                        thrpt:  [1.4684 GiB/s 1.4957 GiB/s 1.5230 GiB/s]
+                 change:
+                        time:   [−0.5489% +1.1656% +3.0218%] (p = 0.26 > 0.05)
+                        thrpt:  [−2.9331% −1.1522% +0.5519%]
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+
+Benchmarking presized/q5/c-brotli/text-1KiB
+Benchmarking presized/q5/c-brotli/text-1KiB: Warming up for 1.0000 s
+Benchmarking presized/q5/c-brotli/text-1KiB: Collecting 10 samples in estimated 3.0003 s (340k iterations)
+Benchmarking presized/q5/c-brotli/text-1KiB: Analyzing
+presized/q5/c-brotli/text-1KiB
+                        time:   [8.7195 µs 8.7263 µs 8.7343 µs]
+                        thrpt:  [111.81 MiB/s 111.91 MiB/s 112.00 MiB/s]
+                 change:
+                        time:   [−1.6089% −1.2666% −1.0302%] (p = 0.00 < 0.05)
+                        thrpt:  [+1.0410% +1.2829% +1.6352%]
+                        Performance has improved.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high mild
+Benchmarking presized/q5/mbrotli/text-1KiB
+Benchmarking presized/q5/mbrotli/text-1KiB: Warming up for 1.0000 s
+Benchmarking presized/q5/mbrotli/text-1KiB: Collecting 10 samples in estimated 3.0001 s (200k iterations)
+Benchmarking presized/q5/mbrotli/text-1KiB: Analyzing
+presized/q5/mbrotli/text-1KiB
+                        time:   [14.951 µs 15.050 µs 15.122 µs]
+                        thrpt:  [64.577 MiB/s 64.886 MiB/s 65.316 MiB/s]
+                 change:
+                        time:   [−0.7465% −0.2467% +0.2186%] (p = 0.41 > 0.05)
+                        thrpt:  [−0.2182% +0.2474% +0.7521%]
+                        No change in performance detected.
+Benchmarking presized/q5/c-brotli/text-1MiB
+Benchmarking presized/q5/c-brotli/text-1MiB: Warming up for 1.0000 s
+Benchmarking presized/q5/c-brotli/text-1MiB: Collecting 10 samples in estimated 3.0430 s (2255 iterations)
+Benchmarking presized/q5/c-brotli/text-1MiB: Analyzing
+presized/q5/c-brotli/text-1MiB
+                        time:   [1.3399 ms 1.3426 ms 1.3466 ms]
+                        thrpt:  [742.59 MiB/s 744.84 MiB/s 746.31 MiB/s]
+                 change:
+                        time:   [−2.0178% −1.8679% −1.6724%] (p = 0.00 < 0.05)
+                        thrpt:  [+1.7009% +1.9034% +2.0593%]
+                        Performance has improved.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+Benchmarking presized/q5/mbrotli/text-1MiB
+Benchmarking presized/q5/mbrotli/text-1MiB: Warming up for 1.0000 s
+Benchmarking presized/q5/mbrotli/text-1MiB: Collecting 10 samples in estimated 3.0664 s (2200 iterations)
+Benchmarking presized/q5/mbrotli/text-1MiB: Analyzing
+presized/q5/mbrotli/text-1MiB
+                        time:   [1.3821 ms 1.3847 ms 1.3867 ms]
+                        thrpt:  [721.12 MiB/s 722.18 MiB/s 723.51 MiB/s]
+                 change:
+                        time:   [−5.3269% −4.1175% −3.2465%] (p = 0.00 < 0.05)
+                        thrpt:  [+3.3554% +4.2943% +5.6266%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q5/c-brotli/binary-256KiB
+Benchmarking presized/q5/c-brotli/binary-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q5/c-brotli/binary-256KiB: Collecting 10 samples in estimated 3.0820 s (1375 iterations)
+Benchmarking presized/q5/c-brotli/binary-256KiB: Analyzing
+presized/q5/c-brotli/binary-256KiB
+                        time:   [2.2312 ms 2.2329 ms 2.2346 ms]
+                        thrpt:  [111.88 MiB/s 111.96 MiB/s 112.05 MiB/s]
+                 change:
+                        time:   [−1.9391% −1.8047% −1.6887%] (p = 0.00 < 0.05)
+                        thrpt:  [+1.7177% +1.8378% +1.9775%]
+                        Performance has improved.
+Benchmarking presized/q5/mbrotli/binary-256KiB
+Benchmarking presized/q5/mbrotli/binary-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q5/mbrotli/binary-256KiB: Collecting 10 samples in estimated 3.0084 s (935 iterations)
+Benchmarking presized/q5/mbrotli/binary-256KiB: Analyzing
+presized/q5/mbrotli/binary-256KiB
+                        time:   [3.1972 ms 3.2081 ms 3.2156 ms]
+                        thrpt:  [77.746 MiB/s 77.927 MiB/s 78.194 MiB/s]
+                 change:
+                        time:   [−10.498% −10.194% −9.9269%] (p = 0.00 < 0.05)
+                        thrpt:  [+11.021% +11.351% +11.730%]
+                        Performance has improved.
+Benchmarking presized/q5/c-brotli/compressible-256KiB
+Benchmarking presized/q5/c-brotli/compressible-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q5/c-brotli/compressible-256KiB: Collecting 10 samples in estimated 3.0055 s (24k iterations)
+Benchmarking presized/q5/c-brotli/compressible-256KiB: Analyzing
+presized/q5/c-brotli/compressible-256KiB
+                        time:   [123.59 µs 123.65 µs 123.71 µs]
+                        thrpt:  [1.9735 GiB/s 1.9744 GiB/s 1.9755 GiB/s]
+                 change:
+                        time:   [−2.2217% −1.7145% −1.4065%] (p = 0.00 < 0.05)
+                        thrpt:  [+1.4265% +1.7444% +2.2722%]
+                        Performance has improved.
+Benchmarking presized/q5/mbrotli/compressible-256KiB
+Benchmarking presized/q5/mbrotli/compressible-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q5/mbrotli/compressible-256KiB: Collecting 10 samples in estimated 3.0091 s (18k iterations)
+Benchmarking presized/q5/mbrotli/compressible-256KiB: Analyzing
+presized/q5/mbrotli/compressible-256KiB
+                        time:   [169.21 µs 170.92 µs 172.69 µs]
+                        thrpt:  [1.4138 GiB/s 1.4284 GiB/s 1.4428 GiB/s]
+                 change:
+                        time:   [+0.7885% +1.9058% +3.1800%] (p = 0.01 < 0.05)
+                        thrpt:  [−3.0820% −1.8702% −0.7824%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q5/c-brotli/incompressible-256KiB
+Benchmarking presized/q5/c-brotli/incompressible-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q5/c-brotli/incompressible-256KiB: Collecting 10 samples in estimated 3.0075 s (18k iterations)
+Benchmarking presized/q5/c-brotli/incompressible-256KiB: Analyzing
+presized/q5/c-brotli/incompressible-256KiB
+                        time:   [163.36 µs 163.40 µs 163.47 µs]
+                        thrpt:  [1.4935 GiB/s 1.4941 GiB/s 1.4945 GiB/s]
+                 change:
+                        time:   [+5.0694% +5.1814% +5.2939%] (p = 0.00 < 0.05)
+                        thrpt:  [−5.0277% −4.9261% −4.8248%]
+                        Performance has regressed.
+Found 3 outliers among 10 measurements (30.00%)
+  2 (20.00%) low severe
+  1 (10.00%) high severe
+Benchmarking presized/q5/mbrotli/incompressible-256KiB
+Benchmarking presized/q5/mbrotli/incompressible-256KiB: Warming up for 1.0000 s
+Benchmarking presized/q5/mbrotli/incompressible-256KiB: Collecting 10 samples in estimated 3.0012 s (11k iterations)
+Benchmarking presized/q5/mbrotli/incompressible-256KiB: Analyzing
+presized/q5/mbrotli/incompressible-256KiB
+                        time:   [260.19 µs 260.49 µs 260.65 µs]
+                        thrpt:  [959.13 MiB/s 959.72 MiB/s 960.82 MiB/s]
+                 change:
+                        time:   [−14.366% −14.059% −13.781%] (p = 0.00 < 0.05)
+                        thrpt:  [+15.984% +16.358% +16.776%]
+                        Performance has improved.
+Benchmarking presized/q5/c-brotli/vendor-alice29.txt
+Benchmarking presized/q5/c-brotli/vendor-alice29.txt: Warming up for 1.0000 s
+Benchmarking presized/q5/c-brotli/vendor-alice29.txt: Collecting 10 samples in estimated 3.0198 s (1815 iterations)
+Benchmarking presized/q5/c-brotli/vendor-alice29.txt: Analyzing
+presized/q5/c-brotli/vendor-alice29.txt
+                        time:   [1.6323 ms 1.6597 ms 1.6958 ms]
+                        thrpt:  [85.532 MiB/s 87.393 MiB/s 88.858 MiB/s]
+                 change:
+                        time:   [−2.6990% −1.9652% −0.7453%] (p = 0.00 < 0.05)
+                        thrpt:  [+0.7509% +2.0045% +2.7738%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking presized/q5/mbrotli/vendor-alice29.txt
+Benchmarking presized/q5/mbrotli/vendor-alice29.txt: Warming up for 1.0000 s
+Benchmarking presized/q5/mbrotli/vendor-alice29.txt: Collecting 10 samples in estimated 3.0789 s (1815 iterations)
+Benchmarking presized/q5/mbrotli/vendor-alice29.txt: Analyzing
+presized/q5/mbrotli/vendor-alice29.txt
+                        time:   [1.6701 ms 1.6722 ms 1.6752 ms]
+                        thrpt:  [86.583 MiB/s 86.740 MiB/s 86.849 MiB/s]
+                 change:
+                        time:   [−10.382% −10.055% −9.6840%] (p = 0.00 < 0.05)
+                        thrpt:  [+10.722% +11.179% +11.585%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking presized/q5/c-brotli/vendor-lcet10.txt
+Benchmarking presized/q5/c-brotli/vendor-lcet10.txt: Warming up for 1.0000 s
+Benchmarking presized/q5/c-brotli/vendor-lcet10.txt: Collecting 10 samples in estimated 3.0608 s (660 iterations)
+Benchmarking presized/q5/c-brotli/vendor-lcet10.txt: Analyzing
+presized/q5/c-brotli/vendor-lcet10.txt
+                        time:   [4.5905 ms 4.5949 ms 4.5988 ms]
+                        thrpt:  [88.498 MiB/s 88.572 MiB/s 88.658 MiB/s]
+                 change:
+                        time:   [−2.2697% −1.9237% −1.6419%] (p = 0.00 < 0.05)
+                        thrpt:  [+1.6693% +1.9615% +2.3224%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) low mild
+Benchmarking presized/q5/mbrotli/vendor-lcet10.txt
+Benchmarking presized/q5/mbrotli/vendor-lcet10.txt: Warming up for 1.0000 s
+Benchmarking presized/q5/mbrotli/vendor-lcet10.txt: Collecting 10 samples in estimated 3.1222 s (660 iterations)
+Benchmarking presized/q5/mbrotli/vendor-lcet10.txt: Analyzing
+presized/q5/mbrotli/vendor-lcet10.txt
+                        time:   [4.6699 ms 4.6732 ms 4.6775 ms]
+                        thrpt:  [87.009 MiB/s 87.089 MiB/s 87.150 MiB/s]
+                 change:
+                        time:   [−8.6194% −8.4973% −8.3867%] (p = 0.00 < 0.05)
+                        thrpt:  [+9.1545% +9.2863% +9.4324%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q5/c-brotli/vendor-plrabn12.txt
+Benchmarking presized/q5/c-brotli/vendor-plrabn12.txt: Warming up for 1.0000 s
+Benchmarking presized/q5/c-brotli/vendor-plrabn12.txt: Collecting 10 samples in estimated 3.1646 s (495 iterations)
+Benchmarking presized/q5/c-brotli/vendor-plrabn12.txt: Analyzing
+presized/q5/c-brotli/vendor-plrabn12.txt
+                        time:   [6.3210 ms 6.3273 ms 6.3345 ms]
+                        thrpt:  [72.545 MiB/s 72.628 MiB/s 72.700 MiB/s]
+                 change:
+                        time:   [−1.9474% −1.7307% −1.5280%] (p = 0.00 < 0.05)
+                        thrpt:  [+1.5517% +1.7611% +1.9861%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q5/mbrotli/vendor-plrabn12.txt
+Benchmarking presized/q5/mbrotli/vendor-plrabn12.txt: Warming up for 1.0000 s
+Benchmarking presized/q5/mbrotli/vendor-plrabn12.txt: Collecting 10 samples in estimated 3.2075 s (495 iterations)
+Benchmarking presized/q5/mbrotli/vendor-plrabn12.txt: Analyzing
+presized/q5/mbrotli/vendor-plrabn12.txt
+                        time:   [6.4612 ms 6.4717 ms 6.4847 ms]
+                        thrpt:  [70.865 MiB/s 71.007 MiB/s 71.123 MiB/s]
+                 change:
+                        time:   [−8.5108% −8.3596% −8.2032%] (p = 0.00 < 0.05)
+                        thrpt:  [+8.9363% +9.1222% +9.3025%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking presized/q5/c-brotli/vendor-mapsdatazrh
+Benchmarking presized/q5/c-brotli/vendor-mapsdatazrh: Warming up for 1.0000 s
+Benchmarking presized/q5/c-brotli/vendor-mapsdatazrh: Collecting 10 samples in estimated 3.0661 s (1430 iterations)
+Benchmarking presized/q5/c-brotli/vendor-mapsdatazrh: Analyzing
+presized/q5/c-brotli/vendor-mapsdatazrh
+                        time:   [2.1698 ms 2.2508 ms 2.3445 ms]
+                        thrpt:  [116.29 MiB/s 121.13 MiB/s 125.65 MiB/s]
+                 change:
+                        time:   [−1.4602% +1.4284% +4.8390%] (p = 0.43 > 0.05)
+                        thrpt:  [−4.6157% −1.4082% +1.4818%]
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking presized/q5/mbrotli/vendor-mapsdatazrh
+Benchmarking presized/q5/mbrotli/vendor-mapsdatazrh: Warming up for 1.0000 s
+Benchmarking presized/q5/mbrotli/vendor-mapsdatazrh: Collecting 10 samples in estimated 3.0075 s (1045 iterations)
+Benchmarking presized/q5/mbrotli/vendor-mapsdatazrh: Analyzing
+presized/q5/mbrotli/vendor-mapsdatazrh
+                        time:   [2.8177 ms 2.8270 ms 2.8375 ms]
+                        thrpt:  [96.085 MiB/s 96.444 MiB/s 96.759 MiB/s]
+                 change:
+                        time:   [−6.5805% −6.0832% −5.4866%] (p = 0.00 < 0.05)
+                        thrpt:  [+5.8051% +6.4773% +7.0440%]
+                        Performance has improved.
+Benchmarking presized/q5/c-brotli/vendor-random_org_10k.bin
+Benchmarking presized/q5/c-brotli/vendor-random_org_10k.bin: Warming up for 1.0000 s
+Benchmarking presized/q5/c-brotli/vendor-random_org_10k.bin: Collecting 10 samples in estimated 3.0024 s (62k iterations)
+Benchmarking presized/q5/c-brotli/vendor-random_org_10k.bin: Analyzing
+presized/q5/c-brotli/vendor-random_org_10k.bin
+                        time:   [47.907 µs 48.013 µs 48.141 µs]
+                        thrpt:  [198.10 MiB/s 198.63 MiB/s 199.07 MiB/s]
+                 change:
+                        time:   [+0.8407% +1.1298% +1.4068%] (p = 0.00 < 0.05)
+                        thrpt:  [−1.3872% −1.1172% −0.8337%]
+                        Change within noise threshold.
+Benchmarking presized/q5/mbrotli/vendor-random_org_10k.bin
+Benchmarking presized/q5/mbrotli/vendor-random_org_10k.bin: Warming up for 1.0000 s
+Benchmarking presized/q5/mbrotli/vendor-random_org_10k.bin: Collecting 10 samples in estimated 3.0006 s (60k iterations)
+Benchmarking presized/q5/mbrotli/vendor-random_org_10k.bin: Analyzing
+presized/q5/mbrotli/vendor-random_org_10k.bin
+                        time:   [49.902 µs 50.030 µs 50.165 µs]
+                        thrpt:  [190.11 MiB/s 190.62 MiB/s 191.11 MiB/s]
+                 change:
+                        time:   [−3.3055% −2.9329% −2.5797%] (p = 0.00 < 0.05)
+                        thrpt:  [+2.6480% +3.0215% +3.4185%]
+                        Performance has improved.
+Benchmarking presized/q5/c-brotli/vendor-quickfox_repeated
+Benchmarking presized/q5/c-brotli/vendor-quickfox_repeated: Warming up for 1.0000 s
+Benchmarking presized/q5/c-brotli/vendor-quickfox_repeated: Collecting 10 samples in estimated 3.0024 s (39k iterations)
+Benchmarking presized/q5/c-brotli/vendor-quickfox_repeated: Analyzing
+presized/q5/c-brotli/vendor-quickfox_repeated
+                        time:   [75.608 µs 75.986 µs 76.830 µs]
+                        thrpt:  [2.1350 GiB/s 2.1587 GiB/s 2.1695 GiB/s]
+                 change:
+                        time:   [+0.3088% +1.4530% +2.7598%] (p = 0.04 < 0.05)
+                        thrpt:  [−2.6857% −1.4322% −0.3079%]
+                        Change within noise threshold.
+Benchmarking presized/q5/mbrotli/vendor-quickfox_repeated
+Benchmarking presized/q5/mbrotli/vendor-quickfox_repeated: Warming up for 1.0000 s
+Benchmarking presized/q5/mbrotli/vendor-quickfox_repeated: Collecting 10 samples in estimated 3.0052 s (27k iterations)
+Benchmarking presized/q5/mbrotli/vendor-quickfox_repeated: Analyzing
+presized/q5/mbrotli/vendor-quickfox_repeated
+                        time:   [110.10 µs 110.58 µs 111.02 µs]
+                        thrpt:  [1.4775 GiB/s 1.4834 GiB/s 1.4898 GiB/s]
+                 change:
+                        time:   [+0.0363% +0.4407% +0.8142%] (p = 0.05 < 0.05)
+                        thrpt:  [−0.8076% −0.4388% −0.0363%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) low mild
+
+Benchmarking tiny/q0/c-brotli/16
+Benchmarking tiny/q0/c-brotli/16: Warming up for 1.0000 s
+Benchmarking tiny/q0/c-brotli/16: Collecting 10 samples in estimated 3.0000 s (4.3M iterations)
+Benchmarking tiny/q0/c-brotli/16: Analyzing
+tiny/q0/c-brotli/16     time:   [689.01 ns 691.07 ns 692.71 ns]
+                        thrpt:  [22.028 MiB/s 22.080 MiB/s 22.146 MiB/s]
+                 change:
+                        time:   [−1.7308% −0.1174% +1.2435%] (p = 0.89 > 0.05)
+                        thrpt:  [−1.2282% +0.1176% +1.7613%]
+                        No change in performance detected.
+Benchmarking tiny/q0/mbrotli/16
+Benchmarking tiny/q0/mbrotli/16: Warming up for 1.0000 s
+Benchmarking tiny/q0/mbrotli/16: Collecting 10 samples in estimated 3.0000 s (4.0M iterations)
+Benchmarking tiny/q0/mbrotli/16: Analyzing
+tiny/q0/mbrotli/16      time:   [749.98 ns 751.06 ns 752.02 ns]
+                        thrpt:  [20.291 MiB/s 20.316 MiB/s 20.346 MiB/s]
+                 change:
+                        time:   [−2.7316% −1.9319% −1.3939%] (p = 0.00 < 0.05)
+                        thrpt:  [+1.4136% +1.9700% +2.8083%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking tiny/q0/c-brotli/64
+Benchmarking tiny/q0/c-brotli/64: Warming up for 1.0000 s
+Benchmarking tiny/q0/c-brotli/64: Collecting 10 samples in estimated 3.0000 s (3.4M iterations)
+Benchmarking tiny/q0/c-brotli/64: Analyzing
+tiny/q0/c-brotli/64     time:   [869.38 ns 870.53 ns 871.27 ns]
+                        thrpt:  [70.053 MiB/s 70.112 MiB/s 70.205 MiB/s]
+                 change:
+                        time:   [+1.2039% +1.3931% +1.5886%] (p = 0.00 < 0.05)
+                        thrpt:  [−1.5637% −1.3740% −1.1895%]
+                        Performance has regressed.
+Benchmarking tiny/q0/mbrotli/64
+Benchmarking tiny/q0/mbrotli/64: Warming up for 1.0000 s
+Benchmarking tiny/q0/mbrotli/64: Collecting 10 samples in estimated 3.0000 s (3.2M iterations)
+Benchmarking tiny/q0/mbrotli/64: Analyzing
+tiny/q0/mbrotli/64      time:   [939.66 ns 941.90 ns 943.98 ns]
+                        thrpt:  [64.657 MiB/s 64.800 MiB/s 64.955 MiB/s]
+                 change:
+                        time:   [−2.6681% −2.3761% −2.0968%] (p = 0.00 < 0.05)
+                        thrpt:  [+2.1417% +2.4340% +2.7412%]
+                        Performance has improved.
+Benchmarking tiny/q0/c-brotli/256
+Benchmarking tiny/q0/c-brotli/256: Warming up for 1.0000 s
+Benchmarking tiny/q0/c-brotli/256: Collecting 10 samples in estimated 3.0000 s (2.2M iterations)
+Benchmarking tiny/q0/c-brotli/256: Analyzing
+tiny/q0/c-brotli/256    time:   [1.3404 µs 1.3414 µs 1.3419 µs]
+                        thrpt:  [181.94 MiB/s 182.00 MiB/s 182.15 MiB/s]
+                 change:
+                        time:   [−6.3211% −3.5272% −1.1028%] (p = 0.02 < 0.05)
+                        thrpt:  [+1.1151% +3.6562% +6.7476%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) low mild
+Benchmarking tiny/q0/mbrotli/256
+Benchmarking tiny/q0/mbrotli/256: Warming up for 1.0000 s
+Benchmarking tiny/q0/mbrotli/256: Collecting 10 samples in estimated 3.0000 s (2.3M iterations)
+Benchmarking tiny/q0/mbrotli/256: Analyzing
+tiny/q0/mbrotli/256     time:   [1.3304 µs 1.3332 µs 1.3359 µs]
+                        thrpt:  [182.75 MiB/s 183.13 MiB/s 183.51 MiB/s]
+                 change:
+                        time:   [−6.5857% −6.1004% −5.5020%] (p = 0.00 < 0.05)
+                        thrpt:  [+5.8223% +6.4968% +7.0500%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking tiny/q0/c-brotli/1024
+Benchmarking tiny/q0/c-brotli/1024: Warming up for 1.0000 s
+Benchmarking tiny/q0/c-brotli/1024: Collecting 10 samples in estimated 3.0001 s (1.7M iterations)
+Benchmarking tiny/q0/c-brotli/1024: Analyzing
+tiny/q0/c-brotli/1024   time:   [1.7274 µs 1.7316 µs 1.7378 µs]
+                        thrpt:  [561.95 MiB/s 563.95 MiB/s 565.34 MiB/s]
+                 change:
+                        time:   [−4.6052% −4.3583% −4.1011%] (p = 0.00 < 0.05)
+                        thrpt:  [+4.2765% +4.5569% +4.8275%]
+                        Performance has improved.
+Benchmarking tiny/q0/mbrotli/1024
+Benchmarking tiny/q0/mbrotli/1024: Warming up for 1.0000 s
+Benchmarking tiny/q0/mbrotli/1024: Collecting 10 samples in estimated 3.0001 s (1.8M iterations)
+Benchmarking tiny/q0/mbrotli/1024: Analyzing
+tiny/q0/mbrotli/1024    time:   [1.7162 µs 1.7185 µs 1.7209 µs]
+                        thrpt:  [567.48 MiB/s 568.26 MiB/s 569.03 MiB/s]
+                 change:
+                        time:   [−11.256% −9.2189% −7.2052%] (p = 0.00 < 0.05)
+                        thrpt:  [+7.7647% +10.155% +12.684%]
+                        Performance has improved.
+
+Benchmarking tiny/q1/c-brotli/16
+Benchmarking tiny/q1/c-brotli/16: Warming up for 1.0000 s
+Benchmarking tiny/q1/c-brotli/16: Collecting 10 samples in estimated 3.0000 s (2.1M iterations)
+Benchmarking tiny/q1/c-brotli/16: Analyzing
+tiny/q1/c-brotli/16     time:   [1.4271 µs 1.4313 µs 1.4369 µs]
+                        thrpt:  [10.620 MiB/s 10.661 MiB/s 10.692 MiB/s]
+                 change:
+                        time:   [−6.5769% −6.1142% −5.5812%] (p = 0.00 < 0.05)
+                        thrpt:  [+5.9111% +6.5124% +7.0399%]
+                        Performance has improved.
+Found 3 outliers among 10 measurements (30.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+Benchmarking tiny/q1/mbrotli/16
+Benchmarking tiny/q1/mbrotli/16: Warming up for 1.0000 s
+Benchmarking tiny/q1/mbrotli/16: Collecting 10 samples in estimated 3.0000 s (1.8M iterations)
+Benchmarking tiny/q1/mbrotli/16: Analyzing
+tiny/q1/mbrotli/16      time:   [1.6508 µs 1.6607 µs 1.6724 µs]
+                        thrpt:  [9.1239 MiB/s 9.1882 MiB/s 9.2435 MiB/s]
+                 change:
+                        time:   [−6.8850% −6.3313% −5.7935%] (p = 0.00 < 0.05)
+                        thrpt:  [+6.1498% +6.7592% +7.3941%]
+                        Performance has improved.
+Benchmarking tiny/q1/c-brotli/64
+Benchmarking tiny/q1/c-brotli/64: Warming up for 1.0000 s
+Benchmarking tiny/q1/c-brotli/64: Collecting 10 samples in estimated 3.0000 s (1.9M iterations)
+Benchmarking tiny/q1/c-brotli/64: Analyzing
+tiny/q1/c-brotli/64     time:   [1.6232 µs 1.6267 µs 1.6301 µs]
+                        thrpt:  [37.442 MiB/s 37.522 MiB/s 37.601 MiB/s]
+                 change:
+                        time:   [−5.6416% −5.3247% −4.9916%] (p = 0.00 < 0.05)
+                        thrpt:  [+5.2538% +5.6241% +5.9789%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking tiny/q1/mbrotli/64
+Benchmarking tiny/q1/mbrotli/64: Warming up for 1.0000 s
+Benchmarking tiny/q1/mbrotli/64: Collecting 10 samples in estimated 3.0000 s (1.6M iterations)
+Benchmarking tiny/q1/mbrotli/64: Analyzing
+tiny/q1/mbrotli/64      time:   [1.8519 µs 1.8580 µs 1.8639 µs]
+                        thrpt:  [32.746 MiB/s 32.849 MiB/s 32.958 MiB/s]
+                 change:
+                        time:   [−8.0016% −6.7813% −5.4874%] (p = 0.00 < 0.05)
+                        thrpt:  [+5.8060% +7.2746% +8.6975%]
+                        Performance has improved.
+Benchmarking tiny/q1/c-brotli/256
+Benchmarking tiny/q1/c-brotli/256: Warming up for 1.0000 s
+Benchmarking tiny/q1/c-brotli/256: Collecting 10 samples in estimated 3.0000 s (1.4M iterations)
+Benchmarking tiny/q1/c-brotli/256: Analyzing
+tiny/q1/c-brotli/256    time:   [2.0673 µs 2.0717 µs 2.0773 µs]
+                        thrpt:  [117.53 MiB/s 117.85 MiB/s 118.10 MiB/s]
+                 change:
+                        time:   [−6.3727% −6.1046% −5.8135%] (p = 0.00 < 0.05)
+                        thrpt:  [+6.1723% +6.5015% +6.8065%]
+                        Performance has improved.
+Benchmarking tiny/q1/mbrotli/256
+Benchmarking tiny/q1/mbrotli/256: Warming up for 1.0000 s
+Benchmarking tiny/q1/mbrotli/256: Collecting 10 samples in estimated 3.0001 s (1.3M iterations)
+Benchmarking tiny/q1/mbrotli/256: Analyzing
+tiny/q1/mbrotli/256     time:   [2.2231 µs 2.2298 µs 2.2363 µs]
+                        thrpt:  [109.17 MiB/s 109.49 MiB/s 109.82 MiB/s]
+                 change:
+                        time:   [−8.5765% −8.1290% −7.6831%] (p = 0.00 < 0.05)
+                        thrpt:  [+8.3226% +8.8483% +9.3811%]
+                        Performance has improved.
+Benchmarking tiny/q1/c-brotli/1024
+Benchmarking tiny/q1/c-brotli/1024: Warming up for 1.0000 s
+Benchmarking tiny/q1/c-brotli/1024: Collecting 10 samples in estimated 3.0000 s (1.3M iterations)
+Benchmarking tiny/q1/c-brotli/1024: Analyzing
+tiny/q1/c-brotli/1024   time:   [2.2450 µs 2.2484 µs 2.2508 µs]
+                        thrpt:  [433.87 MiB/s 434.33 MiB/s 434.99 MiB/s]
+                 change:
+                        time:   [−6.6814% −6.3822% −6.0715%] (p = 0.00 < 0.05)
+                        thrpt:  [+6.4639% +6.8173% +7.1598%]
+                        Performance has improved.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+Benchmarking tiny/q1/mbrotli/1024
+Benchmarking tiny/q1/mbrotli/1024: Warming up for 1.0000 s
+Benchmarking tiny/q1/mbrotli/1024: Collecting 10 samples in estimated 3.0001 s (1.2M iterations)
+Benchmarking tiny/q1/mbrotli/1024: Analyzing
+tiny/q1/mbrotli/1024    time:   [2.4039 µs 2.4148 µs 2.4305 µs]
+                        thrpt:  [401.79 MiB/s 404.40 MiB/s 406.24 MiB/s]
+                 change:
+                        time:   [−8.0566% −7.2654% −6.3187%] (p = 0.00 < 0.05)
+                        thrpt:  [+6.7449% +7.8346% +8.7626%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+
+Benchmarking tiny/q3/c-brotli/16
+Benchmarking tiny/q3/c-brotli/16: Warming up for 1.0000 s
+Benchmarking tiny/q3/c-brotli/16: Collecting 10 samples in estimated 3.0000 s (1.8M iterations)
+Benchmarking tiny/q3/c-brotli/16: Analyzing
+tiny/q3/c-brotli/16     time:   [1.6676 µs 1.6948 µs 1.7280 µs]
+                        thrpt:  [8.8303 MiB/s 9.0033 MiB/s 9.1503 MiB/s]
+                 change:
+                        time:   [−6.8657% −5.6615% −4.3924%] (p = 0.00 < 0.05)
+                        thrpt:  [+4.5942% +6.0012% +7.3719%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking tiny/q3/mbrotli/16
+Benchmarking tiny/q3/mbrotli/16: Warming up for 1.0000 s
+Benchmarking tiny/q3/mbrotli/16: Collecting 10 samples in estimated 3.0000 s (858k iterations)
+Benchmarking tiny/q3/mbrotli/16: Analyzing
+tiny/q3/mbrotli/16      time:   [3.3853 µs 3.4305 µs 3.5000 µs]
+                        thrpt:  [4.3596 MiB/s 4.4480 MiB/s 4.5074 MiB/s]
+                 change:
+                        time:   [−4.7509% −3.5290% −1.9915%] (p = 0.00 < 0.05)
+                        thrpt:  [+2.0320% +3.6581% +4.9878%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking tiny/q3/c-brotli/64
+Benchmarking tiny/q3/c-brotli/64: Warming up for 1.0000 s
+Benchmarking tiny/q3/c-brotli/64: Collecting 10 samples in estimated 3.0001 s (1.5M iterations)
+Benchmarking tiny/q3/c-brotli/64: Analyzing
+tiny/q3/c-brotli/64     time:   [1.9660 µs 1.9970 µs 2.0236 µs]
+                        thrpt:  [30.162 MiB/s 30.563 MiB/s 31.045 MiB/s]
+                 change:
+                        time:   [−4.6338% −3.7479% −2.9120%] (p = 0.00 < 0.05)
+                        thrpt:  [+2.9993% +3.8938% +4.8589%]
+                        Performance has improved.
+Benchmarking tiny/q3/mbrotli/64
+Benchmarking tiny/q3/mbrotli/64: Warming up for 1.0000 s
+Benchmarking tiny/q3/mbrotli/64: Collecting 10 samples in estimated 3.0002 s (750k iterations)
+Benchmarking tiny/q3/mbrotli/64: Analyzing
+tiny/q3/mbrotli/64      time:   [3.9184 µs 3.9613 µs 4.0098 µs]
+                        thrpt:  [15.221 MiB/s 15.408 MiB/s 15.577 MiB/s]
+                 change:
+                        time:   [−7.6402% −6.6734% −5.7892%] (p = 0.00 < 0.05)
+                        thrpt:  [+6.1449% +7.1506% +8.2723%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking tiny/q3/c-brotli/256
+Benchmarking tiny/q3/c-brotli/256: Warming up for 1.0000 s
+Benchmarking tiny/q3/c-brotli/256: Collecting 10 samples in estimated 3.0002 s (693k iterations)
+Benchmarking tiny/q3/c-brotli/256: Analyzing
+tiny/q3/c-brotli/256    time:   [4.2484 µs 4.2978 µs 4.3768 µs]
+                        thrpt:  [55.781 MiB/s 56.806 MiB/s 57.467 MiB/s]
+                 change:
+                        time:   [−5.4276% −4.5337% −3.4266%] (p = 0.00 < 0.05)
+                        thrpt:  [+3.5482% +4.7490% +5.7391%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking tiny/q3/mbrotli/256
+Benchmarking tiny/q3/mbrotli/256: Warming up for 1.0000 s
+Benchmarking tiny/q3/mbrotli/256: Collecting 10 samples in estimated 3.0003 s (431k iterations)
+Benchmarking tiny/q3/mbrotli/256: Analyzing
+tiny/q3/mbrotli/256     time:   [6.8717 µs 6.9123 µs 6.9575 µs]
+                        thrpt:  [35.090 MiB/s 35.320 MiB/s 35.529 MiB/s]
+                 change:
+                        time:   [−6.8559% −6.3531% −5.8836%] (p = 0.00 < 0.05)
+                        thrpt:  [+6.2514% +6.7841% +7.3605%]
+                        Performance has improved.
+Benchmarking tiny/q3/c-brotli/1024
+Benchmarking tiny/q3/c-brotli/1024: Warming up for 1.0000 s
+Benchmarking tiny/q3/c-brotli/1024: Collecting 10 samples in estimated 3.0001 s (548k iterations)
+Benchmarking tiny/q3/c-brotli/1024: Analyzing
+tiny/q3/c-brotli/1024   time:   [5.4445 µs 5.4831 µs 5.5082 µs]
+                        thrpt:  [177.29 MiB/s 178.10 MiB/s 179.37 MiB/s]
+                 change:
+                        time:   [−5.5227% −4.7673% −3.8286%] (p = 0.00 < 0.05)
+                        thrpt:  [+3.9810% +5.0060% +5.8456%]
+                        Performance has improved.
+Benchmarking tiny/q3/mbrotli/1024
+Benchmarking tiny/q3/mbrotli/1024: Warming up for 1.0000 s
+Benchmarking tiny/q3/mbrotli/1024: Collecting 10 samples in estimated 3.0003 s (359k iterations)
+Benchmarking tiny/q3/mbrotli/1024: Analyzing
+tiny/q3/mbrotli/1024    time:   [8.3120 µs 8.3758 µs 8.4851 µs]
+                        thrpt:  [115.09 MiB/s 116.59 MiB/s 117.49 MiB/s]
+                 change:
+                        time:   [−8.4059% −6.9846% −5.5961%] (p = 0.00 < 0.05)
+                        thrpt:  [+5.9278% +7.5091% +9.1773%]
+                        Performance has improved.
+
+Benchmarking tiny/q4/c-brotli/16
+Benchmarking tiny/q4/c-brotli/16: Warming up for 1.0000 s
+Benchmarking tiny/q4/c-brotli/16: Collecting 10 samples in estimated 3.0001 s (1.0M iterations)
+Benchmarking tiny/q4/c-brotli/16: Analyzing
+tiny/q4/c-brotli/16     time:   [2.7630 µs 2.7800 µs 2.7968 µs]
+                        thrpt:  [5.4559 MiB/s 5.4888 MiB/s 5.5225 MiB/s]
+                 change:
+                        time:   [−7.1683% −6.6553% −6.1313%] (p = 0.00 < 0.05)
+                        thrpt:  [+6.5318% +7.1298% +7.7218%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking tiny/q4/mbrotli/16
+Benchmarking tiny/q4/mbrotli/16: Warming up for 1.0000 s
+Benchmarking tiny/q4/mbrotli/16: Collecting 10 samples in estimated 3.0002 s (526k iterations)
+Benchmarking tiny/q4/mbrotli/16: Analyzing
+tiny/q4/mbrotli/16      time:   [5.6755 µs 5.7134 µs 5.7679 µs]
+                        thrpt:  [2.6455 MiB/s 2.6707 MiB/s 2.6885 MiB/s]
+                 change:
+                        time:   [−5.0084% −4.3943% −3.7918%] (p = 0.00 < 0.05)
+                        thrpt:  [+3.9413% +4.5963% +5.2724%]
+                        Performance has improved.
+Benchmarking tiny/q4/c-brotli/64
+Benchmarking tiny/q4/c-brotli/64: Warming up for 1.0000 s
+Benchmarking tiny/q4/c-brotli/64: Collecting 10 samples in estimated 3.0001 s (643k iterations)
+Benchmarking tiny/q4/c-brotli/64: Analyzing
+tiny/q4/c-brotli/64     time:   [4.5924 µs 4.6486 µs 4.7031 µs]
+                        thrpt:  [12.978 MiB/s 13.130 MiB/s 13.290 MiB/s]
+                 change:
+                        time:   [−4.7738% −4.0797% −3.3325%] (p = 0.00 < 0.05)
+                        thrpt:  [+3.4474% +4.2532% +5.0131%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking tiny/q4/mbrotli/64
+Benchmarking tiny/q4/mbrotli/64: Warming up for 1.0000 s
+Benchmarking tiny/q4/mbrotli/64: Collecting 10 samples in estimated 3.0001 s (374k iterations)
+Benchmarking tiny/q4/mbrotli/64: Analyzing
+tiny/q4/mbrotli/64      time:   [7.8835 µs 7.8990 µs 7.9178 µs]
+                        thrpt:  [7.7086 MiB/s 7.7269 MiB/s 7.7421 MiB/s]
+                 change:
+                        time:   [−6.1347% −5.1592% −4.0753%] (p = 0.00 < 0.05)
+                        thrpt:  [+4.2485% +5.4399% +6.5356%]
+                        Performance has improved.
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high mild
+Benchmarking tiny/q4/c-brotli/256
+Benchmarking tiny/q4/c-brotli/256: Warming up for 1.0000 s
+Benchmarking tiny/q4/c-brotli/256: Collecting 10 samples in estimated 3.0000 s (433k iterations)
+Benchmarking tiny/q4/c-brotli/256: Analyzing
+tiny/q4/c-brotli/256    time:   [6.8691 µs 6.9303 µs 7.0209 µs]
+                        thrpt:  [34.773 MiB/s 35.228 MiB/s 35.542 MiB/s]
+                 change:
+                        time:   [−2.2930% −1.3106% −0.1897%] (p = 0.03 < 0.05)
+                        thrpt:  [+0.1900% +1.3280% +2.3468%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking tiny/q4/mbrotli/256
+Benchmarking tiny/q4/mbrotli/256: Warming up for 1.0000 s
+Benchmarking tiny/q4/mbrotli/256: Collecting 10 samples in estimated 3.0005 s (272k iterations)
+Benchmarking tiny/q4/mbrotli/256: Analyzing
+tiny/q4/mbrotli/256     time:   [10.892 µs 10.906 µs 10.917 µs]
+                        thrpt:  [22.364 MiB/s 22.385 MiB/s 22.415 MiB/s]
+                 change:
+                        time:   [−3.0771% −2.8624% −2.6657%] (p = 0.00 < 0.05)
+                        thrpt:  [+2.7387% +2.9467% +3.1748%]
+                        Performance has improved.
+Benchmarking tiny/q4/c-brotli/1024
+Benchmarking tiny/q4/c-brotli/1024: Warming up for 1.0000 s
+Benchmarking tiny/q4/c-brotli/1024: Collecting 10 samples in estimated 3.0001 s (385k iterations)
+Benchmarking tiny/q4/c-brotli/1024: Analyzing
+tiny/q4/c-brotli/1024   time:   [7.7103 µs 7.7723 µs 7.8118 µs]
+                        thrpt:  [125.01 MiB/s 125.65 MiB/s 126.66 MiB/s]
+                 change:
+                        time:   [−1.3540% −0.7695% −0.1390%] (p = 0.03 < 0.05)
+                        thrpt:  [+0.1392% +0.7754% +1.3726%]
+                        Change within noise threshold.
+Benchmarking tiny/q4/mbrotli/1024
+Benchmarking tiny/q4/mbrotli/1024: Warming up for 1.0000 s
+Benchmarking tiny/q4/mbrotli/1024: Collecting 10 samples in estimated 3.0003 s (241k iterations)
+Benchmarking tiny/q4/mbrotli/1024: Analyzing
+tiny/q4/mbrotli/1024    time:   [12.431 µs 12.880 µs 13.101 µs]
+                        thrpt:  [74.540 MiB/s 75.822 MiB/s 78.558 MiB/s]
+                 change:
+                        time:   [−2.0998% −0.6347% +0.9890%] (p = 0.49 > 0.05)
+                        thrpt:  [−0.9793% +0.6388% +2.1448%]
+                        No change in performance detected.
+
+Benchmarking tiny/q5/c-brotli/16
+Benchmarking tiny/q5/c-brotli/16: Warming up for 1.0000 s
+Benchmarking tiny/q5/c-brotli/16: Collecting 10 samples in estimated 3.0002 s (1.0M iterations)
+Benchmarking tiny/q5/c-brotli/16: Analyzing
+tiny/q5/c-brotli/16     time:   [2.9236 µs 2.9376 µs 2.9525 µs]
+                        thrpt:  [5.1680 MiB/s 5.1942 MiB/s 5.2192 MiB/s]
+                 change:
+                        time:   [−0.2459% +0.2744% +0.8715%] (p = 0.43 > 0.05)
+                        thrpt:  [−0.8640% −0.2736% +0.2465%]
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking tiny/q5/mbrotli/16
+Benchmarking tiny/q5/mbrotli/16: Warming up for 1.0000 s
+Benchmarking tiny/q5/mbrotli/16: Collecting 10 samples in estimated 3.0003 s (372k iterations)
+Benchmarking tiny/q5/mbrotli/16: Analyzing
+tiny/q5/mbrotli/16      time:   [7.9881 µs 8.0367 µs 8.0857 µs]
+                        thrpt:  [1.8871 MiB/s 1.8986 MiB/s 1.9102 MiB/s]
+                 change:
+                        time:   [+0.2712% +0.8433% +1.4674%] (p = 0.01 < 0.05)
+                        thrpt:  [−1.4462% −0.8363% −0.2705%]
+                        Change within noise threshold.
+Benchmarking tiny/q5/c-brotli/64
+Benchmarking tiny/q5/c-brotli/64: Warming up for 1.0000 s
+Benchmarking tiny/q5/c-brotli/64: Collecting 10 samples in estimated 3.0001 s (567k iterations)
+Benchmarking tiny/q5/c-brotli/64: Analyzing
+tiny/q5/c-brotli/64     time:   [5.1766 µs 5.2051 µs 5.2463 µs]
+                        thrpt:  [11.634 MiB/s 11.726 MiB/s 11.791 MiB/s]
+                 change:
+                        time:   [+0.5855% +1.4157% +2.4830%] (p = 0.01 < 0.05)
+                        thrpt:  [−2.4228% −1.3960% −0.5821%]
+                        Change within noise threshold.
+Benchmarking tiny/q5/mbrotli/64
+Benchmarking tiny/q5/mbrotli/64: Warming up for 1.0000 s
+Benchmarking tiny/q5/mbrotli/64: Collecting 10 samples in estimated 3.0002 s (281k iterations)
+Benchmarking tiny/q5/mbrotli/64: Analyzing
+tiny/q5/mbrotli/64      time:   [10.621 µs 10.634 µs 10.655 µs]
+                        thrpt:  [5.7284 MiB/s 5.7396 MiB/s 5.7465 MiB/s]
+                 change:
+                        time:   [−2.1427% −1.2450% −0.4041%] (p = 0.01 < 0.05)
+                        thrpt:  [+0.4057% +1.2607% +2.1896%]
+                        Change within noise threshold.
+Benchmarking tiny/q5/c-brotli/256
+Benchmarking tiny/q5/c-brotli/256: Warming up for 1.0000 s
+Benchmarking tiny/q5/c-brotli/256: Collecting 10 samples in estimated 3.0003 s (401k iterations)
+Benchmarking tiny/q5/c-brotli/256: Analyzing
+tiny/q5/c-brotli/256    time:   [7.4090 µs 7.4220 µs 7.4365 µs]
+                        thrpt:  [32.830 MiB/s 32.894 MiB/s 32.952 MiB/s]
+                 change:
+                        time:   [−2.5893% −1.7877% −0.9737%] (p = 0.00 < 0.05)
+                        thrpt:  [+0.9832% +1.8202% +2.6581%]
+                        Change within noise threshold.
+Benchmarking tiny/q5/mbrotli/256
+Benchmarking tiny/q5/mbrotli/256: Warming up for 1.0000 s
+Benchmarking tiny/q5/mbrotli/256: Collecting 10 samples in estimated 3.0005 s (223k iterations)
+Benchmarking tiny/q5/mbrotli/256: Analyzing
+tiny/q5/mbrotli/256     time:   [13.550 µs 13.594 µs 13.620 µs]
+                        thrpt:  [17.925 MiB/s 17.959 MiB/s 18.018 MiB/s]
+                 change:
+                        time:   [−2.3899% −1.7513% −1.1594%] (p = 0.00 < 0.05)
+                        thrpt:  [+1.1730% +1.7825% +2.4485%]
+                        Performance has improved.
+Benchmarking tiny/q5/c-brotli/1024
+Benchmarking tiny/q5/c-brotli/1024: Warming up for 1.0000 s
+Benchmarking tiny/q5/c-brotli/1024: Collecting 10 samples in estimated 3.0002 s (333k iterations)
+Benchmarking tiny/q5/c-brotli/1024: Analyzing
+tiny/q5/c-brotli/1024   time:   [8.8899 µs 8.9411 µs 9.0113 µs]
+                        thrpt:  [108.37 MiB/s 109.22 MiB/s 109.85 MiB/s]
+                 change:
+                        time:   [−1.1807% +0.0895% +1.2931%] (p = 0.90 > 0.05)
+                        thrpt:  [−1.2766% −0.0895% +1.1948%]
+                        No change in performance detected.
+Benchmarking tiny/q5/mbrotli/1024
+Benchmarking tiny/q5/mbrotli/1024: Warming up for 1.0000 s
+Benchmarking tiny/q5/mbrotli/1024: Collecting 10 samples in estimated 3.0006 s (201k iterations)
+Benchmarking tiny/q5/mbrotli/1024: Analyzing
+tiny/q5/mbrotli/1024    time:   [14.879 µs 14.992 µs 15.070 µs]
+                        thrpt:  [64.803 MiB/s 65.139 MiB/s 65.634 MiB/s]
+                 change:
+                        time:   [−1.8846% −1.3234% −0.7664%] (p = 0.00 < 0.05)
+                        thrpt:  [+0.7723% +1.3412% +1.9208%]
+                        Change within noise threshold.
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high mild
+

@@ -3,7 +3,7 @@ name = "mbrotli-afl"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "AFL++ fuzz targets for the mbrotli quality 0 and quality 1 encoders"
+description = "AFL++ fuzz targets for the mbrotli quality 0, 1, 3, 4 and 5 encoders"
 
 [dependencies]
 afl = "0.18"

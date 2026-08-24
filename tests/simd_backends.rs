@@ -8,13 +8,13 @@
 mod support;
 
 use mbrotli::Brotli;
-use support::{FAST_QUALITIES, boundary_corpora, host_levels, params, structural_corpora};
+use support::{IMPLEMENTED_QUALITIES, boundary_corpora, host_levels, params, structural_corpora};
 
 /// Compresses one input on every backend and requires identical output.
 fn assert_backends_agree(name: &str, data: &[u8], lgwin: usize) {
     let levels = host_levels();
     let (reference_name, reference_level) = levels[0];
-    for quality in FAST_QUALITIES {
+    for quality in IMPLEMENTED_QUALITIES {
         let reference = Brotli::from(reference_level)
             .compressor()
             .compress(params(quality, lgwin), data)

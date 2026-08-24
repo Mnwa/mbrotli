@@ -12,14 +12,29 @@
 use fearless_simd::Level;
 use google_brotli_ffi as ffi;
 use mbrotli::Brotli;
-use mbrotli::compressor::{CompressParams, Compressor, QualityLevel, WindowBits};
+use mbrotli::compressor::{
+    BlockBits, CompressMode, CompressParams, Compressor, DistanceCodes, QualityLevel, WindowBits,
+};
 use std::ffi::c_int;
 use std::mem::discriminant;
 
 pub mod targets;
 
-/// The two qualities the fast encoder implements.
-pub const FAST_QUALITIES: [QualityLevel; 2] = [QualityLevel::Q0, QualityLevel::Q1];
+/// Every quality this crate implements.
+pub const IMPLEMENTED_QUALITIES: [QualityLevel; 5] = [
+    QualityLevel::Q0,
+    QualityLevel::Q1,
+    QualityLevel::Q3,
+    QualityLevel::Q4,
+    QualityLevel::Q5,
+];
+
+/// The three modes the encoder accepts.
+const MODES: [CompressMode; 3] = [
+    CompressMode::Generic,
+    CompressMode::Text,
+    CompressMode::Font,
+];
 
 /// Largest payload any target will compress.
 ///
@@ -68,22 +83,60 @@ pub struct Case<'a> {
     pub data: &'a [u8],
 }
 
+/// Bytes of a fuzz input that configure the encoder rather than feed it.
+pub const HEADER_LEN: usize = 6;
+
 /// Splits a fuzz input into parameters and a payload.
 ///
-/// The first three bytes choose the quality, the window size and the streaming
-/// chunk size; anything shorter falls back to the defaults. The payload is
-/// truncated to [`MAX_PAYLOAD`] rather than rejected, so an oversized input
-/// still exercises whatever structure its prefix carries.
+/// The first [`HEADER_LEN`] bytes choose, in order: the quality, the window
+/// size, the streaming chunk size, the mode and whether literal context
+/// modelling is on, the block size, and the distance code layout. A shorter
+/// input falls back to the defaults. The payload is truncated to
+/// [`MAX_PAYLOAD`] rather than rejected, so an oversized input still exercises
+/// whatever structure its prefix carries.
+///
+/// The size hint is always pinned to the payload length, which is what the
+/// one-shot entry points would substitute anyway, so the streaming and
+/// one-shot targets can be compared against each other and against the C
+/// reference without the hint drifting between them.
 pub fn decode_case(input: &[u8]) -> Case<'_> {
-    let (header, data) = input.split_at(input.len().min(3));
-    let quality = FAST_QUALITIES[usize::from(header.first().copied().unwrap_or(0)) % 2];
-    let lgwin_index = usize::from(header.get(1).copied().unwrap_or(12)) % 15;
-    let lgwin = WindowBits::try_from(10 + lgwin_index).unwrap_or(WindowBits::DEFAULT);
-    let chunk = 1usize << (usize::from(header.get(2).copied().unwrap_or(12)) % 18);
+    let (header, data) = input.split_at(input.len().min(HEADER_LEN));
+    let byte =
+        |index: usize, fallback: u8| usize::from(header.get(index).copied().unwrap_or(fallback));
+
+    let quality = IMPLEMENTED_QUALITIES[byte(0, 0) % IMPLEMENTED_QUALITIES.len()];
+    let lgwin = WindowBits::try_from(10 + byte(1, 12) % 15).unwrap_or(WindowBits::DEFAULT);
+    let chunk = 1usize << (byte(2, 12) % 18);
+
+    let flags = byte(3, 0);
+    let mode = MODES[flags % MODES.len()];
+    let literal_context_modeling = (flags >> 2) & 1 == 0;
+
+    // Byte 4 either leaves the block size to the encoder or pins it.
+    let lgblock = match byte(4, 0) {
+        0 => None,
+        value => BlockBits::try_from(16 + value % 9).ok(),
+    };
+
+    // Byte 5 picks a layout the format can express; anything else keeps the
+    // default, because the public type refuses to build an invalid one.
+    let layout = byte(5, 0);
+    let postfix = (layout % 4) as u32;
+    let groups = ((layout / 4) % 16) as u32;
+    let direct = groups << postfix;
+    let distance_codes =
+        DistanceCodes::try_from((postfix, direct)).unwrap_or(DistanceCodes::DEFAULT);
+
+    let data = cap(data);
     Case {
-        params: CompressParams::new(quality, lgwin),
+        params: CompressParams::new(quality, lgwin)
+            .with_mode(mode)
+            .with_size_hint(Some(data.len()))
+            .with_block_bits(lgblock)
+            .with_distance_codes(distance_codes)
+            .with_literal_context_modeling(literal_context_modeling),
         chunk,
-        data: cap(data),
+        data,
     }
 }
 
@@ -138,7 +191,88 @@ pub fn host_levels() -> Vec<Level> {
     levels
 }
 
-/// Compresses `input` with the pinned C encoder.
+/// Compresses `input` with the pinned C encoder, configured like `params`.
+///
+/// The streaming entry point is the only one that accepts a block size, a size
+/// hint or a distance layout, so the differential target goes through it.
+///
+/// # Panics
+///
+/// Panics when the C encoder reports failure; that would mean the harness, not
+/// the encoder under test, is broken.
+pub fn c_compress_with(params: &CompressParams, input: &[u8]) -> Vec<u8> {
+    let capacity = unsafe { ffi::BrotliEncoderMaxCompressedSize(input.len()) }.max(64) + 4096;
+    let mut output = vec![0u8; capacity];
+    unsafe {
+        let state = ffi::BrotliEncoderCreateInstance(None, None, std::ptr::null_mut());
+        assert!(!state.is_null(), "the C encoder could not be created");
+        let set = |parameter, value| {
+            assert_eq!(
+                ffi::BrotliEncoderSetParameter(state, parameter, value),
+                ffi::BROTLI_TRUE,
+                "the C encoder rejected a parameter"
+            );
+        };
+        set(
+            ffi::BROTLI_PARAM_QUALITY,
+            usize::from(params.quality()) as u32,
+        );
+        set(ffi::BROTLI_PARAM_LGWIN, usize::from(params.lgwin()) as u32);
+        set(
+            ffi::BROTLI_PARAM_MODE,
+            match params.mode() {
+                CompressMode::Generic => ffi::BROTLI_MODE_GENERIC,
+                CompressMode::Text => ffi::BROTLI_MODE_TEXT,
+                CompressMode::Font => ffi::BROTLI_MODE_FONT,
+            } as u32,
+        );
+        set(
+            ffi::BROTLI_PARAM_NPOSTFIX,
+            params.distance_codes().postfix_bits(),
+        );
+        set(
+            ffi::BROTLI_PARAM_NDIRECT,
+            params.distance_codes().direct_codes(),
+        );
+        set(
+            ffi::BROTLI_PARAM_DISABLE_LITERAL_CONTEXT_MODELING,
+            u32::from(!params.literal_context_modeling()),
+        );
+        set(
+            ffi::BROTLI_PARAM_SIZE_HINT,
+            params.size_hint().unwrap_or(input.len()) as u32,
+        );
+        if let Some(lgblock) = params.lgblock() {
+            set(ffi::BROTLI_PARAM_LGBLOCK, usize::from(lgblock) as u32);
+        }
+
+        let mut available_in = input.len();
+        let mut next_in = input.as_ptr();
+        let mut available_out = output.len();
+        let mut next_out = output.as_mut_ptr();
+        let mut total_out = 0usize;
+        let ok = ffi::BrotliEncoderCompressStream(
+            state,
+            ffi::BROTLI_OPERATION_FINISH,
+            &raw mut available_in,
+            &raw mut next_in,
+            &raw mut available_out,
+            &raw mut next_out,
+            &raw mut total_out,
+        );
+        assert_eq!(ok, ffi::BROTLI_TRUE, "the C encoder failed");
+        assert_eq!(
+            ffi::BrotliEncoderIsFinished(state),
+            ffi::BROTLI_TRUE,
+            "the C encoder did not finish"
+        );
+        ffi::BrotliEncoderDestroyInstance(state);
+        output.truncate(total_out);
+    }
+    output
+}
+
+/// Compresses `input` with the pinned C encoder's one-shot entry point.
 ///
 /// # Panics
 ///

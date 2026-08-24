@@ -7,13 +7,13 @@ mod support;
 
 use mbrotli::Brotli;
 use support::{
-    FAST_QUALITIES, boundary_corpora, c_decompress, host_levels, params, structural_corpora,
+    IMPLEMENTED_QUALITIES, boundary_corpora, c_decompress, host_levels, params, structural_corpora,
 };
 
 /// Compresses one input and requires the C decoder to recover it exactly.
 fn assert_round_trips(name: &str, data: &[u8], lgwin: usize) {
     let compressor = Brotli::default().compressor();
-    for quality in FAST_QUALITIES {
+    for quality in IMPLEMENTED_QUALITIES {
         let compressed = compressor
             .compress(params(quality, lgwin), data)
             .expect("compression failed");
@@ -64,7 +64,7 @@ fn every_backend_round_trips() {
     for (level_name, level) in host_levels() {
         let compressor = Brotli::from(level).compressor();
         for corpus in &corpora {
-            for quality in FAST_QUALITIES {
+            for quality in IMPLEMENTED_QUALITIES {
                 let compressed = compressor
                     .compress(params(quality, 22), &corpus.data)
                     .expect("compression failed");
@@ -84,7 +84,7 @@ fn every_backend_round_trips() {
 fn compression_is_deterministic() {
     let compressor = Brotli::default().compressor();
     for corpus in structural_corpora() {
-        for quality in FAST_QUALITIES {
+        for quality in IMPLEMENTED_QUALITIES {
             let first = compressor
                 .compress(params(quality, 22), &corpus.data)
                 .expect("compression failed");
@@ -100,7 +100,7 @@ fn compression_is_deterministic() {
 fn output_stays_within_the_documented_bound() {
     let compressor = Brotli::default().compressor();
     for corpus in structural_corpora() {
-        for quality in FAST_QUALITIES {
+        for quality in IMPLEMENTED_QUALITIES {
             let parameters = params(quality, 22);
             let bound = compressor
                 .calculate_bound(&parameters, corpus.data.len())

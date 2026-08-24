@@ -19,7 +19,7 @@ The package is split so that the AFL dependency stops at the binary layer:
 ```mermaid
 graph TD
     subgraph engine["Engine layer (depends on afl)"]
-        bins["src/bin/ — eight afl::fuzz! adapters"]
+        bins["src/bin/ — eleven afl::fuzz! adapters"]
     end
 
     subgraph neutral["Engine-neutral layer (no afl dependency)"]
@@ -72,15 +72,18 @@ structure its prefix carries.
 flowchart TD
     input["AFL input bytes"] --> shape{"target shape"}
 
-    shape -->|payload only| raw["whole input is the payload<br/>q0_roundtrip, q1_roundtrip"]
+    shape -->|payload only| raw["whole input is the payload<br/>q0, q1, q3, q4, q5 roundtrip"]
     raw --> capA["cap to MAX_PAYLOAD"]
     capA --> fixed["params = (fixed quality, WindowBits::DEFAULT)"]
 
-    shape -->|settings header| hdr["decode_case: 3 header bytes"]
-    hdr --> q["byte 0 — FAST_QUALITIES indexed by b mod 2"]
+    shape -->|settings header| hdr["decode_case: 6 header bytes"]
+    hdr --> q["byte 0 — IMPLEMENTED_QUALITIES indexed by b mod 5"]
     hdr --> w["byte 1 — WindowBits 10 + b mod 15<br/>spans MIN to MAX, always legal"]
     hdr --> c["byte 2 — chunk = 1 shl (b mod 18), always at least 1"]
-    hdr --> capB["remainder capped to MAX_PAYLOAD"]
+    hdr --> f["byte 3 — mode in the low two bits,<br/>literal context modelling in bit 2"]
+    hdr --> bl["byte 4 — zero leaves lgblock to the encoder,<br/>otherwise BlockBits 16 + b mod 9"]
+    hdr --> dc["byte 5 — postfix bits and direct groups,<br/>falling back to the default pair when unrepresentable"]
+    hdr --> capB["remainder capped to MAX_PAYLOAD,<br/>size hint pinned to its length"]
 
     shape -->|numeric settings| pp["parameter_parsing: 2 header bytes"]
     pp --> qn["byte 0 — quality value b mod 20<br/>reaches 10 and 12 and above, which are illegal"]
@@ -89,8 +92,12 @@ flowchart TD
 
 `decode_case` is closed over the legal domain by construction: its window index
 covers exactly `WindowBits::MIN..=MAX`, so the `unwrap_or(DEFAULT)` fallback is
-unreachable, and `chunk` is never zero. That keeps the equivalence and
-differential targets focused on encoder behaviour. `parameter_parsing` exists
+unreachable, `chunk` is never zero, and an unrepresentable distance layout
+falls back to the default pair. The size hint is pinned to the payload length,
+which is what the one-shot entry points would substitute anyway, so the
+streaming and one-shot targets stay comparable with each other and with the C
+reference. That keeps the equivalence and differential targets focused on
+encoder behaviour. `parameter_parsing` exists
 because of that closure — it is the only target that can reach the validating
 conversions and the unimplemented-quality path.
 
@@ -100,9 +107,12 @@ conversions and the unimplemented-quality path.
 | --- | --- | --- |
 | `q0_roundtrip` | payload | no panic, `compressed.len() <= calculate_bound`, C decoder round-trip |
 | `q1_roundtrip` | payload | same, at quality 1 |
+| `q3_roundtrip` | payload | same, at quality 3 |
+| `q4_roundtrip` | payload | same, at quality 4 |
+| `q5_roundtrip` | payload | same, at quality 5 |
 | `params_roundtrip` | header | bound, determinism across two runs, round-trip, over every legal setting |
 | `simd_equivalence` | header | every distinct host backend emits identical bytes |
-| `differential_c` | header | byte identity with Google Brotli v1.2.0 at the same quality and window |
+| `differential_c` | header | byte identity with Google Brotli v1.2.0 configured with the same quality, window, mode, block size, size hint, distance layout and context setting |
 | `streaming_equivalence` | header | writer output equals reader output at an arbitrary chunk size, and round-trips |
 | `output_capacity` | header | exactly sized `dst` accepted, one byte short reported as `OutputTooSmall` |
 | `parameter_parsing` | numeric | `TryFrom` contracts hold; unimplemented qualities reported by all four entry points |
@@ -201,7 +211,7 @@ sets are identical; the corpus takes under two seconds instead of minutes.
 
 - **No decompression target.** There is no decoder in `mbrotli`; round-trip
   oracles use Google's C decoder. A decoder target has to wait for one.
-- **Qualities 2 through 11 are only fuzzed for their refusal.**
+- **Qualities 2 and 6 through 11 are only fuzzed for their refusal.**
   `parameter_parsing` asserts they report `UnsupportedQuality` from all four
   entry points; there is no implementation behind them to fuzz.
 - **Payloads are capped at 128 KiB.** Inputs longer than that are truncated, so
@@ -210,10 +220,16 @@ sets are identical; the corpus takes under two seconds instead of minutes.
   including a 12 MiB case.
 - **No CI fuzzing.** The repository has no CI configuration at all, so neither
   a bounded smoke campaign nor the regression replay runs automatically.
-- **Only smoke campaigns have been run.** Sixty seconds per target on
-  `aarch64-apple-darwin`, all eight in parallel over the minimised corpora:
-  434k executions, 0 crashes, 0 hangs, stability 99.90% to 99.97%, bitmap
-  coverage 9% to 30.5%. That depth finds shallow faults only; no long campaign
+- **The regression corpora for the greedy targets are seeded, not found.**
+  `q3_roundtrip`, `q4_roundtrip` and `q5_roundtrip` start from the same
+  boundary cases as `q0_roundtrip`; nothing has crashed yet to replace them.
+- **Only smoke campaigns have been run.** The most recent, after the greedy
+  qualities were added, was thirty to forty-five seconds per target on
+  `aarch64-apple-darwin` over the unminimised parameter corpus:
+  `differential_c` 650 new corpus items and 21.7% coverage,
+  `simd_equivalence` 736 and 33.5%, `streaming_equivalence` 607 and 20.6%,
+  `params_roundtrip` 482 and 20.8%, `q5_roundtrip` 35 and 7.0%; 0 crashes and
+  0 hangs throughout. That depth finds shallow faults only; no long campaign
   has been run, and no crash has ever been triaged, so the tmin-to-regression
   path in `regressions/` is exercised by boundary cases rather than by a real
   finding.

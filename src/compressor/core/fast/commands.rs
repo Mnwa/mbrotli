@@ -8,22 +8,8 @@
 
 use super::bits::{BitWriter, MAX_BITS_PER_WRITE};
 use super::constants::{LONG_INSERT_LIMIT, SHORT_INSERT_LIMIT};
-use super::tables::LOG2_TABLE;
 
-/// Returns `floor(log2(value))` for a non-zero `value`.
-#[inline(always)]
-pub(crate) const fn log2_floor_non_zero(value: usize) -> u32 {
-    (usize::BITS - 1) - value.leading_zeros()
-}
-
-/// Reference logarithm with `log2(0) == 0` (`FastLog2`).
-#[inline]
-pub(crate) fn fast_log2(value: usize) -> f64 {
-    match LOG2_TABLE.get(value) {
-        Some(&entry) => entry,
-        None => (value as f64).log2(),
-    }
-}
+pub(crate) use crate::compressor::core::shared::fast_log::{fast_log2, log2_floor_non_zero};
 
 /// Writes the meta-block header for `len` bytes.
 ///
@@ -492,24 +478,6 @@ mod tests {
             .map(|(i, _)| i)
             .collect();
         (w.position(), used)
-    }
-
-    #[test]
-    fn log2_floor_matches_the_reference() {
-        assert_eq!(log2_floor_non_zero(1), 0);
-        assert_eq!(log2_floor_non_zero(2), 1);
-        assert_eq!(log2_floor_non_zero(3), 1);
-        assert_eq!(log2_floor_non_zero(255), 7);
-        assert_eq!(log2_floor_non_zero(256), 8);
-    }
-
-    #[test]
-    fn fast_log2_uses_the_table_below_256() {
-        assert_eq!(fast_log2(0), 0.0);
-        assert_eq!(fast_log2(1), 0.0);
-        assert_eq!(fast_log2(255), LOG2_TABLE[255]);
-        assert_eq!(fast_log2(256), 8.0);
-        assert!((fast_log2(1000) - 9.965_784_284_662_087).abs() < 1e-12);
     }
 
     #[test]

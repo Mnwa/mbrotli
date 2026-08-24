@@ -10,9 +10,9 @@
 # Two corpora are produced:
 #
 #   seeds/generic  the raw test data, for targets that fuzz the payload only
-#   seeds/params   the same files behind a three byte parameter header, for
-#                  targets that decode quality, window size and chunk size
-#                  from the start of the input
+#   seeds/params   the same files behind a six byte parameter header, for
+#                  targets that decode quality, window size, chunk size, mode,
+#                  block size and distance layout from the start of the input
 #
 # Usage: fuzz/afl/prepare-seeds.sh
 
@@ -56,15 +56,17 @@ for path in "$testdata"/*; do
     count=$((count + 1))
 done
 
-# Parameter headers: quality 0/1, a spread of window sizes, a spread of
-# streaming chunk sizes. Byte 0 picks the quality, byte 1 the window size
-# (10 + value % 15), byte 2 the chunk size (1 << (value % 18)).
+# Parameter headers, one per field: byte 0 the quality (index into the five
+# implemented ones), byte 1 the window size (10 + value % 15), byte 2 the chunk
+# size (1 << (value % 18)), byte 3 the mode and the context modelling flag,
+# byte 4 the block size, byte 5 the distance layout.
 #
 # Small seeds get every combination; large ones get a representative few, so
 # the corpus stays small enough for the fuzzer to cycle through quickly.
 small_bytes=8192
-full_headers="0:0:0 0:8:12 0:12:17 0:14:0 1:0:0 1:8:12 1:12:17 1:14:0"
-large_headers="0:12:12 1:12:12"
+full_headers="0:0:0:0:0:0 1:8:12:0:0:0 2:12:17:0:0:0 2:14:0:1:18:5 \
+3:0:0:0:0:0 3:12:12:4:0:9 4:8:12:2:20:0 4:14:17:0:0:0"
+large_headers="1:12:12:0:0:0 3:12:12:0:0:0 4:12:12:0:0:0"
 
 for path in "$generic"/*; do
     name=$(basename "$path")
@@ -75,12 +77,16 @@ for path in "$generic"/*; do
         headers="$large_headers"
     fi
     for header in $headers; do
-        quality=${header%%:*}
-        rest=${header#*:}
-        lgwin=${rest%%:*}
-        chunk=${rest##*:}
-        target="$params/q$quality-w$lgwin-c$chunk-$name"
-        printf "$(printf '\\%03o\\%03o\\%03o' "$quality" "$lgwin" "$chunk")" > "$target"
+        # Split "q:w:c:f:b:d" into its six fields.
+        quality=$(echo "$header" | cut -d: -f1)
+        lgwin=$(echo "$header" | cut -d: -f2)
+        chunk=$(echo "$header" | cut -d: -f3)
+        flags=$(echo "$header" | cut -d: -f4)
+        lgblock=$(echo "$header" | cut -d: -f5)
+        layout=$(echo "$header" | cut -d: -f6)
+        target="$params/q$quality-w$lgwin-c$chunk-f$flags-b$lgblock-d$layout-$name"
+        printf "$(printf '\\%03o\\%03o\\%03o\\%03o\\%03o\\%03o' \
+            "$quality" "$lgwin" "$chunk" "$flags" "$lgblock" "$layout")" > "$target"
         cat "$path" >> "$target"
     done
 done

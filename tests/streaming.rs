@@ -3,13 +3,13 @@
 mod support;
 
 use mbrotli::Brotli;
+use mbrotli::compressor::CompressParams;
 use std::io::{Read, Write};
-use support::{FAST_QUALITIES, c_decompress, params, structural_corpora};
+use support::{IMPLEMENTED_QUALITIES, c_decompress, params, params_with_hint, structural_corpora};
 
 /// Compresses `data` through the writer adapter using fixed-size chunks.
-fn compress_with_writer(data: &[u8], chunk: usize, quality_index: usize, lgwin: usize) -> Vec<u8> {
+fn compress_with_writer(data: &[u8], chunk: usize, parameters: CompressParams) -> Vec<u8> {
     let compressor = Brotli::default().compressor();
-    let parameters = params(FAST_QUALITIES[quality_index], lgwin);
     let mut sink = compressor.compress_writer(parameters, Vec::new());
     for piece in data.chunks(chunk.max(1)) {
         sink.write_all(piece).expect("write failed");
@@ -18,9 +18,8 @@ fn compress_with_writer(data: &[u8], chunk: usize, quality_index: usize, lgwin: 
 }
 
 /// Compresses `data` through the reader adapter using fixed-size reads.
-fn compress_with_reader(data: &[u8], chunk: usize, quality_index: usize, lgwin: usize) -> Vec<u8> {
+fn compress_with_reader(data: &[u8], chunk: usize, parameters: CompressParams) -> Vec<u8> {
     let compressor = Brotli::default().compressor();
-    let parameters = params(FAST_QUALITIES[quality_index], lgwin);
     let mut source = compressor.compress_reader(parameters, data);
     let mut output = Vec::new();
     let mut buffer = vec![0u8; chunk.max(1)];
@@ -36,11 +35,12 @@ fn compress_with_reader(data: &[u8], chunk: usize, quality_index: usize, lgwin: 
 #[test]
 fn writer_output_is_independent_of_the_chunk_size() {
     let data: Vec<u8> = (0..200_000u32).map(|i| (i % 61) as u8).collect();
-    for quality_index in 0..FAST_QUALITIES.len() {
-        let reference = compress_with_writer(&data, data.len(), quality_index, 16);
+    for quality in IMPLEMENTED_QUALITIES {
+        let parameters = params(quality, 16);
+        let reference = compress_with_writer(&data, data.len(), parameters);
         for chunk in [1usize, 3, 1024, 65_536, 65_537, 131_072] {
-            let actual = compress_with_writer(&data, chunk, quality_index, 16);
-            assert_eq!(actual, reference, "chunk {chunk}, quality {quality_index}");
+            let actual = compress_with_writer(&data, chunk, parameters);
+            assert_eq!(actual, reference, "chunk {chunk}, quality {quality:?}");
         }
     }
 }
@@ -48,11 +48,12 @@ fn writer_output_is_independent_of_the_chunk_size() {
 #[test]
 fn reader_output_is_independent_of_the_read_size() {
     let data: Vec<u8> = (0..200_000u32).map(|i| (i % 61) as u8).collect();
-    for quality_index in 0..FAST_QUALITIES.len() {
-        let reference = compress_with_reader(&data, 1 << 20, quality_index, 16);
+    for quality in IMPLEMENTED_QUALITIES {
+        let parameters = params(quality, 16);
+        let reference = compress_with_reader(&data, 1 << 20, parameters);
         for chunk in [1usize, 7, 4096, 65_536] {
-            let actual = compress_with_reader(&data, chunk, quality_index, 16);
-            assert_eq!(actual, reference, "chunk {chunk}, quality {quality_index}");
+            let actual = compress_with_reader(&data, chunk, parameters);
+            assert_eq!(actual, reference, "chunk {chunk}, quality {quality:?}");
         }
     }
 }
@@ -60,9 +61,10 @@ fn reader_output_is_independent_of_the_read_size() {
 #[test]
 fn writer_and_reader_agree_with_each_other() {
     for corpus in structural_corpora() {
-        for quality_index in 0..FAST_QUALITIES.len() {
-            let written = compress_with_writer(&corpus.data, 4096, quality_index, 18);
-            let read = compress_with_reader(&corpus.data, 4096, quality_index, 18);
+        for quality in IMPLEMENTED_QUALITIES {
+            let parameters = params(quality, 18);
+            let written = compress_with_writer(&corpus.data, 4096, parameters);
+            let read = compress_with_reader(&corpus.data, 4096, parameters);
             assert_eq!(written, read, "case {}", corpus.name);
         }
     }
@@ -77,12 +79,19 @@ fn streaming_matches_one_shot_for_inputs_past_the_fallback() {
         if corpus.data.len() < 1024 {
             continue;
         }
-        for (index, quality) in FAST_QUALITIES.into_iter().enumerate() {
+        for quality in IMPLEMENTED_QUALITIES {
+            // The greedy qualities pick their match finder from the size hint,
+            // so both paths have to be given the same one.
+            let parameters = params_with_hint(quality, 18, corpus.data.len());
             let one_shot = compressor
-                .compress(params(quality, 18), &corpus.data)
+                .compress(parameters, &corpus.data)
                 .expect("compression failed");
-            let streamed = compress_with_writer(&corpus.data, 4096, index, 18);
-            assert_eq!(streamed, one_shot, "case {}", corpus.name);
+            let streamed = compress_with_writer(&corpus.data, 4096, parameters);
+            assert_eq!(
+                streamed, one_shot,
+                "case {}, quality {quality:?}",
+                corpus.name
+            );
         }
     }
 }
@@ -90,12 +99,12 @@ fn streaming_matches_one_shot_for_inputs_past_the_fallback() {
 #[test]
 fn streamed_output_round_trips() {
     for corpus in structural_corpora() {
-        for quality_index in 0..FAST_QUALITIES.len() {
+        for quality in IMPLEMENTED_QUALITIES {
             for chunk in [1usize, 4096] {
                 if chunk == 1 && corpus.data.len() > 4096 {
                     continue;
                 }
-                let compressed = compress_with_writer(&corpus.data, chunk, quality_index, 16);
+                let compressed = compress_with_writer(&corpus.data, chunk, params(quality, 16));
                 let decoded = c_decompress(&compressed, corpus.data.len()).unwrap_or_else(|| {
                     panic!("case {}: the decoder rejected the stream", corpus.name)
                 });
@@ -107,12 +116,13 @@ fn streamed_output_round_trips() {
 
 #[test]
 fn empty_streams_are_valid() {
-    for quality_index in 0..FAST_QUALITIES.len() {
-        let written = compress_with_writer(&[], 1, quality_index, 22);
+    for quality in IMPLEMENTED_QUALITIES {
+        let parameters = params(quality, 22);
+        let written = compress_with_writer(&[], 1, parameters);
         assert!(!written.is_empty());
         assert_eq!(c_decompress(&written, 1), Some(Vec::new()));
 
-        let read = compress_with_reader(&[], 1, quality_index, 22);
+        let read = compress_with_reader(&[], 1, parameters);
         assert_eq!(read, written);
     }
 }

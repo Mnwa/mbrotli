@@ -6,13 +6,12 @@
 //! committed inputs through the very same functions, so a finding reproduces
 //! identically under AFL, under `cargo test` and under a debugger.
 
-use crate::{Context, FAST_QUALITIES, assert_round_trip, c_compress, cap, decode_case};
+use crate::{Context, IMPLEMENTED_QUALITIES, assert_round_trip, c_compress_with, cap, decode_case};
 use mbrotli::Brotli;
 use mbrotli::compressor::{
     BrotliCompressError, CompressParams, ParseQualityLevelError, ParseWindowBitsError,
     QualityLevel, WindowBits,
 };
-use std::ffi::c_int;
 use std::io::{Read, Write};
 
 /// Signature every target body shares: prepared state, then one fuzz input.
@@ -26,6 +25,9 @@ pub type TargetFn = fn(&Context, &[u8]);
 pub const TARGETS: &[(&str, TargetFn)] = &[
     ("q0_roundtrip", q0_roundtrip),
     ("q1_roundtrip", q1_roundtrip),
+    ("q3_roundtrip", q3_roundtrip),
+    ("q4_roundtrip", q4_roundtrip),
+    ("q5_roundtrip", q5_roundtrip),
     ("params_roundtrip", params_roundtrip),
     ("simd_equivalence", simd_equivalence),
     ("differential_c", differential_c),
@@ -57,6 +59,21 @@ fn fixed_quality_roundtrip(ctx: &Context, quality: QualityLevel, data: &[u8]) {
         .expect("compression failed");
     assert!(compressed.len() <= bound, "output exceeded the bound");
     assert_round_trip(data, &compressed);
+}
+
+/// Quality 3 must never panic and must always round-trip.
+pub fn q3_roundtrip(ctx: &Context, data: &[u8]) {
+    fixed_quality_roundtrip(ctx, QualityLevel::Q3, data);
+}
+
+/// Quality 4 must never panic and must always round-trip.
+pub fn q4_roundtrip(ctx: &Context, data: &[u8]) {
+    fixed_quality_roundtrip(ctx, QualityLevel::Q4, data);
+}
+
+/// Quality 5 must never panic and must always round-trip.
+pub fn q5_roundtrip(ctx: &Context, data: &[u8]) {
+    fixed_quality_roundtrip(ctx, QualityLevel::Q5, data);
 }
 
 /// Randomised legal settings must round-trip and stay deterministic.
@@ -98,9 +115,12 @@ pub fn simd_equivalence(ctx: &Context, input: &[u8]) {
 /// The encoder must stay byte identical to the pinned C reference.
 pub fn differential_c(ctx: &Context, input: &[u8]) {
     let case = decode_case(input);
-    let quality = usize::from(case.params.quality()) as c_int;
-    let lgwin = usize::from(case.params.lgwin()) as c_int;
-    let expected = c_compress(quality, lgwin, case.data);
+    // The empty input takes the one-shot shortcut in this crate and in the C
+    // one-shot API, but not in the C streaming API this oracle uses.
+    if case.data.is_empty() {
+        return;
+    }
+    let expected = c_compress_with(&case.params, case.data);
     let actual = ctx
         .compressor
         .compress(case.params, case.data)
@@ -209,7 +229,7 @@ pub fn parameter_parsing(ctx: &Context, input: &[u8]) {
     };
     let params = CompressParams::new(quality, window);
 
-    if FAST_QUALITIES
+    if IMPLEMENTED_QUALITIES
         .iter()
         .any(|&implemented| usize::from(implemented) == quality_value)
     {

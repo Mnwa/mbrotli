@@ -1,0 +1,713 @@
+//! The streaming quality 3, 4 and 5 encoder.
+//!
+//! Ports `EncodeData`, `WriteMetaBlockInternal`, `ShouldCompress` and
+//! `CopyInputToRingBuffer` from `c/enc/encode.c` of the pinned reference
+//! (`google/brotli` v1.2.0, commit `028fb5a`).
+//!
+//! This is the only place in the greedy path that branches on the instruction
+//! set: one [`dispatch!`] per public call hands a SIMD token to the match
+//! scan, and everything below it is monomorphised on that token. The matcher,
+//! the block sizes and the distance alphabet were all resolved before the
+//! encoder was built, so nothing about the machine can reach a decision that
+//! shows up in the output.
+
+use fearless_simd::{Level, dispatch};
+
+use super::backward_references::{
+    BlockSpan, ReferenceState, Window, create_backward_references, extend_last_command,
+};
+use super::bitstream::{MetaBlockWriter, store_uncompressed_meta_block};
+use super::command::Command;
+use super::context_model::decide_over_literal_context_modeling;
+use super::hashers::{DistanceCache, MatchFinder};
+use super::histogram::{HistogramLiteral, bits_entropy};
+use super::metablock::{build_meta_block_greedy, optimize_histograms};
+use super::params::{GreedyParams, MAX_NUM_DELAYED_SYMBOLS};
+use super::ringbuffer::{RingBuffer, wrap_position};
+use crate::compressor::core::shared::bits::BitWriter;
+use crate::compressor::core::shared::constants::{OUTPUT_RESERVE_CONST, OUTPUT_SLACK};
+use crate::compressor::{BrotliCompressError, BrotliResult, CompressParams};
+
+/// Stride the compressibility check samples literals at (`kSampleRate`).
+const SAMPLE_RATE: u32 = 13;
+
+/// Bits per byte above which sampled data is stored uncompressed.
+const MIN_ENTROPY: f64 = 7.92;
+
+/// Fraction of a block that has to be literals before it is even sampled.
+const LITERAL_FRACTION: f64 = 0.99;
+
+/// Streaming encoder for qualities three to five.
+pub(crate) struct GreedyEncoder {
+    level: Level,
+    params: GreedyParams,
+    ringbuffer: RingBuffer,
+    matcher: MatchFinder,
+    is_prepared: bool,
+    input_pos: u64,
+    last_processed_pos: u64,
+    last_flush_pos: u64,
+    commands: Vec<Command>,
+    references: ReferenceState,
+    saved_dist_cache: DistanceCache,
+    prev_byte: u8,
+    prev_byte2: u8,
+    last_bytes: u16,
+    last_bytes_bits: u32,
+    is_last_block_emitted: bool,
+    finished: bool,
+    storage: Vec<u8>,
+    writer: MetaBlockWriter,
+    output_len: usize,
+}
+
+impl GreedyEncoder {
+    /// Creates an encoder for `params`, expecting `size_hint` bytes in total.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrotliCompressError::UnsupportedQuality`] when the quality is
+    /// outside the range this encoder implements.
+    pub(crate) fn new(
+        level: Level,
+        params: &CompressParams,
+        size_hint: usize,
+    ) -> BrotliResult<Self> {
+        let resolved = GreedyParams::new(params, size_hint)?;
+        let (last_bytes, last_bytes_bits) = encode_window_bits(resolved.lgwin);
+        let references = ReferenceState::default();
+        Ok(Self {
+            level,
+            params: resolved,
+            ringbuffer: RingBuffer::new(&resolved),
+            matcher: MatchFinder::from(resolved.hasher),
+            is_prepared: false,
+            input_pos: 0,
+            last_processed_pos: 0,
+            last_flush_pos: 0,
+            commands: Vec::new(),
+            saved_dist_cache: references.dist_cache,
+            references,
+            prev_byte: 0,
+            prev_byte2: 0,
+            last_bytes,
+            last_bytes_bits,
+            is_last_block_emitted: false,
+            finished: false,
+            storage: Vec::new(),
+            writer: MetaBlockWriter::default(),
+            output_len: 0,
+        })
+    }
+
+    /// Returns the largest input this encoder accepts in one call.
+    pub(crate) const fn block_size_limit(&self) -> usize {
+        self.params.input_block_size()
+    }
+
+    /// Returns whether the final meta-block has already been written.
+    pub(crate) const fn is_finished(&self) -> bool {
+        self.finished
+    }
+
+    /// Compresses one input block and returns the bytes it completed.
+    ///
+    /// A block shorter than [`GreedyEncoder::block_size_limit`] is allowed only
+    /// when `is_last` is set. The result may be empty: the encoder buffers
+    /// input until a meta-block is worth emitting.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrotliCompressError::BufferOverflow`] when the scratch buffer
+    /// proved too small, which would indicate a bug in the size bound.
+    #[hotpath::measure]
+    pub(crate) fn encode_block(&mut self, input: &[u8], is_last: bool) -> BrotliResult<&[u8]> {
+        debug_assert!(!self.finished);
+        debug_assert!(input.len() <= self.block_size_limit());
+
+        self.copy_input_to_ring_buffer(input);
+        self.encode_data(is_last)?;
+        match self.storage.get(..self.output_len) {
+            Some(output) => Ok(output),
+            None => Err(BrotliCompressError::BufferOverflow),
+        }
+    }
+
+    /// Appends `input` to the window (`CopyInputToRingBuffer`).
+    fn copy_input_to_ring_buffer(&mut self, input: &[u8]) {
+        if input.is_empty() {
+            return;
+        }
+        self.ringbuffer.write(input);
+        self.input_pos += input.len() as u64;
+        self.ringbuffer.clear_margin();
+    }
+
+    /// Marks the input as processed, reporting whether positions wrapped.
+    ///
+    /// Mirrors `UpdateLastProcessedPos`.
+    fn update_last_processed_pos(&mut self) -> bool {
+        let wrapped_last = wrap_position(self.last_processed_pos);
+        let wrapped_input = wrap_position(self.input_pos);
+        self.last_processed_pos = self.input_pos;
+        wrapped_input < wrapped_last
+    }
+
+    /// Makes sure the scratch buffer can hold a meta-block of `size` bytes.
+    fn reserve_storage(&mut self, size: usize) -> BrotliResult<()> {
+        let Some(reserve) = size
+            .checked_mul(2)
+            .and_then(|doubled| doubled.checked_add(OUTPUT_RESERVE_CONST))
+            .and_then(|reserve| reserve.checked_add(OUTPUT_SLACK))
+        else {
+            return Err(BrotliCompressError::BufferOverflow);
+        };
+        if self.storage.len() < reserve {
+            self.storage = vec![0u8; reserve];
+        }
+        Ok(())
+    }
+
+    /// Seeds the scratch buffer with the bits carried from the last meta-block.
+    ///
+    /// The bit writer resumes inside that byte, so it has to be in place before
+    /// anything is written. [`GreedyEncoder::reserve_storage`] always leaves
+    /// room for it.
+    fn seed_storage_with_the_partial_byte(&mut self) {
+        if let Some(head) = self.storage.get_mut(..2) {
+            head[0] = self.last_bytes as u8;
+            head[1] = (self.last_bytes >> 8) as u8;
+        }
+    }
+
+    /// Emits the two bits that close a stream that never had any input.
+    fn emit_empty_stream(&mut self) -> BrotliResult<()> {
+        self.reserve_storage(0)?;
+        self.last_bytes |= 3u16 << self.last_bytes_bits;
+        self.last_bytes_bits += 2;
+        self.seed_storage_with_the_partial_byte();
+        self.output_len = ((self.last_bytes_bits + 7) >> 3) as usize;
+        self.finished = true;
+        Ok(())
+    }
+
+    /// Runs the match scan over the unprocessed input.
+    ///
+    /// This is the encoder's only SIMD dispatch: the token is resolved here and
+    /// passed by value into the monomorphised scan.
+    fn create_references(&mut self, span: BlockSpan) {
+        let Self {
+            level,
+            params,
+            ringbuffer,
+            matcher,
+            references,
+            commands,
+            ..
+        } = self;
+        let window = Window {
+            data: ringbuffer.buffer(),
+            mask: ringbuffer.mask(),
+        };
+        dispatch!(*level, simd => match matcher {
+            MatchFinder::H3(finder) => create_backward_references(
+                simd, finder, params, window, span, references, commands),
+            MatchFinder::H4(finder) => create_backward_references(
+                simd, finder, params, window, span, references, commands),
+            MatchFinder::H54(finder) => create_backward_references(
+                simd, finder, params, window, span, references, commands),
+            MatchFinder::H40(finder) => create_backward_references(
+                simd, finder, params, window, span, references, commands),
+            MatchFinder::H5(finder) => create_backward_references(
+                simd, finder, params, window, span, references, commands),
+            MatchFinder::H6(finder) => create_backward_references(
+                simd, finder, params, window, span, references, commands),
+        });
+    }
+
+    /// Processes the accumulated input, emitting a meta-block if one is due.
+    ///
+    /// Mirrors `EncodeData` for the non-fast qualities.
+    fn encode_data(&mut self, is_last: bool) -> BrotliResult<()> {
+        self.output_len = 0;
+        let delta = self.input_pos - self.last_processed_pos;
+        let mut span = BlockSpan {
+            position: wrap_position(self.last_processed_pos),
+            bytes: delta as u32,
+        };
+
+        if delta == 0 {
+            if !self.ringbuffer.is_allocated() {
+                if is_last {
+                    return self.emit_empty_stream();
+                }
+                return Ok(());
+            }
+            if !is_last {
+                return Ok(());
+            }
+        }
+        if self.is_last_block_emitted {
+            return Err(BrotliCompressError::BufferOverflow);
+        }
+        if is_last {
+            self.is_last_block_emitted = true;
+        }
+
+        // Theoretical maximum of one command per two bytes, plus room to merge
+        // the next block in without reallocating.
+        let needed = self.commands.len() + span.bytes as usize / 2 + 1;
+        if self.commands.capacity() < needed {
+            self.commands
+                .reserve(needed + span.bytes as usize / 4 + 16 - self.commands.len());
+        }
+
+        self.prepare_matcher(span.position as usize, span.bytes as usize, is_last);
+
+        if !self.commands.is_empty() && self.references.last_insert_len == 0 {
+            let Self {
+                params,
+                ringbuffer,
+                references,
+                commands,
+                last_processed_pos,
+                ..
+            } = self;
+            if let Some(command) = commands.last_mut() {
+                let window = Window {
+                    data: ringbuffer.buffer(),
+                    mask: ringbuffer.mask(),
+                };
+                extend_last_command(
+                    command,
+                    params,
+                    &references.dist_cache,
+                    window,
+                    *last_processed_pos,
+                    &mut span,
+                );
+            }
+        }
+
+        self.create_references(span);
+
+        {
+            let max_length = self.params.max_metablock_size();
+            let max_literals = max_length / 8;
+            let max_commands = max_length / 8;
+            let processed_bytes = (self.input_pos - self.last_flush_pos) as usize;
+            let next_input_fits_metablock =
+                processed_bytes + self.params.input_block_size() <= max_length;
+            // Without block splitting there is no point in gathering more than
+            // a bounded number of symbols, so a low quality flushes early.
+            let should_flush = !self.params.quality.splits_blocks()
+                && self.references.num_literals + self.commands.len() >= MAX_NUM_DELAYED_SYMBOLS;
+            if !is_last
+                && !should_flush
+                && next_input_fits_metablock
+                && self.references.num_literals < max_literals
+                && self.commands.len() < max_commands
+            {
+                // Merge with the next input block instead.
+                if self.update_last_processed_pos() {
+                    self.is_prepared = false;
+                }
+                return Ok(());
+            }
+        }
+
+        if self.references.last_insert_len > 0 {
+            self.commands
+                .push(Command::insert_only(self.references.last_insert_len));
+            self.references.num_literals += self.references.last_insert_len;
+            self.references.last_insert_len = 0;
+        }
+
+        if !is_last && self.input_pos == self.last_flush_pos {
+            return Ok(());
+        }
+        debug_assert!(self.input_pos >= self.last_flush_pos);
+        debug_assert!(self.input_pos - self.last_flush_pos <= 1 << 24);
+
+        let metablock_size = (self.input_pos - self.last_flush_pos) as usize;
+        self.reserve_storage(metablock_size)?;
+        self.seed_storage_with_the_partial_byte();
+
+        let position = self.write_meta_block(metablock_size, is_last)?;
+
+        let complete = position >> 3;
+        self.last_bytes = u16::from(self.storage.get(complete).copied().unwrap_or(0));
+        self.last_bytes_bits = (position & 7) as u32;
+        self.last_flush_pos = self.input_pos;
+        if self.update_last_processed_pos() {
+            self.is_prepared = false;
+        }
+        let mask = self.ringbuffer.mask();
+        if self.last_flush_pos > 0 {
+            self.prev_byte = self
+                .ringbuffer
+                .buffer()
+                .get(((self.last_flush_pos as u32).wrapping_sub(1) as usize) & mask)
+                .copied()
+                .unwrap_or(0);
+        }
+        if self.last_flush_pos > 1 {
+            self.prev_byte2 = self
+                .ringbuffer
+                .buffer()
+                .get(((self.last_flush_pos as u32).wrapping_sub(2) as usize) & mask)
+                .copied()
+                .unwrap_or(0);
+        }
+        self.commands.clear();
+        self.references.num_literals = 0;
+        self.saved_dist_cache = self.references.dist_cache;
+        self.output_len = complete;
+        self.finished = is_last;
+        Ok(())
+    }
+
+    /// Sets the matcher up and hands it the block boundary positions.
+    ///
+    /// Mirrors `InitOrStitchToPreviousBlock`.
+    fn prepare_matcher(&mut self, position: usize, input_size: usize, is_last: bool) {
+        let data = self.ringbuffer.buffer();
+        let mask = self.ringbuffer.mask();
+        if !self.is_prepared {
+            let one_shot = position == 0 && is_last;
+            self.matcher.prepare(one_shot, input_size, data);
+            self.is_prepared = true;
+        }
+        self.matcher
+            .stitch_to_previous_block(input_size, position, data, mask);
+    }
+
+    /// Writes one meta-block, returning the bit position after it.
+    ///
+    /// Mirrors `WriteMetaBlockInternal`.
+    fn write_meta_block(&mut self, bytes: usize, is_last: bool) -> BrotliResult<usize> {
+        let wrapped_last_flush_pos = wrap_position(self.last_flush_pos) as usize;
+        let Self {
+            params,
+            ringbuffer,
+            commands,
+            references,
+            saved_dist_cache,
+            prev_byte,
+            prev_byte2,
+            last_bytes_bits,
+            storage,
+            writer,
+            ..
+        } = self;
+        let data = ringbuffer.buffer();
+        let mask = ringbuffer.mask();
+
+        let mut w = BitWriter::new(storage, *last_bytes_bits as usize);
+        if bytes == 0 {
+            // Write the ISLAST and ISEMPTY bits and stop.
+            w.write(2, 3);
+            w.align();
+            let position = w.position();
+            if w.overflowed() {
+                return Err(BrotliCompressError::BufferOverflow);
+            }
+            return Ok(position);
+        }
+
+        if !should_compress(
+            data,
+            mask,
+            self.last_flush_pos,
+            bytes,
+            references.num_literals,
+            commands.len(),
+        ) {
+            // The distance cache was updated for commands that are now
+            // discarded, so it has to be restored.
+            references.dist_cache = *saved_dist_cache;
+            store_uncompressed_meta_block(
+                is_last,
+                data,
+                wrapped_last_flush_pos,
+                mask,
+                bytes,
+                &mut w,
+            );
+            let position = w.position();
+            if w.overflowed() {
+                return Err(BrotliCompressError::BufferOverflow);
+            }
+            return Ok(position);
+        }
+
+        let saved_last_bytes = u16::from(w.byte(1)) << 8 | u16::from(w.byte(0));
+        let saved_last_bytes_bits = *last_bytes_bits as usize;
+
+        if params.quality.splits_blocks() {
+            let model = decide_over_literal_context_modeling(
+                data,
+                wrapped_last_flush_pos,
+                bytes,
+                mask,
+                params.quality.models_literal_contexts()
+                    && !params.disable_literal_context_modeling,
+                params.size_hint,
+            );
+            let mut mb = build_meta_block_greedy(
+                data,
+                wrapped_last_flush_pos,
+                mask,
+                *prev_byte,
+                *prev_byte2,
+                model,
+                commands,
+            );
+            optimize_histograms(params.dist.alphabet_size_limit as usize, &mut mb);
+            writer.store_meta_block(
+                data,
+                wrapped_last_flush_pos,
+                bytes,
+                mask,
+                *prev_byte,
+                *prev_byte2,
+                is_last,
+                &params.dist,
+                commands,
+                &mb,
+                &mut w,
+            );
+        } else {
+            writer.store_meta_block_trivial(
+                data,
+                wrapped_last_flush_pos,
+                bytes,
+                mask,
+                is_last,
+                &params.dist,
+                commands,
+                &mut w,
+            );
+        }
+
+        if bytes + 4 < (w.position() >> 3) {
+            // Compressing made it bigger; store the bytes as they are.
+            references.dist_cache = *saved_dist_cache;
+            w.rewind(saved_last_bytes_bits);
+            w.set_byte(0, saved_last_bytes as u8);
+            w.set_byte(1, (saved_last_bytes >> 8) as u8);
+            store_uncompressed_meta_block(
+                is_last,
+                data,
+                wrapped_last_flush_pos,
+                mask,
+                bytes,
+                &mut w,
+            );
+        }
+        let position = w.position();
+        if w.overflowed() {
+            return Err(BrotliCompressError::BufferOverflow);
+        }
+        Ok(position)
+    }
+}
+
+/// Encodes the stream header for a window size.
+///
+/// Mirrors `EncodeWindowBits` without the large-window extension, which the
+/// public window size cannot reach.
+const fn encode_window_bits(lgwin: usize) -> (u16, u32) {
+    if lgwin == 16 {
+        (0, 1)
+    } else if lgwin == 17 {
+        (1, 7)
+    } else if lgwin > 17 {
+        ((((lgwin - 17) << 1) | 0x01) as u16, 4)
+    } else {
+        ((((lgwin - 8) << 4) | 0x01) as u16, 7)
+    }
+}
+
+/// Decides whether a meta-block is worth compressing at all.
+///
+/// Mirrors `ShouldCompress`. Tiny blocks cannot win, and a block that is almost
+/// all literals is sampled: if the sample looks like noise, storing it verbatim
+/// is both smaller and much faster.
+fn should_compress(
+    data: &[u8],
+    mask: usize,
+    last_flush_pos: u64,
+    bytes: usize,
+    num_literals: usize,
+    num_commands: usize,
+) -> bool {
+    if bytes <= 2 {
+        return false;
+    }
+    if num_commands >= (bytes >> 8) + 2 {
+        return true;
+    }
+    if num_literals as f64 <= LITERAL_FRACTION * bytes as f64 {
+        return true;
+    }
+    let mut literal_histo = HistogramLiteral::default();
+    let bit_cost_threshold = bytes as f64 * MIN_ENTROPY / f64::from(SAMPLE_RATE);
+    let samples = bytes.div_ceil(SAMPLE_RATE as usize);
+    let mut pos = last_flush_pos as u32;
+    for _ in 0..samples {
+        literal_histo.add(usize::from(
+            data.get(pos as usize & mask).copied().unwrap_or(0),
+        ));
+        pos = pos.wrapping_add(SAMPLE_RATE);
+    }
+    bits_entropy(&literal_histo.data) <= bit_cost_threshold
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compressor::{QualityLevel, WindowBits};
+
+    fn encoder(quality: QualityLevel, size_hint: usize) -> GreedyEncoder {
+        let params = CompressParams::new(quality, WindowBits::DEFAULT);
+        GreedyEncoder::new(Level::new(), &params, size_hint).expect("supported quality")
+    }
+
+    /// Compresses `data` in blocks and returns the whole stream.
+    fn compress(quality: QualityLevel, data: &[u8]) -> Vec<u8> {
+        let mut encoder = encoder(quality, data.len());
+        let limit = encoder.block_size_limit();
+        let mut out = Vec::new();
+        let mut offset = 0usize;
+        loop {
+            let take = (data.len() - offset).min(limit);
+            let is_last = offset + take == data.len();
+            out.extend_from_slice(
+                encoder
+                    .encode_block(&data[offset..offset + take], is_last)
+                    .expect("encoding failed"),
+            );
+            offset += take;
+            if is_last {
+                break;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_window_header_matches_the_reference_encoding() {
+        assert_eq!(encode_window_bits(16), (0, 1));
+        assert_eq!(encode_window_bits(17), (1, 7));
+        assert_eq!(encode_window_bits(18), (3, 4));
+        assert_eq!(encode_window_bits(22), (11, 4));
+        assert_eq!(encode_window_bits(24), (15, 4));
+        assert_eq!(encode_window_bits(10), (0x21, 7));
+    }
+
+    #[test]
+    fn a_tiny_block_is_never_compressed() {
+        assert!(!should_compress(&[1, 2], usize::MAX, 0, 2, 2, 0));
+        assert!(!should_compress(&[], usize::MAX, 0, 0, 0, 0));
+    }
+
+    #[test]
+    fn a_block_with_enough_commands_is_always_compressed() {
+        let data = vec![0u8; 1024];
+        assert!(should_compress(&data, usize::MAX, 0, 1024, 1024, 6));
+    }
+
+    #[test]
+    fn random_literals_are_stored_uncompressed() {
+        let mut rng = 0x1234_5678u64;
+        let data: Vec<u8> = (0..200_000)
+            .map(|_| {
+                rng ^= rng << 13;
+                rng ^= rng >> 7;
+                rng ^= rng << 17;
+                (rng >> 24) as u8
+            })
+            .collect();
+        assert!(!should_compress(
+            &data,
+            usize::MAX,
+            0,
+            data.len(),
+            data.len(),
+            1
+        ));
+    }
+
+    #[test]
+    fn repetitive_literals_are_worth_compressing() {
+        let data = vec![b'a'; 4096];
+        assert!(should_compress(
+            &data,
+            usize::MAX,
+            0,
+            data.len(),
+            data.len(),
+            1
+        ));
+    }
+
+    #[test]
+    fn every_quality_produces_a_non_empty_stream() {
+        for quality in [QualityLevel::Q3, QualityLevel::Q4, QualityLevel::Q5] {
+            let stream = compress(quality, b"hello hello hello hello hello");
+            assert!(!stream.is_empty(), "quality {quality:?} produced nothing");
+        }
+    }
+
+    #[test]
+    fn an_empty_stream_is_two_bits() {
+        for quality in [QualityLevel::Q3, QualityLevel::Q4, QualityLevel::Q5] {
+            let mut encoder = encoder(quality, 0);
+            let stream = encoder.encode_block(&[], true).expect("encoding failed");
+            assert!(!stream.is_empty());
+            assert!(encoder.is_finished());
+        }
+    }
+
+    #[test]
+    fn the_block_size_limit_follows_the_quality() {
+        assert_eq!(encoder(QualityLevel::Q3, 0).block_size_limit(), 1 << 14);
+        assert_eq!(encoder(QualityLevel::Q4, 0).block_size_limit(), 1 << 16);
+        assert_eq!(encoder(QualityLevel::Q5, 0).block_size_limit(), 1 << 16);
+    }
+
+    #[test]
+    fn every_backend_produces_the_same_stream() {
+        let data: Vec<u8> = (0..200_000u32).map(|i| (i * 7 % 253) as u8).collect();
+        for quality in [QualityLevel::Q3, QualityLevel::Q4, QualityLevel::Q5] {
+            let params = CompressParams::new(quality, WindowBits::DEFAULT);
+            let mut streams = Vec::new();
+            for level in [Level::new(), Level::baseline(), Level::fallback()] {
+                let mut encoder =
+                    GreedyEncoder::new(level, &params, data.len()).expect("supported quality");
+                let limit = encoder.block_size_limit();
+                let mut out = Vec::new();
+                let mut offset = 0usize;
+                loop {
+                    let take = (data.len() - offset).min(limit);
+                    let is_last = offset + take == data.len();
+                    out.extend_from_slice(
+                        encoder
+                            .encode_block(&data[offset..offset + take], is_last)
+                            .expect("encoding failed"),
+                    );
+                    offset += take;
+                    if is_last {
+                        break;
+                    }
+                }
+                streams.push(out);
+            }
+            assert!(
+                streams.windows(2).all(|pair| pair[0] == pair[1]),
+                "quality {quality:?} differed between backends"
+            );
+        }
+    }
+}
