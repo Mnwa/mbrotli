@@ -21,9 +21,10 @@ use std::mem::discriminant;
 pub mod targets;
 
 /// Every quality this crate implements.
-pub const IMPLEMENTED_QUALITIES: [QualityLevel; 11] = [
+pub const IMPLEMENTED_QUALITIES: [QualityLevel; 12] = [
     QualityLevel::Q0,
     QualityLevel::Q1,
+    QualityLevel::Q2,
     QualityLevel::Q3,
     QualityLevel::Q4,
     QualityLevel::Q5,

@@ -89,6 +89,20 @@ impl RingBuffer {
         self.cur_size != 0
     }
 
+    /// Restores the window to the state its constructor left it in.
+    ///
+    /// The bytes are left where they are rather than wiped. Nothing can read
+    /// them: a backward reference is bounded by the distance to the start of
+    /// the stream, so the next stream never looks further back than it has
+    /// written, and `write` re-establishes the head bytes, the tail mirror and
+    /// the sentinel while `clear_margin` re-zeroes the margin. Wiping a window
+    /// that can be mebibytes wide would cost more than the allocation reuse
+    /// saves.
+    pub(crate) fn reset(&mut self) {
+        self.cur_size = 0;
+        self.pos = 0;
+    }
+
     /// Grows the backing storage to `buflen` bytes (`RingBufferInitBuffer`).
     fn init_buffer(&mut self, buflen: usize) {
         let mut fresh = vec![0u8; HEAD_ROOM + buflen + SLACK_FOR_EIGHT_BYTE_HASHING];

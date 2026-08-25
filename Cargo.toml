@@ -2,6 +2,23 @@
 name = "mbrotli"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+description = "Brotli compression in safe Rust, byte-identical to Google's reference encoder"
+repository = "https://github.com/Mnwa/mbrotli"
+homepage = "https://github.com/Mnwa/mbrotli"
+documentation = "https://docs.rs/mbrotli"
+readme = "README.md"
+keywords = ["brotli", "compression", "encoder", "simd", "rfc9841"]
+categories = ["compression", "algorithms"]
+exclude = [
+    "architecture/**",
+    "brotli-ffi/**",
+    "docs/**",
+    "fuzz/**",
+    "specifications/**",
+    "target/**",
+]
 
 [dependencies]
 
@@ -12,8 +29,12 @@ features = ["libm"]
 [dependencies.thiserror]
 version = "2"
 
+# Profiling instrumentation only. Optional so an ordinary dependant never pulls
+# the proc-macro crate into its tree; every `#[hotpath::measure]` anchor in
+# `src/` is written as `#[cfg_attr(feature = "hotpath", hotpath::measure)]`.
 [dependencies.hotpath]
 version = "0.24"
+optional = true
 
 [dev-dependencies]
 
@@ -35,9 +56,12 @@ name = "compress"
 harness = false
 
 [features]
-hotpath = ["hotpath/hotpath"]
-hotpath-cpu = ["hotpath/hotpath-cpu"]
-hotpath-alloc = ["hotpath/hotpath-alloc"]
+# `hotpath` turns the measurement anchors on; the two mode features add a
+# sampling mode on top of it, so each implies `hotpath` rather than standing
+# alone with an inert runtime.
+hotpath = ["dep:hotpath", "hotpath/hotpath"]
+hotpath-cpu = ["hotpath", "hotpath/hotpath-cpu"]
+hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
 
 [workspace]
 members = ["brotli-ffi"]

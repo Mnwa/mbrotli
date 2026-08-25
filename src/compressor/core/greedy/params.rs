@@ -15,6 +15,7 @@
 use crate::compressor::core::rfc9841::window::ResolvedWindow;
 use crate::compressor::core::shared::constants::WINDOW_GAP;
 use crate::compressor::core::shared::distance::{DistanceParams, MAX_NDIRECT, MAX_NPOSTFIX};
+use crate::compressor::shared::SharedBrotliError;
 use crate::compressor::{
     BrotliCompressError, CompressMode, CompressParams, DistanceCodes, QualityLevel,
 };
@@ -34,9 +35,17 @@ pub(crate) const MIN_QUALITY_FOR_HQ_CONTEXT_MODELING: usize = 7;
 /// Symbols buffered before a quality below four has to flush.
 pub(crate) const MAX_NUM_DELAYED_SYMBOLS: usize = 0x2FFF;
 
-/// The seven qualities this encoder implements.
+/// Highest quality that may store a meta-block with static entropy codes.
+///
+/// Mirrors `MAX_QUALITY_FOR_STATIC_ENTROPY_CODES`.
+pub(crate) const MAX_QUALITY_FOR_STATIC_ENTROPY_CODES: usize = 2;
+
+/// The eight qualities this encoder implements.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(crate) enum GreedyQuality {
+    /// Quick matcher, and meta-blocks stored with the format's fixed command
+    /// and distance codes while the command count stays small.
+    Q2,
     /// Quick matcher, trivial meta-block storage.
     Q3,
     /// Block splitting, histogram optimisation, distance parameters.
@@ -58,6 +67,7 @@ impl GreedyQuality {
     /// Returns the numeric quality the reference formulas are written in.
     pub(crate) const fn number(self) -> usize {
         match self {
+            Self::Q2 => 2,
             Self::Q3 => 3,
             Self::Q4 => 4,
             Self::Q5 => 5,
@@ -91,6 +101,14 @@ impl GreedyQuality {
         self.number() >= MIN_QUALITY_FOR_HQ_CONTEXT_MODELING
     }
 
+    /// Returns whether the meta-block may be stored with static entropy codes.
+    ///
+    /// Mirrors the `quality <= MAX_QUALITY_FOR_STATIC_ENTROPY_CODES` test in
+    /// `WriteMetaBlockInternal`.
+    pub(crate) const fn uses_static_entropy_codes(self) -> bool {
+        self.number() <= MAX_QUALITY_FOR_STATIC_ENTROPY_CODES
+    }
+
     /// Returns how many cached distances the matcher probes.
     ///
     /// `ChooseHasher` uses four below quality seven, ten below quality nine
@@ -109,7 +127,7 @@ impl GreedyQuality {
 impl TryFrom<QualityLevel> for GreedyQuality {
     type Error = BrotliCompressError;
 
-    /// Routes qualities three to nine to the greedy path.
+    /// Routes qualities two to nine to the greedy path.
     ///
     /// # Errors
     ///
@@ -117,6 +135,7 @@ impl TryFrom<QualityLevel> for GreedyQuality {
     /// quality, which belongs to a different encoder.
     fn try_from(value: QualityLevel) -> Result<Self, Self::Error> {
         match value {
+            QualityLevel::Q2 => Ok(Self::Q2),
             QualityLevel::Q3 => Ok(Self::Q3),
             QualityLevel::Q4 => Ok(Self::Q4),
             QualityLevel::Q5 => Ok(Self::Q5),
@@ -181,6 +200,9 @@ pub(crate) const fn choose_distance_params(
 /// [`BucketMatcher`]: super::hashers::BucketMatcher
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HasherPlan {
+    /// Quality 2: quick matcher, sixteen bucket bits, a single candidate slot
+    /// and a static-dictionary probe.
+    H2,
     /// Quality 3: quick matcher, sixteen bucket bits, one candidate slot.
     H3,
     /// Quality 4 below the size-hint threshold: quick matcher with a
@@ -237,14 +259,17 @@ const fn max_hops(quality: GreedyQuality) -> usize {
 /// Selects the matcher for `quality`, `lgwin` and `size_hint`.
 ///
 /// Mirrors `ChooseHasher` restricted to qualities three to nine. The
-/// large-window matchers `H35`, `H55` and `H65` are unreachable because the
-/// public window size stops at twenty-four bits.
+/// large-window matchers `H35`, `H55` and `H65` are unreachable because
+/// retained history is capped at thirty bits by `ResolvedWindow::encoder_bits`,
+/// however wide a window the stream header declares.
 pub(crate) const fn choose_hasher(
     quality: GreedyQuality,
     lgwin: usize,
     size_hint: usize,
 ) -> HasherPlan {
     match quality {
+        // `ChooseHasher` sets the type to the quality itself below five.
+        GreedyQuality::Q2 => HasherPlan::H2,
         GreedyQuality::Q3 => HasherPlan::H3,
         GreedyQuality::Q4 => {
             if size_hint >= LARGE_INPUT_SIZE_HINT {
@@ -284,7 +309,7 @@ pub(crate) const fn choose_hasher(
 }
 
 /// Every parameter the greedy encoder needs, already sanitised.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GreedyParams {
     /// Quality this encoder runs at.
     pub(crate) quality: GreedyQuality,
@@ -320,6 +345,17 @@ impl GreedyParams {
         size_hint: usize,
     ) -> Result<Self, BrotliCompressError> {
         let quality = GreedyQuality::try_from(params.quality())?;
+        if quality.uses_static_entropy_codes() && params.lgwin().is_large() {
+            // The fixed distance code this quality may fall back to is built
+            // for the RFC 7932 alphabet, so it cannot carry the wider one.
+            // `SanitizeParams` drops the request silently; refusing is this
+            // crate's contract, and it has to happen here rather than only in
+            // the one-shot entry points so the streaming adapters agree.
+            return Err(SharedBrotliError::UnsupportedLargeWindow {
+                quality: usize::from(params.quality()),
+            }
+            .into());
+        }
         let window = ResolvedWindow::new(params);
         let lgwin = window.encoder_bits();
         let lgblock = compute_lgblock(quality, params.lgblock().map(usize::from), lgwin);
@@ -426,6 +462,7 @@ mod tests {
     #[test]
     fn quality_routing_accepts_only_the_greedy_range() {
         for (public, expected) in [
+            (QualityLevel::Q2, GreedyQuality::Q2),
             (QualityLevel::Q3, GreedyQuality::Q3),
             (QualityLevel::Q4, GreedyQuality::Q4),
             (QualityLevel::Q5, GreedyQuality::Q5),
@@ -437,8 +474,8 @@ mod tests {
             assert_eq!(GreedyQuality::try_from(public).ok(), Some(expected));
         }
         assert!(matches!(
-            GreedyQuality::try_from(QualityLevel::Q2),
-            Err(BrotliCompressError::UnsupportedQuality(2))
+            GreedyQuality::try_from(QualityLevel::Q1),
+            Err(BrotliCompressError::UnsupportedQuality(1))
         ));
         assert!(matches!(
             GreedyQuality::try_from(QualityLevel::Q11),

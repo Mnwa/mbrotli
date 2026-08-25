@@ -434,7 +434,7 @@ fn store_code_length_code(num_codes: i32, bitdepth: &[u8; CODE_LENGTH_CODES], w:
 }
 
 /// Serialises `depths[..num]` as a Brotli prefix-code description.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn store_huffman_tree(
     depths: &[u8],
     num: usize,
@@ -515,7 +515,7 @@ fn store_simple_code(
 /// Mirrors `BrotliBuildAndStoreHuffmanTreeFast`: leaves are ordered by count
 /// only, the internal depth limit is fourteen, and the emitted description uses
 /// the static code-length code.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn build_and_store_huffman_tree_fast(
     tree: &mut [HuffmanNode],
     histogram: &[u32],

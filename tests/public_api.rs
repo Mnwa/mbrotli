@@ -148,28 +148,35 @@ fn the_slice_entry_point_reports_a_buffer_that_is_one_byte_short() {
 }
 
 #[test]
-fn unsupported_qualities_are_reported_by_every_entry_point() {
+fn every_quality_the_format_defines_is_reachable_from_every_entry_point() {
     let compressor = Brotli::default().compressor();
-    // Quality two is the only quality the format defines that no encoder here
-    // implements.
-    let parameters = params(QualityLevel::Q2, 22);
-    let mut buffer = [0u8; 64];
+    let mut buffer = [0u8; 256];
 
-    assert!(matches!(
-        compressor.compress(parameters, b"data"),
-        Err(BrotliCompressError::UnsupportedQuality(2))
-    ));
-    assert!(matches!(
-        compressor.compress_to_slice(parameters, b"data", &mut buffer),
-        Err(BrotliCompressError::UnsupportedQuality(2))
-    ));
+    for quality in IMPLEMENTED_QUALITIES {
+        let parameters = params(quality, 22);
+        let expected = compressor
+            .compress(parameters, b"data data data")
+            .unwrap_or_else(|error| panic!("q{quality:?}: {error}"));
+        assert!(!expected.is_empty(), "q{quality:?} produced nothing");
 
-    let mut sink = compressor.compress_writer(parameters, Vec::new());
-    assert!(sink.write_all(b"data").is_err());
+        let written = compressor
+            .compress_to_slice(parameters, b"data data data", &mut buffer)
+            .unwrap_or_else(|error| panic!("q{quality:?} slice: {error}"));
+        assert_eq!(&buffer[..written], expected.as_slice(), "q{quality:?}");
 
-    let mut source = compressor.compress_reader(parameters, &b"data"[..]);
-    let mut out = Vec::new();
-    assert!(source.read_to_end(&mut out).is_err());
+        let mut sink = compressor.compress_writer(parameters, Vec::new());
+        sink.write_all(b"data data data")
+            .unwrap_or_else(|error| panic!("q{quality:?} writer: {error}"));
+        sink.finish()
+            .unwrap_or_else(|error| panic!("q{quality:?} finish: {error}"));
+
+        let mut source = compressor.compress_reader(parameters, &b"data data data"[..]);
+        let mut out = Vec::new();
+        source
+            .read_to_end(&mut out)
+            .unwrap_or_else(|error| panic!("q{quality:?} reader: {error}"));
+        assert!(!out.is_empty(), "q{quality:?} reader produced nothing");
+    }
 }
 
 #[test]

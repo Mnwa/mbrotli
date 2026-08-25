@@ -285,6 +285,7 @@ pub(crate) fn extend_last_command(
     ringbuffer: &[u8],
     mask: usize,
     last_processed_pos: u64,
+    attached: Option<&crate::compressor::core::rfc9841::context::SharedContextInner>,
     span: &mut super::ringbuffer::BlockSpan,
 ) {
     let max_backward_distance = (1u64 << lgwin) - 16;
@@ -314,6 +315,17 @@ pub(crate) fn extend_last_command(
                 span.bytes -= 1;
                 span.position += 1;
             }
+        } else {
+            extend_into_prefix(
+                command,
+                attached,
+                cmd_dist,
+                max_distance,
+                last_copy_len,
+                ringbuffer,
+                mask,
+                span,
+            );
         }
         // The copy length changed, so the command symbol has to be recomputed.
         // `ExtendLastCommand` reads the length-code delta as an unsigned field
@@ -325,6 +337,64 @@ pub(crate) fn extend_last_command(
                 + (command.copy_len >> COPY_LEN_CODE_SHIFT) as usize,
             command.distance_code() == 0,
         );
+    }
+}
+
+/// Runs a copy that addresses the attached dictionary on past its command.
+///
+/// The distance is beyond the window, so it addresses the concatenated prefix
+/// instead. `ExtendLastCommand` walks that concatenation across attachment
+/// seams — unlike the *search*, which stops at the end of the attachment a
+/// candidate was found in.
+///
+/// Does nothing when nothing is attached, when the distance lands past the
+/// concatenation, or when the copy already reached back further than the
+/// window boundary, which are the reference's three guards.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the branch of ExtendLastCommand it mirrors needs all of them"
+)]
+fn extend_into_prefix(
+    command: &mut Command,
+    attached: Option<&crate::compressor::core::rfc9841::context::SharedContextInner>,
+    cmd_dist: u64,
+    max_distance: u64,
+    last_copy_len: u64,
+    ringbuffer: &[u8],
+    mask: usize,
+    span: &mut super::ringbuffer::BlockSpan,
+) {
+    let Some(context) = attached else {
+        return;
+    };
+    let compound = context.total_size() as u64;
+    let reach = cmd_dist - max_distance;
+    if reach > compound || last_copy_len >= reach {
+        return;
+    }
+    let sources = context.dictionaries().prefix();
+    let mut address = compound - reach + last_copy_len;
+    loop {
+        let run = sources.run_from(address);
+        if run.is_empty() {
+            return;
+        }
+        for &byte in run {
+            if span.bytes == 0 {
+                return;
+            }
+            let here = usize::try_from(u64::from(span.position)).unwrap_or(0);
+            let Some(&current) = ringbuffer.get(here & mask) else {
+                return;
+            };
+            if current != byte {
+                return;
+            }
+            command.copy_len += 1;
+            span.bytes -= 1;
+            span.position += 1;
+            address += 1;
+        }
     }
 }
 

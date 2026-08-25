@@ -8,7 +8,7 @@ features:
 | --- | --- |
 | Large Window Brotli | **implemented** for qualities 3 to 11 |
 | LZ77 prefix dictionaries: context, indexes, addressing, search | **implemented** |
-| LZ77 prefix dictionaries: use by an encoder | not implemented — refused, not ignored |
+| LZ77 prefix dictionaries: use by an encoder | **implemented** for qualities 5 to 11 — refused below, not ignored |
 | Serialized shared dictionaries | not implemented |
 | Framing container format | not implemented |
 
@@ -52,7 +52,11 @@ graph TD
         inner["core::rfc9841::context<br/>SharedContextInner, Budget,<br/>SharedDictionaryData,<br/>PreparedDictionaryIndexes"]
         pfx["core::rfc9841::prefix<br/>PrefixSources<br/>(addressing, match scan)"]
         prep["core::rfc9841::prepared<br/>PreparedPrefix, Candidates"]
-        driver["core::driver<br/>check_large_window, check_shared,<br/>quality routing"]
+        search["core::rfc9841::search<br/>find_match, find_all_matches<br/>(the match finders' view)"]
+    driver["core::driver<br/>check_large_window, check_shared,<br/>quality routing"]
+    gsearch["core::greedy::backward_references<br/>(q5 to q9)"]
+    hsearch["core::hq::zopfli<br/>(q10, q11)"]
+    cmd["core::shared::command<br/>extend_last_command"]
         dist["core::shared::distance<br/>DistanceParams, distance_code_limit"]
         mlen["prefix::common_prefix_len<br/>(scalar word scan)"]
         gparams["core::greedy::params::GreedyParams"]
@@ -76,6 +80,12 @@ graph TD
     rfc --> inner
     inner --> pfx
     inner --> prep
+    inner --> search
+    search --> pfx
+    search --> prep
+    search --> gsearch
+    search --> hsearch
+    search --> cmd
     pfx --> mlen
     window --> gparams
     window --> hparams
@@ -91,7 +101,7 @@ graph TD
     driver -->|refuses a non-empty context| err
 
     classDef privateNode fill:#f6e8c3,stroke:#8a6d3b;
-    class rfc,window,inner,pfx,prep,driver,dist,mlen,gparams,hparams,fast,gmeta,bitstream,ring privateNode;
+    class rfc,window,inner,pfx,prep,search,driver,dist,mlen,gparams,hparams,fast,gmeta,bitstream,ring,gsearch,hsearch,cmd privateNode;
 ```
 
 ## 2. Selecting a large window
@@ -434,14 +444,15 @@ sequenceDiagram
     I-->>C: Option<PrefixMatch { offset, length }>
 ```
 
+This is the standalone probe `Compressor::longest_prefix_match` exposes, not
+the search a match finder runs; that one is §5.5.
+
 The scan is **scalar**, and its own — a whole-word compare with a byte tail,
-not the vector kernel `core::shared::match_len` gives the encoders. Two reasons.
-No encoder consults a prefix dictionary yet, so there is no profile that could
-justify vectorising this, and this repository's rule is to measure first.
-And reaching for the encoders' kernel meant refactoring it, which cost about
-6% of quality 1: `docs/rfc9841_benchmarks.md` records the measurement and the
-symmetric A/B that separated it from machine drift. The prefix search now
-touches no file any encoder compiles.
+not the vector kernel `core::shared::match_len` gives the encoders. Reaching
+for the encoders' kernel meant refactoring it, which cost about 6% of quality
+1: `docs/rfc9841_benchmarks.md` records the measurement and the symmetric A/B
+that separated it from machine drift. The prefix search therefore touches no
+file any encoder compiles.
 
 Being scalar, the answer cannot depend on the backend, so there is no identity
 test to run for it. The tie rule is the reference's: strictly-longer wins, so
@@ -454,19 +465,73 @@ that *starts* a match must still be indexed, so its own eight hashed bytes have
 to lie inside one attachment; that is the reference's behaviour too, and is
 recorded as decision D6.
 
-### 5.5. What a shared compression call does
+### 5.5. How a match finder consults a prefix
+
+`core::rfc9841::search` is the attached context in the form a match finder
+needs it. It ports `FindCompoundDictionaryMatch`,
+`LookupCompoundDictionaryMatch`, `FindAllCompoundDictionaryMatches` and
+`LookupAllCompoundDictionaryMatches`.
+
+The whole integration rests on one number, the reference's `gap`: the total
+attached bytes. The concatenated prefix ends exactly where the stream begins,
+so a backward distance addresses the window while it is at most
+`max_ring_buffer_distance`, and the prefix beyond that. Written the reference's
+way, logical address zero of attachment `d` sits at distance
+`max_ring_buffer_distance + gap - chunk_start(d)`.
+
+```mermaid
+graph LR
+    subgraph addr["one distance axis"]
+        direction RL
+        a0["attachment 0"] --- a1["attachment 1"] --- a2["attachment 2"] --- win["the stream's own window"] --- cur["current position"]
+    end
+    note["distance grows leftwards:<br/>0 at the position,<br/>max_ring_buffer_distance at the window edge,<br/>+ gap at the far end of attachment 0"]
+```
+
+Three things shift together wherever a prefix is attached, and all three
+collapse to their ordinary form when `gap` is zero:
+
+| Site | Without a prefix | With one |
+| --- | --- | --- |
+| Static-dictionary boundary handed to the matcher | `dictionary_start` | `dictionary_start + gap` |
+| Prefix search boundary | — | `dictionary_start` |
+| `compute_distance_code`, distance-cache guard | `dictionary_start` | `dictionary_start + gap` |
+
+`find_match` improves a `SearchResult` in place, attachment by attachment in
+attachment order, replacing the incumbent only on a strictly higher score — so
+a tie leaves the earlier finder's match. It probes the four cached distances
+first, exactly as the reference does, then walks the bucket chain behind a
+four-byte pre-filter at `best_len`. `find_all_matches` is the high-quality
+sibling: no cached distances, every length improvement reported, at most
+sixty-four per position, with `min_length` carried forward between attachments.
+
+A candidate is measured **inside the attachment it was found in** and stops at
+its end, even though the addressing spans every attachment. That is the
+reference's behaviour, not an omission. The one place a copy does run across a
+seam is `extend_last_command`, which continues an already emitted command into
+the concatenation using `PrefixSources::run_from`.
+
+Which qualities reach this at all is fixed by the reference: it compiles its
+compound-dictionary search only for `H5`, `H6`, `H40`, `H41`, `H42`, `H55`,
+`H65` and the binary tree, so qualities five and above consult a prefix and
+qualities zero to four have nowhere to put a match. Where the reference then
+silently ignores the dictionary, this crate refuses.
+
+### 5.6. What a shared compression call does
 
 ```mermaid
 stateDiagram-v2
     [*] --> Q: compress_shared / compress_shared_to_slice
     Q --> Mismatch: params.quality() > context.max_quality()
     Mismatch --> [*]: Err(Shared(SharedContextQualityMismatch))
-    Q --> Q2: quality 2
-    Q2 --> [*]: Err(UnsupportedQuality(2))
-    Q --> LW: large window at quality 0 or 1
+    Q --> LW: large window at quality 0, 1 or 2
     LW --> [*]: Err(Shared(UnsupportedLargeWindow))
     Q --> NonEmpty: context has prefix bytes
-    NonEmpty --> [*]: Err(Shared(UnsupportedSharedContextForQuality))
+    NonEmpty --> Low: quality below 5
+    Low --> [*]: Err(Shared(UnsupportedSharedContextForQuality))
+    NonEmpty --> Attached: quality 5 to 11
+    Attached --> Consulted: every match finder consults the prefix
+    Consulted --> [*]: a stream whose distances may address the prefix
     Q --> Empty: context is empty
     Empty --> Ordinary: the ordinary driver, unchanged
     Ordinary --> [*]: byte-identical to compress(params, src)
@@ -476,17 +541,21 @@ The order is fixed: the context's prepared quality is checked by the public
 entry point, which is the only layer that knows it; the rest is checked in
 `core::driver::check_shared`. Everything runs before any input is consumed.
 
-A non-empty context is **refused, not ignored**. A stream compressed without
-the dictionary it was handed decodes perfectly well on its own, so a silent
-drop would only surface as corruption at a decoder that *did* attach the
-dictionary. `shared_context::an_attached_dictionary_is_refused_rather_than_ignored`
-asserts the refusal at all eleven implemented qualities.
+Below quality five a non-empty context is **refused, not ignored**. A stream
+compressed without the dictionary it was handed decodes perfectly well on its
+own, so a silent drop would only surface as corruption at a decoder that *did*
+attach the dictionary.
 
 An empty context takes the ordinary driver with no wrapper and no extra
-allocation, so it emits exactly the bytes `compress` emits — for ordinary and
+allocation — `attachment` maps it to `None` rather than to an empty
+attachment — so it emits exactly the bytes `compress` emits, for ordinary and
 large-window streams alike.
 
-### 5.6. Reuse determinism
+An empty *input* keeps the one-shot shortcut and emits the single byte
+`BrotliEncoderCompress` emits, dictionary or not: a stream with no bytes in it
+cannot reference one. See decision D5.
+
+### 5.7. Reuse determinism
 
 Nothing a context owns is stream state. There is no LZ77 history in it, no
 distance cache, no pending command, no meta-block state and no input position —
@@ -507,11 +576,9 @@ land with the match finders that need them.
 stateDiagram-v2
     [*] --> Check: compress / compress_to_slice
     Check --> Ordinary: lgwin() is not large
-    Check --> Q01: quality 0 or 1
-    Check --> Q2: quality 2
+    Check --> Q012: quality 0, 1 or 2
     Check --> Large: quality 3..=11
-    Q01 --> [*]: Err(Shared(UnsupportedLargeWindow { quality }))
-    Q2 --> [*]: Err(UnsupportedQuality(2))
+    Q012 --> [*]: Err(Shared(UnsupportedLargeWindow { quality }))
     Ordinary --> Empty: input empty
     Large --> Empty: input empty
     Empty --> [*]: one byte, 0x06
@@ -524,12 +591,15 @@ The check runs *before* the empty-input shortcut, so an explicit request is
 never dropped on the way to a one-byte stream; and it inspects only the field
 this extension added, so nothing that was constructible before reaches it. The
 streaming adapters build their encoder lazily and reach the same refusal through
-`FastEncoder::new`, which is why `compress_writer` did not have to become
-fallible to construct.
+`FastEncoder::new` and `GreedyParams::new`, which is why `compress_writer` did
+not have to become fallible to construct — and why the check has to exist in
+both places rather than only in the driver.
 
-Qualities 0 and 1 are refused rather than downgraded because their static
-entropy model hard-codes a 64-symbol distance alphabet; see decision D4 for what
-lifting that would take.
+Qualities 0, 1 and 2 are refused rather than downgraded because all three may
+write distances through a code built for the 64-symbol RFC 7932 alphabet: the
+fast qualities always do, and quality 2 does whenever a meta-block carries at
+most a hundred and twenty-eight commands. `SanitizeParams` drops the request
+silently instead; see decision D4 for what lifting the restriction would take.
 
 ## 7. Error propagation
 
@@ -583,40 +653,44 @@ without moving the method.
 | `core::rfc9841::prefix` unit tests | attachment ordering; addressing over empty attachments; the distance round trip; saturating arithmetic at `u64::MAX`; the match scan against a materialised oracle over every start, seam and limit; the word scan against a byte-by-byte comparison at every shared length and limit |
 | `core::rfc9841::prepared` unit tests | the shape ladder; every hashable position indexed once; newest-first, capped bucket chains; **entry-for-entry equality with `CreatePreparedDictionary`** through the workspace shim, over six corpora including one that triggers shape scaling |
 | `core::rfc9841::context` unit tests | attachment order and per-attachment indexes; every construction limit; the allocation estimate bounding the real size; the search's longest-match, seam-crossing and longest-over-nearest behaviour |
-| `tests/shared_context.rs` | the public surface end to end: accessors, the fifteen-dictionary limit, every limit refusal, the quality-mismatch refusal on all three entry points, the refusal of a non-empty context at all eleven qualities, empty-context byte equality with `compress` over the structural corpora at every quality with a C round trip, large-window equality, slice and vector agreement, reuse determinism across two kinds of failure, `Send` across threads and behind `Arc<Mutex<_>>`, the prefix search and the distance mapping |
+| `tests/shared_context.rs` | the public surface end to end: accessors, the fifteen-dictionary limit, every limit refusal, the quality-mismatch refusal on all three entry points, empty-context byte equality with `compress` over the structural corpora at every quality with a C round trip, large-window equality, slice and vector agreement, reuse determinism across two kinds of failure, `Send` across threads and behind `Arc<Mutex<_>>`, the prefix search and the distance mapping |
+| `tests/shared_dictionary.rs` | **byte identity with the C encoder** over six dictionary-and-payload shapes at qualities 5 to 11, with the same bytes prepared by `BrotliEncoderPrepareDictionary` and attached by `BrotliEncoderAttachPreparedDictionary`; a round trip through the C decoder with the same dictionaries attached; a ratio floor that fails if the dictionary were ignored; the refusal below quality 5; empty-context and empty-input behaviour; slice and vector agreement |
 | `tests/differential_c.rs`, `tests/roundtrip.rs`, and the rest | unchanged, and still byte-identical to the C encoder — which is the evidence that no ordinary stream moved |
 
 ## Known gaps
 
-- **No encoder consults an attached dictionary.** The context, the prepared
-  indexes, the addressing and the search all exist and are verified against the
-  C reference, but no match finder in `core::fast`, `core::greedy` or
-  `core::hq` calls into them, and no command carries a prefix distance. Until
-  they do, `compress_shared` and `compress_shared_to_slice` refuse a non-empty
-  context with `UnsupportedSharedContextForQuality` rather than emitting a
-  stream that ignored it.
+- **An attached prefix reaches qualities 5 to 11 only.** The reference compiles
+  its compound-dictionary search for `H5`, `H6`, `H40`, `H41`, `H42`, `H55`,
+  `H65` and the binary tree, so qualities 0 to 4 have no match finder that
+  could carry a prefix match. Where the reference then ignores the dictionary,
+  `compress_shared` and `compress_shared_to_slice` refuse with
+  `UnsupportedSharedContextForQuality`.
 - **No streaming shared adapters.** `SharedCompressorWriter` and
-  `SharedCompressorReader` do not exist; they land with the encoder
-  integration, because a streaming adapter that refused every non-empty context
-  would hold an exclusive borrow for a session that cannot happen.
+  `SharedCompressorReader` do not exist. The encoders take the context per
+  call rather than holding it, so an adapter would have to keep the context's
+  exclusive borrow for its whole life — a separate API decision, not a missing
+  mechanism.
+- **The prefix is not consulted by the workspace-reusing entry points.**
+  `compress_with` and `compress_to_slice_with` take no context; a shared call
+  builds its encoder fresh.
 - **No serialized shared dictionaries.** `SharedDictionary`, custom word lists,
   custom transform lists and the context map are not implemented, so
-  `SharedContextBuilder::add_serialized_dictionary` does not exist and
-  `SharedContext::has_custom_static_dictionary` is always `false`.
+  `SharedContextBuilder::add_serialized_dictionary` does not exist,
+  `SharedContext::has_custom_static_dictionary` is always `false`, and the
+  reference's `contextual.dict[dict_id]` selection has no counterpart.
 - **Three of the six specified limits are absent.** `SharedContextLimits`
   carries the three that something checks today. `max_transformed_word_bytes`
   and `max_trie_nodes` land with the serialized dictionary;
-  `max_reusable_workspace_bytes` lands with the reusable encoder workspace.
-- **No reusable workspace, so no session guard.** A context holds nothing a
-  call can disturb, which is why reuse determinism holds by construction and
-  why the generation counter and RAII idle guard of the specification are not
-  written yet.
+  `max_reusable_workspace_bytes` lands with a workspace that can hold a
+  context.
+- **No session guard.** A context holds nothing a call can disturb, which is
+  why reuse determinism holds by construction and why the generation counter
+  and RAII idle guard of the specification are not written yet.
 - **No framing container.** No signature, chunks, metadata, references, central
   directory or final footer. `Compressor::framed_writer` does not exist.
 - **No varint module.** It lands with the serialized dictionary parser, its
   first consumer.
-- **Large window is refused at qualities 0 and 1**, and quality 2 has no
-  encoder at all. See decision D4.
+- **Large window is refused at qualities 0, 1 and 2.** See decision D4 and §6.
 - **Declared windows above 30 bits are not decoded end to end** by any
   implementation in this repository; the pinned C decoder rejects them and this
   crate has no decoder. See decision D3 for what is checked instead.
@@ -624,5 +698,16 @@ without moving the method.
   than 31 bits, so window and distance arithmetic is proven to fit a `usize`
   rather than carried in `u64`. Widening the history past 30 bits would make
   64-bit positions load-bearing and is a separate change. See decision D2.
-- **An empty input ignores the declared window** in the one-shot entry points,
-  matching the reference's shortcut. See decision D5.
+- **An empty input ignores the declared window and any attached dictionary** in
+  the one-shot entry points, matching the reference's shortcut. See decision
+  D5.
+- **The prefix path is measured but not tuned.** Consulting a prefix costs
+  1.26x to 1.84x the time of compressing the same payload without one, for 6%
+  to 9% off the output; against the reference's own compound dictionary the
+  path sits at 0.69x to 0.90x, which is where the encoder around it sits
+  anyway. See [`docs/api_benchmarks.md`](../docs/api_benchmarks.md) §3. Nothing
+  in it has been optimised against that measurement: the chain walk and the
+  byte comparison are scalar, and the high-quality merge allocates a vector per
+  position that contributes a match. The ordinary path is unaffected —
+  `attachment` hands the encoders `None`, and every prefix branch is behind
+  that or behind `ENABLE_PREFIX`.

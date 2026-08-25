@@ -61,7 +61,7 @@ fn map_static_contexts(num_contexts: usize, static_map: &[u32; 64], mb: &mut Met
 /// Mirrors `BrotliBuildMetaBlockGreedy`. `pos` is the wrapped position of the
 /// first literal, and `prev_byte`/`prev_byte2` are the two bytes before it, so
 /// the first literal's context is the same one the decoder will compute.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn build_meta_block_greedy(
     ringbuffer: &[u8],
     pos: usize,

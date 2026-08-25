@@ -138,10 +138,8 @@ exists yet.
 
 ## D4 — Large window at qualities 0, 1 and 2 (checked 2026-08-24)
 
-Qualities 0 and 1 report
+Qualities 0, 1 and 2 all report
 `SharedBrotliError::UnsupportedLargeWindow` rather than emitting a stream.
-Quality 2 reports `UnsupportedQuality(2)`, which is the more fundamental
-problem: it has no encoder at all.
 
 **Reason.** The pinned C encoder clears `large_window` for every quality at or
 below `MAX_QUALITY_FOR_STATIC_ENTROPY_CODES` (`SanitizeParams`,
@@ -168,7 +166,7 @@ before this change reaches the new check.
 
 For an empty input every quality emits the single byte `0x06` — an ordinary
 RFC 7932 stream header with `ISLAST` and `ISLASTEMPTY` set — even when a large
-window was requested.
+window was requested, and even when a dictionary is attached.
 
 **Reason.** This is the reference's own one-shot shortcut
 (`BrotliEncoderCompress`, `c/enc/encode.c`) and predates this change; altering

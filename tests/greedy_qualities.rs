@@ -193,10 +193,13 @@ fn font_mode_uses_the_reference_distance_parameters() {
         generic.mode = CompressMode::Generic;
         let with_font = compressor.compress(font.rust(), &data).expect("font");
         let with_generic = compressor.compress(generic.rust(), &data).expect("generic");
-        if quality == QualityLevel::Q3 {
+        if quality <= QualityLevel::Q3 {
+            // `MIN_QUALITY_FOR_NONZERO_DISTANCE_PARAMS` is four, so qualities
+            // two and three encode distances with the default alphabet however
+            // the mode is set.
             assert_eq!(
                 with_font, with_generic,
-                "quality three must ignore the font distance parameters"
+                "quality {quality:?} must ignore the font distance parameters"
             );
         } else {
             assert_ne!(

@@ -20,7 +20,8 @@ use super::zopfli::{
     ZopfliState, ZopfliWorkspace, create_hq_zopfli_backward_references,
     create_zopfli_backward_references,
 };
-use crate::compressor::core::shared::bits::BitWriter;
+use crate::compressor::core::rfc9841::context::SharedContextInner;
+use crate::compressor::core::shared::bits::{BYTE_PADDING_SLACK, BitWriter, inject_byte_padding};
 use crate::compressor::core::shared::bitstream::{MetaBlockWriter, store_uncompressed_meta_block};
 use crate::compressor::core::shared::command::{Command, extend_last_command};
 use crate::compressor::core::shared::constants::{OUTPUT_RESERVE_CONST, OUTPUT_SLACK};
@@ -119,19 +120,118 @@ impl HqEncoder {
         self.finished
     }
 
+    /// Returns the parameters this encoder was resolved for.
+    ///
+    /// A workspace compares these against what a new call would resolve to:
+    /// equal parameters mean an equally shaped encoder, so resetting this one
+    /// gives the same stream a fresh one would.
+    pub(crate) const fn params(&self) -> &HqParams {
+        &self.params
+    }
+
+    /// Restores the encoder to the state its constructor left it in.
+    ///
+    /// Every allocation survives. The window, the binary tree and the
+    /// per-stream position counters go back to zero; the Zopfli workspace, the
+    /// meta-block builder and the writer are per-meta-block state that is
+    /// already rebuilt on every use, so nothing there has to be undone.
+    pub(crate) fn reset(&mut self) {
+        let (last_bytes, last_bytes_bits) = self.params.window.header();
+        self.ringbuffer.reset();
+        // The binary tree needs no cleaning: `prepare` always refills every
+        // bucket, and the forest is only ever entered through one.
+        self.is_prepared = false;
+        self.input_pos = 0;
+        self.last_processed_pos = 0;
+        self.last_flush_pos = 0;
+        self.commands.clear();
+        self.references = ZopfliState::default();
+        self.saved_dist_cache = self.references.dist_cache;
+        self.prev_byte = 0;
+        self.prev_byte2 = 0;
+        self.last_bytes = last_bytes;
+        self.last_bytes_bits = last_bytes_bits;
+        self.is_last_block_emitted = false;
+        self.finished = false;
+        self.output_len = 0;
+    }
+
     /// Compresses one input block and returns the bytes it completed.
     ///
     /// # Errors
     ///
     /// Returns [`BrotliCompressError::BufferOverflow`] when the scratch buffer
     /// proved too small, which would indicate a bug in the size bound.
-    #[hotpath::measure]
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) fn encode_block(&mut self, input: &[u8], is_last: bool) -> BrotliResult<&[u8]> {
         debug_assert!(!self.finished);
         debug_assert!(input.len() <= self.block_size_limit());
 
+        self.encode_block_with(input, is_last, None)
+    }
+
+    /// Compresses one input block, consulting `attached` for matches.
+    ///
+    /// The attached context is passed per call rather than held, because it is
+    /// the caller's and is only borrowed for the length of one compression.
+    /// `None` is exactly [`HqEncoder::encode_block`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrotliCompressError::BufferOverflow`] when the scratch buffer
+    /// proved too small, which would indicate a bug in the size bound.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    pub(crate) fn encode_block_with(
+        &mut self,
+        input: &[u8],
+        is_last: bool,
+        attached: Option<&SharedContextInner>,
+    ) -> BrotliResult<&[u8]> {
+        debug_assert!(!self.finished);
+        debug_assert!(input.len() <= self.block_size_limit());
+
         self.copy_input_to_ring_buffer(input);
-        self.encode_data(is_last)?;
+        self.encode_data(is_last, false, attached)?;
+        match self.storage.get(..self.output_len) {
+            Some(output) => Ok(output),
+            None => Err(BrotliCompressError::BufferOverflow),
+        }
+    }
+
+    /// Compresses `input` and closes the meta-block, leaving the stream open.
+    ///
+    /// Mirrors `BROTLI_OPERATION_FLUSH`: the buffered input is written out as
+    /// a meta-block even when the encoder would rather keep gathering, and the
+    /// stream is then realigned to a byte boundary with an empty metadata
+    /// block, so everything returned so far decodes to everything fed in so
+    /// far.
+    ///
+    /// Flushing costs ratio at these qualities: the Zopfli search prices a
+    /// meta-block from the commands inside it, and a short one prices badly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrotliCompressError::BufferOverflow`] when the scratch buffer
+    /// proved too small, which would indicate a bug in the size bound.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    pub(crate) fn flush_block(&mut self, input: &[u8]) -> BrotliResult<&[u8]> {
+        debug_assert!(!self.finished);
+        debug_assert!(input.len() <= self.block_size_limit());
+
+        self.copy_input_to_ring_buffer(input);
+        self.encode_data(false, true, None)?;
+
+        // `encode_data` may have returned without touching the scratch buffer
+        // — a flush with nothing buffered still has to emit the padding, so
+        // the buffer has to be able to hold it either way.
+        self.reserve_storage(0)?;
+        let padded = match self.storage.get_mut(self.output_len..) {
+            Some(tail) if tail.len() >= BYTE_PADDING_SLACK => {
+                inject_byte_padding(&mut self.last_bytes, &mut self.last_bytes_bits, tail)
+            }
+            _ => return Err(BrotliCompressError::BufferOverflow),
+        };
+        self.output_len += padded;
         match self.storage.get(..self.output_len) {
             Some(output) => Ok(output),
             None => Err(BrotliCompressError::BufferOverflow),
@@ -194,7 +294,7 @@ impl HqEncoder {
     ///
     /// This is the encoder's only SIMD dispatch: the token is resolved here and
     /// passed by value into the monomorphised search.
-    fn create_references(&mut self, span: BlockSpan) {
+    fn create_references(&mut self, span: BlockSpan, attached: Option<&SharedContextInner>) {
         let position = span.position as usize;
         let num_bytes = span.bytes as usize;
         let Self {
@@ -211,11 +311,11 @@ impl HqEncoder {
         let mask = ringbuffer.mask();
         match params.quality {
             HqQuality::Q10 => dispatch!(*level, simd => create_zopfli_backward_references(
-                simd, num_bytes, position, data, mask, params, matcher, workspace,
+                simd, num_bytes, position, data, mask, params, attached, matcher, workspace,
                 references, commands,
             )),
             HqQuality::Q11 => dispatch!(*level, simd => create_hq_zopfli_backward_references(
-                simd, num_bytes, position, data, mask, params, matcher, workspace,
+                simd, num_bytes, position, data, mask, params, attached, matcher, workspace,
                 references, commands,
             )),
         }
@@ -224,7 +324,12 @@ impl HqEncoder {
     /// Processes the accumulated input, emitting a meta-block if one is due.
     ///
     /// Mirrors `EncodeData` for qualities ten and eleven.
-    fn encode_data(&mut self, is_last: bool) -> BrotliResult<()> {
+    fn encode_data(
+        &mut self,
+        is_last: bool,
+        force_flush: bool,
+        attached: Option<&SharedContextInner>,
+    ) -> BrotliResult<()> {
         self.output_len = 0;
         let delta = self.input_pos - self.last_processed_pos;
         let mut span = BlockSpan {
@@ -239,7 +344,7 @@ impl HqEncoder {
                 }
                 return Ok(());
             }
-            if !is_last {
+            if !is_last && !force_flush {
                 return Ok(());
             }
         }
@@ -293,12 +398,13 @@ impl HqEncoder {
                     ringbuffer.buffer(),
                     ringbuffer.mask(),
                     *last_processed_pos,
+                    attached,
                     &mut span,
                 );
             }
         }
 
-        self.create_references(span);
+        self.create_references(span, attached);
 
         {
             let max_length = self.params.max_metablock_size();
@@ -308,6 +414,7 @@ impl HqEncoder {
             let next_input_fits_metablock =
                 processed_bytes + self.params.input_block_size() <= max_length;
             if !is_last
+                && !force_flush
                 && next_input_fits_metablock
                 && self.references.num_literals < max_literals
                 && self.commands.len() < max_commands

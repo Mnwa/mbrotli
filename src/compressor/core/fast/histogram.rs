@@ -18,7 +18,7 @@ const LANES: usize = 4;
 const LANE_THRESHOLD: usize = 4 * 1024;
 
 /// Counts the bytes of `input` into `histogram`, which must start cleared.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn accumulate(input: &[u8], histogram: &mut [u32; NUM_LITERAL_SYMBOLS]) {
     if input.len() < LANE_THRESHOLD {
         for &byte in input {

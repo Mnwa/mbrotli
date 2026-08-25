@@ -18,7 +18,8 @@ use super::context_model::decide_over_literal_context_modeling;
 use super::hashers::{DistanceCache, MatchFinder, NUM_REMEMBERED_DISTANCES, with_matcher};
 use super::metablock::build_meta_block_greedy;
 use super::params::{GreedyParams, MAX_NUM_DELAYED_SYMBOLS};
-use crate::compressor::core::shared::bits::BitWriter;
+use crate::compressor::core::rfc9841::context::SharedContextInner;
+use crate::compressor::core::shared::bits::{BYTE_PADDING_SLACK, BitWriter, inject_byte_padding};
 use crate::compressor::core::shared::bitstream::{MetaBlockWriter, store_uncompressed_meta_block};
 use crate::compressor::core::shared::command::Command;
 use crate::compressor::core::shared::command::extend_last_command;
@@ -46,6 +47,18 @@ pub(crate) struct GreedyEncoder {
     ringbuffer: RingBuffer,
     matcher: MatchFinder,
     is_prepared: bool,
+    /// Whether the match finder holds entries from a stream already written.
+    ///
+    /// A fresh table lets [`MatchFinder::prepare`] clear only the slots a
+    /// short one-shot input reaches. That shortcut is wrong on a table another
+    /// stream has stored into, so a reused encoder that could not clean up
+    /// after itself asks for the full sweep instead.
+    matcher_dirty: bool,
+    /// Input length of the last partial sweep, when the last prepare took one.
+    ///
+    /// Replaying that same sweep clears exactly the slots the stream could
+    /// have dirtied, which is what lets the next stream keep the shortcut.
+    last_partial_prepare: Option<usize>,
     input_pos: u64,
     last_processed_pos: u64,
     last_flush_pos: u64,
@@ -84,6 +97,8 @@ impl GreedyEncoder {
             ringbuffer: RingBuffer::new(resolved.rb_bits(), resolved.lgblock),
             matcher: MatchFinder::from(resolved.hasher),
             is_prepared: false,
+            matcher_dirty: false,
+            last_partial_prepare: None,
             input_pos: 0,
             last_processed_pos: 0,
             last_flush_pos: 0,
@@ -112,6 +127,57 @@ impl GreedyEncoder {
         self.finished
     }
 
+    /// Returns the parameters this encoder was resolved for.
+    ///
+    /// A workspace compares these against what a new call would resolve to:
+    /// equal parameters mean an equally shaped encoder, so resetting this one
+    /// gives the same stream a fresh one would.
+    pub(crate) const fn params(&self) -> &GreedyParams {
+        &self.params
+    }
+
+    /// Restores the encoder to the state its constructor left it in.
+    ///
+    /// Every allocation survives. The window, the match finder and the
+    /// per-stream position counters go back to zero; the scratch buffer, the
+    /// meta-block writer and the command vector are per-meta-block state that
+    /// is already rebuilt on every use, so only their contents are dropped.
+    ///
+    /// The match finder is cleared in full rather than by
+    /// [`MatchFinder::prepare`]'s partial sweep, which is only correct on a
+    /// table that was never used.
+    pub(crate) fn reset(&mut self) {
+        let (last_bytes, last_bytes_bits) = self.params.window.header();
+        // Clean the match finder before the window it read from is dropped:
+        // the sweep hashes the very bytes the previous stream stored, and they
+        // are still where that stream left them.
+        match self.last_partial_prepare.take() {
+            Some(input_size) => {
+                self.matcher
+                    .prepare(true, input_size, self.ringbuffer.buffer());
+                self.matcher_dirty = false;
+            }
+            // The last stream swept the whole table, so it is dirty in places
+            // no cheap sweep could find. The next prepare pays for the wipe.
+            None => self.matcher_dirty = true,
+        }
+        self.ringbuffer.reset();
+        self.is_prepared = false;
+        self.input_pos = 0;
+        self.last_processed_pos = 0;
+        self.last_flush_pos = 0;
+        self.commands.clear();
+        self.references = ReferenceState::default();
+        self.saved_dist_cache = remembered(&self.references.dist_cache);
+        self.prev_byte = 0;
+        self.prev_byte2 = 0;
+        self.last_bytes = last_bytes;
+        self.last_bytes_bits = last_bytes_bits;
+        self.is_last_block_emitted = false;
+        self.finished = false;
+        self.output_len = 0;
+    }
+
     /// Compresses one input block and returns the bytes it completed.
     ///
     /// A block shorter than [`GreedyEncoder::block_size_limit`] is allowed only
@@ -122,13 +188,77 @@ impl GreedyEncoder {
     ///
     /// Returns [`BrotliCompressError::BufferOverflow`] when the scratch buffer
     /// proved too small, which would indicate a bug in the size bound.
-    #[hotpath::measure]
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) fn encode_block(&mut self, input: &[u8], is_last: bool) -> BrotliResult<&[u8]> {
         debug_assert!(!self.finished);
         debug_assert!(input.len() <= self.block_size_limit());
 
+        self.encode_block_with(input, is_last, None)
+    }
+
+    /// Compresses one input block, consulting `attached` for matches.
+    ///
+    /// The attached context is passed per call rather than held, because it is
+    /// the caller's and is only borrowed for the length of one compression.
+    /// `None` is exactly [`GreedyEncoder::encode_block`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrotliCompressError::BufferOverflow`] when the scratch buffer
+    /// proved too small, which would indicate a bug in the size bound.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    pub(crate) fn encode_block_with(
+        &mut self,
+        input: &[u8],
+        is_last: bool,
+        attached: Option<&SharedContextInner>,
+    ) -> BrotliResult<&[u8]> {
+        debug_assert!(!self.finished);
+        debug_assert!(input.len() <= self.block_size_limit());
+
         self.copy_input_to_ring_buffer(input);
-        self.encode_data(is_last)?;
+        self.encode_data(is_last, false, attached)?;
+        match self.storage.get(..self.output_len) {
+            Some(output) => Ok(output),
+            None => Err(BrotliCompressError::BufferOverflow),
+        }
+    }
+
+    /// Compresses `input` and closes the meta-block, leaving the stream open.
+    ///
+    /// Mirrors `BROTLI_OPERATION_FLUSH`: the buffered input is written out as
+    /// a meta-block even when the encoder would rather keep gathering, and the
+    /// stream is then realigned to a byte boundary with an empty metadata
+    /// block. Everything returned so far therefore decodes to everything fed
+    /// in so far, which is what a caller draining into a socket needs.
+    ///
+    /// Unlike [`GreedyEncoder::encode_block`] this may return an empty slice
+    /// only when there was nothing buffered *and* the stream was already
+    /// aligned; otherwise it always produces bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrotliCompressError::BufferOverflow`] when the scratch buffer
+    /// proved too small, which would indicate a bug in the size bound.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    pub(crate) fn flush_block(&mut self, input: &[u8]) -> BrotliResult<&[u8]> {
+        debug_assert!(!self.finished);
+        debug_assert!(input.len() <= self.block_size_limit());
+
+        self.copy_input_to_ring_buffer(input);
+        self.encode_data(false, true, None)?;
+
+        // `encode_data` may have returned without touching the scratch buffer
+        // — a flush with nothing buffered still has to emit the padding, so
+        // the buffer has to be able to hold it either way.
+        self.reserve_storage(0)?;
+        let padded = match self.storage.get_mut(self.output_len..) {
+            Some(tail) if tail.len() >= BYTE_PADDING_SLACK => {
+                inject_byte_padding(&mut self.last_bytes, &mut self.last_bytes_bits, tail)
+            }
+            _ => return Err(BrotliCompressError::BufferOverflow),
+        };
+        self.output_len += padded;
         match self.storage.get(..self.output_len) {
             Some(output) => Ok(output),
             None => Err(BrotliCompressError::BufferOverflow),
@@ -197,7 +327,7 @@ impl GreedyEncoder {
     ///
     /// This is the encoder's only SIMD dispatch: the token is resolved here and
     /// passed by value into the monomorphised scan.
-    fn create_references(&mut self, span: BlockSpan) {
+    fn create_references(&mut self, span: BlockSpan, attached: Option<&SharedContextInner>) {
         let Self {
             level,
             params,
@@ -211,15 +341,35 @@ impl GreedyEncoder {
             data: ringbuffer.buffer(),
             mask: ringbuffer.mask(),
         };
-        dispatch!(*level, simd => with_matcher!(matcher, |finder| create_backward_references(
-            simd, finder, params, window, span, references, commands
-        )));
+        // Two instantiations, as the reference compiles two: the ordinary one
+        // has no prefix code in it at all.
+        match attached {
+            None => {
+                dispatch!(*level, simd => with_matcher!(matcher, |finder| {
+                    create_backward_references::<_, _, false>(
+                        simd, finder, params, window, span, None, references, commands,
+                    )
+                }));
+            }
+            Some(_) => {
+                dispatch!(*level, simd => with_matcher!(matcher, |finder| {
+                    create_backward_references::<_, _, true>(
+                        simd, finder, params, window, span, attached, references, commands,
+                    )
+                }));
+            }
+        }
     }
 
     /// Processes the accumulated input, emitting a meta-block if one is due.
     ///
     /// Mirrors `EncodeData` for the non-fast qualities.
-    fn encode_data(&mut self, is_last: bool) -> BrotliResult<()> {
+    fn encode_data(
+        &mut self,
+        is_last: bool,
+        force_flush: bool,
+        attached: Option<&SharedContextInner>,
+    ) -> BrotliResult<()> {
         self.output_len = 0;
         let delta = self.input_pos - self.last_processed_pos;
         let mut span = BlockSpan {
@@ -234,7 +384,7 @@ impl GreedyEncoder {
                 }
                 return Ok(());
             }
-            if !is_last {
+            if !is_last && !force_flush {
                 return Ok(());
             }
         }
@@ -277,12 +427,13 @@ impl GreedyEncoder {
                     window.data,
                     window.mask,
                     *last_processed_pos,
+                    attached,
                     &mut span,
                 );
             }
         }
 
-        self.create_references(span);
+        self.create_references(span, attached);
 
         {
             let max_length = self.params.max_metablock_size();
@@ -296,6 +447,7 @@ impl GreedyEncoder {
             let should_flush = !self.params.quality.splits_blocks()
                 && self.references.num_literals + self.commands.len() >= MAX_NUM_DELAYED_SYMBOLS;
             if !is_last
+                && !force_flush
                 && !should_flush
                 && next_input_fits_metablock
                 && self.references.num_literals < max_literals
@@ -367,8 +519,10 @@ impl GreedyEncoder {
         let data = self.ringbuffer.buffer();
         let mask = self.ringbuffer.mask();
         if !self.is_prepared {
-            let one_shot = position == 0 && is_last;
-            self.matcher.prepare(one_shot, input_size, data);
+            let one_shot = position == 0 && is_last && !self.matcher_dirty;
+            let partial = self.matcher.prepare(one_shot, input_size, data);
+            self.last_partial_prepare = partial.then_some(input_size);
+            self.matcher_dirty = true;
             self.is_prepared = true;
         }
         self.matcher
@@ -474,6 +628,17 @@ impl GreedyEncoder {
                 &params.dist,
                 commands,
                 &mb,
+                &mut w,
+            );
+        } else if params.quality.uses_static_entropy_codes() {
+            writer.store_meta_block_fast(
+                data,
+                wrapped_last_flush_pos,
+                bytes,
+                mask,
+                is_last,
+                &params.dist,
+                commands,
                 &mut w,
             );
         } else {

@@ -2,7 +2,7 @@
 
 Brotli compression in safe Rust, byte-identical to Google's reference encoder.
 
-`mbrotli` implements every Brotli quality but **2** as a port of
+`mbrotli` implements every Brotli quality as a port of
 [google/brotli] v1.2.0, commit `028fb5a`. For any input and any
 combination of encoder parameters, it emits exactly the same bytes the
 reference encoder does. That is not an aspiration: it is what the test suite
@@ -27,20 +27,23 @@ asserts, on every corpus, on every run.
   its dictionary bytes outright — no `Arc`, no `Mutex`, no atomic, no global
   cache — and is handed to a call by `&mut`, so the borrow checker is what
   guarantees one context backs one session. Its prepared index is byte-identical
-  to the reference's, entry for entry.
+  to the reference's, entry for entry, and so are the streams the match finders
+  produce from it.
 
 ## Status
 
 | Feature | State |
 | --- | --- |
-| Quality 0, 1, 3–11 | implemented, byte-identical to the reference |
-| Quality 2 | not implemented — reported as `UnsupportedQuality` |
+| Quality 0–11 | implemented, byte-identical to the reference |
 | Decoder | not implemented |
 | One-shot and streaming APIs | implemented |
+| `Write::flush` | implemented — makes everything written so far decodable without ending the stream |
+| Reusable encoder workspace | implemented — `CompressWorkspace`, same bytes, fewer allocations |
 | Mode, block size, size hint, distance layout, context modelling | implemented |
-| RFC 9841 Large Window (qualities 3–11) | implemented — qualities 0 and 1 report `UnsupportedLargeWindow` |
+| RFC 9841 Large Window (qualities 3–11) | implemented — qualities 0, 1 and 2 report `UnsupportedLargeWindow` |
 | RFC 9841 shared context: prefix dictionaries, prepared indexes, addressing, search | implemented |
-| RFC 9841 shared dictionaries used by an encoder | not implemented — refused with `UnsupportedSharedContextForQuality`, never ignored |
+| RFC 9841 prefix dictionaries used by an encoder (qualities 5–11) | implemented — byte-identical to the reference's compound dictionary |
+| RFC 9841 prefix dictionaries at qualities 0–4 | refused with `UnsupportedSharedContextForQuality`, never ignored — the reference has no search there either |
 | RFC 9841 serialized dictionaries and framing container | not implemented |
 | Custom static dictionaries | not supported; the built-in static dictionary is used |
 
@@ -50,6 +53,7 @@ asserts, on every corpus, on every run.
 | --- | --- |
 | 0 | One pass, static entropy codes — fastest, largest output |
 | 1 | Two passes, per-block entropy codes |
+| 2 | Greedy matching, with the format's fixed command and distance codes while the meta-block stays small |
 | 3 | Greedy matching, one prefix code per stream |
 | 4 | Adds block splitting, histogram optimisation, distance parameters |
 | 5 | Adds an extensive delayed search and literal context modelling |

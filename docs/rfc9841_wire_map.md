@@ -83,14 +83,14 @@ can assert byte equality with the ordinary entry point: with nothing attached,
 there is no distance past the window, so there is nothing to distinguish the
 two streams.
 
-The distances that *would* reach the prefix are defined, and the arithmetic is
-implemented and tested, even though no encoder emits one yet:
+The distances that reach the prefix are defined, implemented and emitted by
+qualities five to eleven:
 
 | Quantity | Value | Implemented by |
 | --- | --- | --- |
 | Ordinary history | distances `1..=M`, `M` the largest the window expresses | unchanged |
-| Prefix bytes | distances `(M + 1)..=(M + D)`, `D` the total prefix length | `PrefixSources::address_of` / `distance_of`, public as `SharedContext::dictionary_offset` / `backward_distance` |
-| Static dictionary | distances beyond `M + D` | unchanged; `D` is zero today in every emitted stream |
+| Prefix bytes | distances `(M + 1)..=(M + D)`, `D` the total prefix length | `PrefixSources::address_of` / `distance_of`, public as `SharedContext::dictionary_offset` / `backward_distance`; emitted by `core::rfc9841::search` |
+| Static dictionary | distances beyond `M + D` | unchanged; the match finders are handed `dictionary_start + D` so the built-in dictionary sits past the attached one |
 
 All of it is checked `u64` arithmetic that returns `None` rather than wrapping
 at either end.

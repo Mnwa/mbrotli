@@ -81,8 +81,9 @@ wildcard arm, and removing `Unrepresentable` breaks one that names it — althou
 wildcard arm already. The crate is at `0.1.0` and the alternative was to leave
 quality ten permanently unreachable, which the port specification rules out.
 
-Quality two remains the only quality the format defines that this crate does not
-implement, and it is still reported as `UnsupportedQuality(2)`.
+Quality two was the last quality the format defines with no encoder here. It
+has one now, in `core::greedy`; see
+[`architecture/greedy-encoder.md`](../architecture/greedy-encoder.md).
 
 ## Integration rules honoured
 

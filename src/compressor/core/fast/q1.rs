@@ -209,7 +209,7 @@ struct Pass1<'a> {
 }
 
 /// First pass: finds matches and records commands and literals.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn create_commands<S: Simd, const TABLE_BITS: usize, const MIN_MATCH: usize>(
     simd: S,
     block: &Block<'_>,
@@ -358,7 +358,7 @@ fn create_commands<S: Simd, const TABLE_BITS: usize, const MIN_MATCH: usize>(
 }
 
 /// Builds the command and distance prefix codes and stores them.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn build_and_store_command_prefix_code(
     histogram: &[u32; 128],
     depth: &mut [u8; 128],
@@ -403,7 +403,7 @@ fn build_and_store_command_prefix_code(
 }
 
 /// Second pass: builds exact prefix codes and replays the buffered commands.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn store_commands(arena: &mut TwoPassArena, literals: &[u8], commands: &[u32], w: &mut BitWriter) {
     let TwoPassArena {
         lit_histo,
@@ -489,7 +489,7 @@ fn bits_entropy(population: &[u32]) -> f64 {
 }
 
 /// Decides whether the block is worth compressing at all.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn should_compress(
     histogram: &mut [u32; NUM_LITERAL_SYMBOLS],
     input: &[u8],
@@ -530,6 +530,18 @@ impl Default for TwoPassState {
             commands: Vec::with_capacity(Q1_BLOCK_SIZE),
             literals: Vec::with_capacity(Q1_BLOCK_SIZE),
         }
+    }
+}
+
+impl TwoPassState {
+    /// Restores the state [`TwoPassState::default`] would produce.
+    ///
+    /// The arena is assigned through its `Box` and the two buffers are cleared
+    /// rather than dropped, so every allocation survives into the next stream.
+    pub(crate) fn reset(&mut self) {
+        *self.arena = TwoPassArena::default();
+        self.commands.clear();
+        self.literals.clear();
     }
 }
 

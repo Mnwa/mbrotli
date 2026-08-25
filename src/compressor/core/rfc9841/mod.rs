@@ -12,10 +12,12 @@
 //!   sequence and maps backward distances onto it.
 //! - [`prepared`] is the hash index built over one attachment.
 //! - [`context`] owns the two together and searches them.
+//! - [`search`] is the match finders' view of an attached context.
 //!
 //! [RFC 9841]: https://www.rfc-editor.org/rfc/rfc9841.html
 
 pub(crate) mod context;
 pub(crate) mod prefix;
 pub(crate) mod prepared;
+pub(crate) mod search;
 pub(crate) mod window;

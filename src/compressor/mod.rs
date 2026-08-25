@@ -19,9 +19,63 @@ use fearless_simd::Level;
 use std::io::{Read, Write};
 use thiserror::Error;
 
+/// Compression entry point bound to one resolved SIMD instruction set.
+///
+/// Obtained from [`Brotli::compressor`]. The value is `Copy` and holds nothing
+/// but the detected [`Level`], so it is cheap to pass around and to keep in a
+/// shared structure.
+///
+/// [`Brotli::compressor`]: crate::Brotli::compressor
 #[derive(Copy, Clone, Debug)]
 pub struct Compressor {
     level: Level,
+}
+
+/// Encoder scratch space kept alive across compression calls.
+///
+/// Every one-shot call builds a whole encoder — hash tables, the sliding
+/// window, command and histogram arrays — and drops it again when the call
+/// returns. At quality 11 over a small payload that allocation dominates the
+/// call. Handing the same workspace to [`Compressor::compress_with`] or
+/// [`Compressor::compress_to_slice_with`] keeps those allocations between
+/// calls instead.
+///
+/// # What it does not change
+///
+/// The output. A reused workspace produces byte-for-byte the stream a fresh
+/// one produces, for every input, at every quality. The retained encoder is
+/// put back into its just-constructed state before each call, and when the new
+/// call's parameters would resolve to a differently shaped encoder — a
+/// different quality or window, or a size hint that selects a different match
+/// finder — the workspace quietly builds a new one rather than adapting the
+/// old.
+///
+/// That last point is worth knowing for throughput: a workspace pays off when
+/// consecutive calls share their parameters. Pinning
+/// [`CompressParams::with_size_hint`] makes the match finder independent of
+/// the input length, which is what keeps a stream of differently sized
+/// payloads on the reuse path.
+///
+/// # Examples
+///
+/// ```
+/// use mbrotli::Brotli;
+/// use mbrotli::compressor::{CompressParams, CompressWorkspace, QualityLevel, WindowBits};
+///
+/// let compressor = Brotli::default().compressor();
+/// let params = CompressParams::new(QualityLevel::Q5, WindowBits::DEFAULT)
+///     .with_size_hint(Some(0));
+/// let mut workspace = CompressWorkspace::default();
+///
+/// for payload in [&b"first payload"[..], b"second payload", b"third payload"] {
+///     let reused = compressor.compress_with(&mut workspace, params, payload)?;
+///     assert_eq!(reused, compressor.compress(params, payload)?);
+/// }
+/// # Ok::<(), mbrotli::compressor::BrotliCompressError>(())
+/// ```
+#[derive(Debug, Default)]
+pub struct CompressWorkspace {
+    cache: core::driver::EncoderCache,
 }
 
 impl Compressor {
@@ -111,6 +165,90 @@ impl Compressor {
         dst: &mut [u8],
     ) -> BrotliResult<usize> {
         core::driver::compress_to_slice(self.level, &params, src, dst)
+    }
+
+    /// Compresses `src`, reusing the encoder `workspace` retained.
+    ///
+    /// Identical to [`Compressor::compress`] in what it produces; it differs
+    /// only in where the encoder comes from. See [`CompressWorkspace`] for
+    /// when reuse actually applies.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrotliCompressError::UnsupportedQuality`] for a quality this
+    /// crate does not implement, and [`BrotliCompressError::BoundOverflow`]
+    /// when the output bound does not fit in a `usize`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::Brotli;
+    /// use mbrotli::compressor::{CompressParams, CompressWorkspace, QualityLevel, WindowBits};
+    ///
+    /// let compressor = Brotli::default().compressor();
+    /// let params = CompressParams::new(QualityLevel::Q1, WindowBits::DEFAULT);
+    /// let mut workspace = CompressWorkspace::default();
+    ///
+    /// let first = compressor.compress_with(&mut workspace, params, b"hello hello hello")?;
+    /// let second = compressor.compress_with(&mut workspace, params, b"hello hello hello")?;
+    ///
+    /// assert_eq!(first, second);
+    /// # Ok::<(), mbrotli::compressor::BrotliCompressError>(())
+    /// ```
+    pub fn compress_with(
+        &self,
+        workspace: &mut CompressWorkspace,
+        params: CompressParams,
+        src: &[u8],
+    ) -> BrotliResult<Vec<u8>> {
+        let mut output = Vec::with_capacity(self.calculate_bound(&params, src.len())?);
+        core::driver::compress_to_vec_with(
+            &mut workspace.cache,
+            self.level,
+            &params,
+            src,
+            &mut output,
+        )?;
+        Ok(output)
+    }
+
+    /// Compresses `src` into `dst`, reusing the encoder `workspace` retained.
+    ///
+    /// Identical to [`Compressor::compress_to_slice`] in what it produces; it
+    /// differs only in where the encoder comes from. See
+    /// [`CompressWorkspace`] for when reuse actually applies.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrotliCompressError::OutputTooSmall`] when `dst` cannot hold
+    /// the whole stream, and [`BrotliCompressError::UnsupportedQuality`] for
+    /// an unimplemented quality.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::Brotli;
+    /// use mbrotli::compressor::{CompressParams, CompressWorkspace, QualityLevel, WindowBits};
+    ///
+    /// let compressor = Brotli::default().compressor();
+    /// let params = CompressParams::new(QualityLevel::Q0, WindowBits::DEFAULT);
+    /// let mut workspace = CompressWorkspace::default();
+    /// let mut buffer = vec![0u8; compressor.calculate_bound(&params, 5)?];
+    ///
+    /// let written =
+    ///     compressor.compress_to_slice_with(&mut workspace, params, b"aaaaa", &mut buffer)?;
+    ///
+    /// assert_eq!(&buffer[..written], compressor.compress(params, b"aaaaa")?.as_slice());
+    /// # Ok::<(), mbrotli::compressor::BrotliCompressError>(())
+    /// ```
+    pub fn compress_to_slice_with(
+        &self,
+        workspace: &mut CompressWorkspace,
+        params: CompressParams,
+        src: &[u8],
+        dst: &mut [u8],
+    ) -> BrotliResult<usize> {
+        core::driver::compress_to_slice_with(&mut workspace.cache, self.level, &params, src, dst)
     }
 
     /// Wraps `writer` in an adapter that compresses everything written to it.
@@ -767,8 +905,10 @@ impl From<BlockBits> for usize {
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum ParseBlockBitsError {
+    /// Fewer than sixteen bits were requested.
     #[error("Block bits should be greater than or equal to 16")]
     LowerBound,
+    /// More than twenty-four bits were requested.
     #[error("Block bits should be less than or equal to 24")]
     UpperBound,
 }
@@ -912,10 +1052,14 @@ impl TryFrom<(u32, u32)> for DistanceCodes {
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum ParseDistanceCodesError {
+    /// More than three postfix bits were requested.
     #[error("Distance postfix bits should be less than or equal to 3")]
     PostfixBits,
+    /// More than one hundred and twenty direct distance codes were requested.
     #[error("Direct distance codes should be less than or equal to 120")]
     DirectCodes,
+    /// The direct code count is not a whole number of `1 << postfix_bits`
+    /// groups, or the quotient does not fit in the four bits the header has.
     #[error("Direct distance codes should be a whole number of postfix groups")]
     Misaligned,
 }
@@ -1144,10 +1288,15 @@ impl From<WindowBits> for usize {
 #[derive(Error, Debug, Copy, Clone, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ParseWindowBitsError {
+    /// Fewer than ten bits were requested, which neither header can express.
     #[error("Window bits should be greater than or equal to 10")]
     LowerBound,
+    /// More than twenty-four bits were requested from
+    /// [`WindowBits::standard`], which is the RFC 7932 ceiling.
     #[error("Window bits should be less than or equal to 24")]
     UpperBound,
+    /// More than sixty-two bits were requested from [`WindowBits::large`],
+    /// which is the RFC 9841 ceiling.
     #[error("Large window bits should be less than or equal to 62")]
     LargeUpperBound,
 }
@@ -1167,17 +1316,31 @@ pub enum ParseWindowBitsError {
 /// ```
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum QualityLevel {
+    /// One pass over each fragment with static entropy codes: fastest, largest.
     Q0,
+    /// Two passes over each fragment, with entropy codes built per block.
     Q1,
+    /// Two passes over each fragment with static entropy codes.
     Q2,
+    /// Greedy matching with one prefix code for the whole stream.
     Q3,
+    /// Adds block splitting, histogram optimisation and distance parameters.
     Q4,
+    /// Adds a delayed search and literal context modelling.
     Q5,
+    /// Deepens the search to sixty-four bucket candidates.
     Q6,
+    /// Deepens the search again and adds the three-context literal model.
     Q7,
+    /// Deeper still, with more cached distances checked per position.
     Q8,
+    /// The deepest greedy search: 256 bucket candidates, 16 cached distances.
     Q9,
+    /// Zopfli search over every match the binary tree finds, with real context
+    /// maps built by histogram clustering.
     Q10,
+    /// The same search run harder, re-priced from the commands its first pass
+    /// produced: slowest, smallest.
     Q11,
 }
 
@@ -1256,8 +1419,10 @@ impl TryFrom<usize> for QualityLevel {
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum ParseQualityLevelError {
+    /// A negative quality was requested.
     #[error("Quality level should be positive")]
     LowerBound,
+    /// A quality above eleven was requested.
     #[error("Quality level should be less than or equal to 11")]
     UpperBound,
 }
@@ -1266,6 +1431,7 @@ pub enum ParseQualityLevelError {
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum BrotliCompressError {
+    /// The inner reader or writer of a streaming adapter failed.
     #[error("IO error: {0}")]
     IOError(#[from] std::io::Error),
     /// The requested quality has no implementation yet.

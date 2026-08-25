@@ -15,6 +15,7 @@ use fearless_simd::Simd;
 
 use super::hashers::{DistanceCache, MatchQuery, Matcher, prepare_distance_cache};
 use super::params::GreedyParams;
+use crate::compressor::core::rfc9841::context::SharedContextInner;
 use crate::compressor::core::shared::command::Command;
 use crate::compressor::core::shared::dictionary::DictionaryStats;
 use crate::compressor::core::shared::distance::NUM_DISTANCE_SHORT_CODES;
@@ -92,13 +93,27 @@ impl Default for ReferenceState {
 ///
 /// Appends to `commands` and updates `state`; literals that no command has
 /// claimed yet stay in [`ReferenceState::last_insert_len`] for the next call.
-#[hotpath::measure]
-pub(crate) fn create_backward_references<S: Simd, M: Matcher>(
+/// `ENABLE_PREFIX` mirrors the reference's `ENABLE_COMPOUND_DICTIONARY`, which
+/// it uses to compile this function twice per match finder: once with the
+/// prefix search in it and once without. It is a const parameter rather than a
+/// runtime `is_some()` for the same reason the reference makes it a macro —
+/// this is the hottest loop in the crate, and a branch that is always taken
+/// the same way still costs a register and an instruction at every position.
+/// Measured on an Apple M5 Pro over the eleven `oneshot/q3` corpora, folding
+/// the two into one runtime branch cost 2.1% of the geometric-mean throughput
+/// and 9.7% on `text-1MiB`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors CreateBackwardReferences, whose parameters are all needed"
+)]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
+pub(crate) fn create_backward_references<S: Simd, M: Matcher, const ENABLE_PREFIX: bool>(
     simd: S,
     matcher: &mut M,
     params: &GreedyParams,
     window: Window<'_>,
     span: BlockSpan,
+    attached: Option<&SharedContextInner>,
     state: &mut ReferenceState,
     commands: &mut Vec<Command>,
 ) {
@@ -116,6 +131,16 @@ pub(crate) fn create_backward_references<S: Simd, M: Matcher>(
     } else {
         position
     };
+
+    // Every distance that addresses the attached dictionary is shifted past
+    // the window by this much. Without `ENABLE_PREFIX` it is a compile-time
+    // zero, so every `+ gap` below folds away.
+    let gap = if ENABLE_PREFIX {
+        attached.map_or(0, SharedContextInner::total_size)
+    } else {
+        0
+    };
+    let max_distance_code = params.dist.max_distance as usize;
 
     let window = params.random_heuristics_window_size();
     let mut apply_random_heuristics = position + window;
@@ -140,11 +165,23 @@ pub(crate) fn create_backward_references<S: Simd, M: Matcher>(
                 cur_ix: position,
                 max_length,
                 max_backward: max_distance,
-                dictionary_distance: dictionary_start,
-                max_distance: params.dist.max_distance as usize,
+                dictionary_distance: dictionary_start + gap,
+                max_distance: max_distance_code,
             },
             &mut sr,
         );
+        if ENABLE_PREFIX && let Some(context) = attached {
+            context.find_match(
+                ringbuffer,
+                mask,
+                &state.dist_cache,
+                position,
+                max_length,
+                dictionary_start,
+                max_distance_code,
+                &mut sr,
+            );
+        }
 
         if !sr.is_match() {
             insert_length += 1;
@@ -201,11 +238,23 @@ pub(crate) fn create_backward_references<S: Simd, M: Matcher>(
                     cur_ix: position + 1,
                     max_length,
                     max_backward: max_distance,
-                    dictionary_distance: dictionary_start,
-                    max_distance: params.dist.max_distance as usize,
+                    dictionary_distance: dictionary_start + gap,
+                    max_distance: max_distance_code,
                 },
                 &mut sr2,
             );
+            if ENABLE_PREFIX && let Some(context) = attached {
+                context.find_match(
+                    ringbuffer,
+                    mask,
+                    &state.dist_cache,
+                    position + 1,
+                    max_length,
+                    dictionary_start,
+                    max_distance_code,
+                    &mut sr2,
+                );
+            }
             if sr2.score >= sr.score + COST_DIFF_LAZY {
                 // Emit one more literal and start the match a byte later.
                 position += 1;
@@ -222,8 +271,9 @@ pub(crate) fn create_backward_references<S: Simd, M: Matcher>(
 
         apply_random_heuristics = position + 2 * sr.len + window;
         dictionary_start = position.min(max_backward_limit);
-        let distance_code = compute_distance_code(sr.distance, dictionary_start, &state.dist_cache);
-        if sr.distance <= dictionary_start && distance_code > 0 {
+        let distance_code =
+            compute_distance_code(sr.distance, dictionary_start + gap, &state.dist_cache);
+        if sr.distance <= dictionary_start + gap && distance_code > 0 {
             state.dist_cache[3] = state.dist_cache[2];
             state.dist_cache[2] = state.dist_cache[1];
             state.dist_cache[1] = state.dist_cache[0];
@@ -285,8 +335,8 @@ mod tests {
             position: 0,
             bytes: data.len() as u32,
         };
-        dispatch!(level, simd => create_backward_references(
-            simd, &mut matcher, &params, window, span, &mut state, &mut commands,
+        dispatch!(level, simd => create_backward_references::<_, _, false>(
+            simd, &mut matcher, &params, window, span, None, &mut state, &mut commands,
         ));
         (commands, state)
     }
@@ -327,8 +377,8 @@ mod tests {
                     position: 0,
                     bytes: payload.len() as u32,
                 };
-                dispatch!(level, simd => create_backward_references(
-                    simd, &mut matcher, &params, window, span, &mut state, &mut commands,
+                dispatch!(level, simd => create_backward_references::<_, _, false>(
+                    simd, &mut matcher, &params, window, span, None, &mut state, &mut commands,
                 ));
                 assert_eq!(
                     consumed(&commands, &state),
@@ -359,8 +409,8 @@ mod tests {
             position: 0,
             bytes: payload as u32,
         };
-        dispatch!(level, simd => create_backward_references(
-            simd, &mut matcher, &params, window, span, &mut state, &mut commands,
+        dispatch!(level, simd => create_backward_references::<_, _, false>(
+            simd, &mut matcher, &params, window, span, None, &mut state, &mut commands,
         ));
         assert!(!commands.is_empty());
         let longest = commands
@@ -397,8 +447,8 @@ mod tests {
             position: 0,
             bytes: payload as u32,
         };
-        dispatch!(level, simd => create_backward_references(
-            simd, &mut matcher, &params, window, span, &mut state, &mut commands,
+        dispatch!(level, simd => create_backward_references::<_, _, false>(
+            simd, &mut matcher, &params, window, span, None, &mut state, &mut commands,
         ));
         // Only the four remembered entries are history; the rest stay derived.
         assert!(

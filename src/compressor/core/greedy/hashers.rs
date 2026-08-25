@@ -142,7 +142,15 @@ pub(crate) trait Matcher {
     }
 
     /// Clears the table before the first block (`Prepare`).
-    fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8]);
+    ///
+    /// Returns whether the partial sweep was used — that is, whether only the
+    /// slots the first `input_size` positions hash to were cleared, rather
+    /// than the whole table. A caller that wants to reuse the matcher for
+    /// another stream needs to know: replaying the same sweep afterwards
+    /// clears exactly the slots that stream could have dirtied, which is far
+    /// cheaper than wiping the table, while a full sweep leaves the table
+    /// dirty enough that the next stream has to take the full path.
+    fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8]) -> bool;
 
     /// Records the position `ix` in the table (`Store`).
     fn store(&mut self, data: &[u8], mask: usize, ix: usize);
@@ -236,12 +244,13 @@ impl<const BUCKET_BITS: u32, const SWEEP_BITS: u32, const HASH_LEN: u32, const U
     const HASH_TYPE_LENGTH: usize = 8;
     const STORE_LOOKAHEAD: usize = 8;
 
-    fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8]) {
+    fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8]) -> bool {
         // Clearing only the slots a short input can reach is far cheaper than
         // wiping the whole table, and reaches exactly the same slots the
         // search will later look at.
         let partial_prepare_threshold = Self::BUCKET_SIZE >> 5;
-        if one_shot && input_size <= partial_prepare_threshold {
+        let partial = one_shot && input_size <= partial_prepare_threshold;
+        if partial {
             for offset in 0..input_size {
                 let key = Self::hash(data, offset);
                 if Self::SWEEP == 1 {
@@ -262,6 +271,7 @@ impl<const BUCKET_BITS: u32, const SWEEP_BITS: u32, const HASH_LEN: u32, const U
         } else {
             self.buckets.fill(0);
         }
+        partial
     }
 
     #[inline(always)]
@@ -323,6 +333,11 @@ impl<const BUCKET_BITS: u32, const SWEEP_BITS: u32, const HASH_LEN: u32, const U
             }
         }
 
+        // The slot the sweeping variant writes back to at the very end. The
+        // single-slot variant has already written its own, which is why the
+        // reference guards the trailing store with `BUCKET_SWEEP != 1`.
+        let mut key_out = None;
+
         if Self::SWEEP == 1 {
             // Only one candidate: the store happens before the comparison, so
             // the slot always ends up holding the current position.
@@ -343,36 +358,41 @@ impl<const BUCKET_BITS: u32, const SWEEP_BITS: u32, const HASH_LEN: u32, const U
                     out.len = len;
                     out.distance = backward;
                     out.score = score;
+                    // A hit here is final: the reference returns rather than
+                    // falling through to the dictionary.
+                    return;
                 }
             }
-            return;
-        }
-
-        let mut keys = [0usize; 4];
-        for (sweep, slot) in keys.iter_mut().enumerate().take(Self::SWEEP) {
-            *slot = (key + (sweep << 3)) & Self::BUCKET_MASK;
-        }
-        let key_out = keys[(query.cur_ix & Self::SWEEP_MASK) >> 3];
-        for &slot in keys.iter().take(Self::SWEEP) {
-            let prev_ix = buckets[slot & Self::BUCKET_MASK] as usize;
-            let backward = query.cur_ix - prev_ix;
-            let prev_ix = prev_ix & query.mask;
-            if compare_char != read_u8(data, prev_ix + best_len) {
-                continue;
+            // Anything else falls through to the dictionary search, which is
+            // what `H2` — the only single-slot matcher that consults it — is
+            // reached by.
+        } else {
+            let mut keys = [0usize; 4];
+            for (sweep, slot) in keys.iter_mut().enumerate().take(Self::SWEEP) {
+                *slot = (key + (sweep << 3)) & Self::BUCKET_MASK;
             }
-            if backward == 0 || backward > query.max_backward {
-                continue;
-            }
-            let len = find_match_length(simd, data, prev_ix, cur_ix_masked, query.max_length);
-            if len >= 4 {
-                let score = backward_reference_score(len, backward);
-                if best_score < score {
-                    best_len = len;
-                    out.len = len;
-                    compare_char = read_u8(data, cur_ix_masked + len);
-                    best_score = score;
-                    out.score = score;
-                    out.distance = backward;
+            key_out = Some(keys[(query.cur_ix & Self::SWEEP_MASK) >> 3]);
+            for &slot in keys.iter().take(Self::SWEEP) {
+                let prev_ix = buckets[slot & Self::BUCKET_MASK] as usize;
+                let backward = query.cur_ix - prev_ix;
+                let prev_ix = prev_ix & query.mask;
+                if compare_char != read_u8(data, prev_ix + best_len) {
+                    continue;
+                }
+                if backward == 0 || backward > query.max_backward {
+                    continue;
+                }
+                let len = find_match_length(simd, data, prev_ix, cur_ix_masked, query.max_length);
+                if len >= 4 {
+                    let score = backward_reference_score(len, backward);
+                    if best_score < score {
+                        best_len = len;
+                        out.len = len;
+                        compare_char = read_u8(data, cur_ix_masked + len);
+                        best_score = score;
+                        out.score = score;
+                        out.distance = backward;
+                    }
                 }
             }
         }
@@ -388,7 +408,9 @@ impl<const BUCKET_BITS: u32, const SWEEP_BITS: u32, const HASH_LEN: u32, const U
                 true,
             );
         }
-        buckets[key_out & Self::BUCKET_MASK] = query.cur_ix as u32;
+        if let Some(slot) = key_out {
+            buckets[slot & Self::BUCKET_MASK] = query.cur_ix as u32;
+        }
     }
 }
 
@@ -466,9 +488,10 @@ impl<const HASH64: bool, const BUCKET_BITS: u32> Matcher for BucketMatcher<HASH6
         self.last_distances
     }
 
-    fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8]) {
+    fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8]) -> bool {
         let partial_prepare_threshold = Self::BUCKET_SIZE >> 6;
-        if one_shot && input_size <= partial_prepare_threshold {
+        let partial = one_shot && input_size <= partial_prepare_threshold;
+        if partial {
             for offset in 0..input_size {
                 let key = Self::hash(data, offset);
                 if let Some(count) = self.num.get_mut(key) {
@@ -478,6 +501,10 @@ impl<const HASH64: bool, const BUCKET_BITS: u32> Matcher for BucketMatcher<HASH6
         } else {
             self.num.fill(0);
         }
+        // `buckets` is deliberately left alone, here and in the constructor's
+        // sibling: a slot is only ever read below the counter that guards it,
+        // and every counter this touched is now zero.
+        partial
     }
 
     #[inline(always)]
@@ -709,9 +736,10 @@ impl<const NUM_BANKS: usize, const BANK_BITS: u32> Matcher for ChainMatcher<NUM_
         self.last_distances
     }
 
-    fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8]) {
+    fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8]) -> bool {
         let partial_prepare_threshold = CHAIN_BUCKET_SIZE >> 6;
-        if one_shot && input_size <= partial_prepare_threshold {
+        let partial = one_shot && input_size <= partial_prepare_threshold;
+        if partial {
             for offset in 0..input_size {
                 let bucket = Self::hash(data, offset);
                 if let Some(slot) = self.addr.get_mut(bucket) {
@@ -727,6 +755,9 @@ impl<const NUM_BANKS: usize, const BANK_BITS: u32> Matcher for ChainMatcher<NUM_
         }
         self.tiny_hash.fill(0);
         self.free_slot_idx.fill(0);
+        // `slots` is left alone: a chain is only entered through `addr`, and
+        // every entry this cleared now reads as empty.
+        partial
     }
 
     #[inline(always)]
@@ -880,6 +911,8 @@ impl<const NUM_BANKS: usize, const BANK_BITS: u32> Matcher for ChainMatcher<NUM_
 /// they are byte-for-byte equivalent to `H5` and `H6`, as argued on
 /// [`BucketMatcher`].
 pub(crate) enum MatchFinder {
+    /// Quality 2: one candidate slot per bucket, with a dictionary probe.
+    H2(QuickMatcher<16, 0, 5, true>),
     /// Quality 3.
     H3(QuickMatcher<16, 1, 5, false>),
     /// Quality 4, small inputs.
@@ -902,6 +935,7 @@ impl From<HasherPlan> for MatchFinder {
     /// Allocates the match finder a plan calls for.
     fn from(plan: HasherPlan) -> Self {
         match plan {
+            HasherPlan::H2 => Self::H2(QuickMatcher::new()),
             HasherPlan::H3 => Self::H3(QuickMatcher::new()),
             HasherPlan::H4 => Self::H4(QuickMatcher::new()),
             HasherPlan::H54 => Self::H54(QuickMatcher::new()),
@@ -931,6 +965,7 @@ impl From<HasherPlan> for MatchFinder {
 macro_rules! with_matcher {
     ($finder:expr, |$matcher:ident| $body:expr) => {
         match $finder {
+            MatchFinder::H2($matcher) => $body,
             MatchFinder::H3($matcher) => $body,
             MatchFinder::H4($matcher) => $body,
             MatchFinder::H54($matcher) => $body,
@@ -947,8 +982,11 @@ pub(crate) use with_matcher;
 
 impl MatchFinder {
     /// Clears the table before the first block of a stream (`Prepare`).
-    pub(crate) fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8]) {
-        with_matcher!(self, |matcher| matcher.prepare(one_shot, input_size, data));
+    ///
+    /// Returns whether only the slots the input reaches were cleared; see
+    /// [`Matcher::prepare`].
+    pub(crate) fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8]) -> bool {
+        with_matcher!(self, |matcher| matcher.prepare(one_shot, input_size, data))
     }
 
     /// Records the positions spanning the previous block boundary.

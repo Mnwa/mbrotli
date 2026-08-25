@@ -343,16 +343,64 @@ unbounded:
 The tradeoff is deliberate and worth naming: a regression that needs *both* a
 large input and one of the capped sweeps' shapes would be missed.
 
+## 11. The attached prefix
+
+An attached RFC 9841 prefix reaches these qualities in three places, all of
+them the reference's:
+
+1. **Collection.** After the binary tree has produced a position's matches,
+   `SharedContextInner::find_all_matches` collects up to sixty-four more from
+   the attachments, from a minimum length of three, and `merge_prefix_matches`
+   merges the two ascending-by-length sequences into one — `MergeMatches`. The
+   dynamic program then prices them together, indistinguishably.
+2. **Cached distances.** `update_nodes` gains the branch that the reference's
+   comment calls the way out of the "gray area": a cached distance past
+   `max_distance` but at most `dictionary_start` is unusable, while one past
+   `dictionary_start` addresses the prefix and is measured against it. Without
+   an attachment `gap` is zero, the second branch is unreachable, and the loop
+   is exactly what it was.
+3. **Coding.** `gap` shifts `dictionary_start` everywhere a distance is
+   classified, so `create_commands` marks a prefix reference as a dictionary
+   reference and leaves the distance cache alone, and `evaluate_node`'s
+   shortcut chain skips it for the same reason.
+
+```mermaid
+flowchart TD
+    pos["position"] --> tree["BinaryTreeMatcher::find_all_matches<br/>dictionary_start + gap"]
+    pos --> pre{"context attached?"}
+    pre -->|no| prices
+    pre -->|yes| lookup["SharedContextInner::find_all_matches<br/>min length 3, at most 64, dictionary_start"]
+    tree --> merge
+    lookup --> merge["merge_prefix_matches<br/>ascending by length, then distance"]
+    merge --> prices["update_nodes prices every candidate"]
+    prices --> cache{"cached distance?"}
+    cache -->|"<= max_distance"| ring["measure against the ring buffer"]
+    cache -->|"> dictionary_start"| dict["measure against the prefix"]
+    cache -->|otherwise| grey["gray area: skip"]
+```
+
+The match itself stops at the end of the attachment it was found in, which is
+the reference's `limit`; only `extend_last_command` runs on across seams.
+
 ## Known gaps
 
-- **Large-window mode.** `lgwin` stops at 24, so the extended distance alphabet
-  and its wider `alphabet_size_limit` are unreachable. `DistanceParams` computes
-  the RFC 7932 sizes only.
-- **Shared and compound dictionaries.** The public API exposes neither, so the
-  reference's compound-dictionary branches in `UpdateNodes` and `FindAllMatches`
-  have no counterpart. `gap` is zero throughout, which makes the "gray area"
-  branch of the cached-distance loop unreachable.
+- **Large-window history stops at 30 bits.** `WindowBits::large` reaches these
+  qualities and `DistanceParams::for_window` computes the widened RFC 9841
+  alphabet and its `alphabet_size_limit`, but retained history is capped at 30
+  bits by `ResolvedWindow::encoder_bits`, so the binary tree never indexes a
+  window wider than that. See [shared-brotli.md](shared-brotli.md) decision D2.
+- **No serialized or contextual dictionary.** The LZ77 prefix is implemented;
+  the reference's custom word lists, transform lists and context map are not,
+  so its `contextual.dict[dict_id]` selection has no counterpart and the
+  built-in static dictionary is always the one consulted.
 - **Stream offset.** Always zero; the reference uses it only for shared
   dictionaries.
-- **`hotpath` instrumentation.** Only `encode_block` is annotated on this path;
-  the inner stages are not yet measured.
+- **`hotpath` instrumentation.** Only `encode_block`, `encode_block_with` and
+  `flush_block` are annotated on this path; the inner stages are not yet
+  measured.
+- **Throughput is behind the reference, but least of any slow quality.**
+  0.863x at quality ten and 0.901x at quality eleven, geometric mean over eleven
+  corpora on an Apple M5 Pro, while emitting identical bytes. That is closer
+  than qualities two to nine manage; the dynamic program dominates enough that
+  the per-call setup these qualities also pay is a smaller share of the whole.
+  See [`docs/all_qualities_benchmarks.md`](../docs/all_qualities_benchmarks.md).

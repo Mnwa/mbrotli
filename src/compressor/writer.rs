@@ -8,10 +8,14 @@ use std::io::{Error, Result, Write};
 /// Adapter that compresses everything written to it into an inner writer.
 ///
 /// Input is buffered until a whole fragment is available, so the compressed
-/// stream is only complete after [`CompressorWriter::finish`]. Dropping
-/// the adapter without finishing discards the buffered tail; [`Write::flush`]
-/// only flushes the inner writer, because a fragment boundary does not
-/// necessarily fall on a byte boundary.
+/// stream is only terminated by [`CompressorWriter::finish`]. Dropping the
+/// adapter without finishing discards the buffered tail and leaves the stream
+/// unterminated, which no decoder will accept.
+///
+/// [`Write::flush`] compresses everything buffered so far and realigns the
+/// stream to a byte boundary, so a reader on the far end can decode every byte
+/// written up to that point without waiting for the stream to end. It does not
+/// terminate the stream, and it costs some ratio; see its own documentation.
 ///
 /// # Examples
 ///
@@ -37,6 +41,20 @@ pub struct CompressorWriter<T: Write> {
     pub(crate) params: CompressParams,
     pub(crate) encoder: Option<Encoder>,
     pub(crate) pending: Vec<u8>,
+}
+
+impl<T: Write> std::fmt::Debug for CompressorWriter<T> {
+    /// Reports the session's parameters and how much input is still buffered.
+    ///
+    /// Neither the inner writer nor the encoder is shown: the writer has no
+    /// `Debug` bound, and the encoder is a private implementation type.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompressorWriter")
+            .field("params", &self.params)
+            .field("started", &self.encoder.is_some())
+            .field("pending", &self.pending.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T: Write> CompressorWriter<T> {
@@ -104,6 +122,24 @@ impl<T: Write> CompressorWriter<T> {
         Ok(())
     }
 
+    /// Compresses `take` buffered bytes, closes the meta-block and realigns.
+    fn emit_flush(&mut self, take: usize) -> Result<()> {
+        self.encoder()?;
+        let Self {
+            writer,
+            encoder,
+            pending,
+            ..
+        } = self;
+        let Some(encoder) = encoder.as_mut() else {
+            return Err(Error::other("encoder was not initialised"));
+        };
+        let block = encoder.flush_block(&pending[..take])?;
+        writer.write_all(block)?;
+        pending.drain(..take);
+        Ok(())
+    }
+
     /// Writes the final meta-block and returns the inner writer.
     ///
     /// # Errors
@@ -133,8 +169,36 @@ impl<T: Write> Write for CompressorWriter<T> {
         Ok(buf.len())
     }
 
-    /// Flushes the inner writer without terminating the Brotli stream.
+    /// Compresses everything buffered so far and flushes the inner writer.
+    ///
+    /// The Brotli stream is *not* terminated — [`CompressorWriter::finish`]
+    /// still has to be called — but it is brought to a point a decoder can
+    /// read up to: every byte written into the adapter so far has been
+    /// compressed, written on, and followed by the empty metadata block that
+    /// realigns the stream to a byte boundary. That is what makes the adapter
+    /// usable for an interactive protocol, where the reader on the far end
+    /// needs the bytes before the sender knows the stream is over.
+    ///
+    /// Flushing costs compression: it ends the meta-block early, so the
+    /// entropy codes are built from less data, and it adds the two or three
+    /// bytes of the padding block. Flushing per small write can easily make
+    /// the output larger than the input. Flush on the boundaries the protocol
+    /// actually has, not on every write.
+    ///
+    /// Flushing a writer that has taken no input still emits the stream
+    /// header, since the header is what has to be realigned.
+    ///
+    /// # Errors
+    ///
+    /// Propagates IO errors from the inner writer and encoder errors such as
+    /// [`crate::compressor::BrotliCompressError::UnsupportedQuality`].
     fn flush(&mut self) -> Result<()> {
+        let limit = self.encoder()?.block_size_limit();
+        while self.pending.len() > limit {
+            self.emit(limit, false)?;
+        }
+        let remaining = self.pending.len();
+        self.emit_flush(remaining)?;
         self.writer.flush()
     }
 }

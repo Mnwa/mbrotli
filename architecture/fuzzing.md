@@ -108,7 +108,7 @@ streaming and one-shot targets stay comparable with each other and with the C
 reference. That keeps the equivalence and differential targets focused on
 encoder behaviour. `parameter_parsing` exists
 because of that closure — it is the only target that can reach the validating
-conversions and the unimplemented-quality path.
+conversions and the large-window refusal path.
 
 ## Targets and oracles
 
@@ -130,9 +130,9 @@ conversions and the unimplemented-quality path.
 | `differential_c` | header | byte identity with Google Brotli v1.2.0 configured with the same quality, window, mode, block size, size hint, distance layout and context setting |
 | `streaming_equivalence` | header | writer output equals reader output at an arbitrary chunk size, and round-trips |
 | `output_capacity` | header | exactly sized `dst` accepted, one byte short reported as `OutputTooSmall` |
-| `parameter_parsing` | numeric | `TryFrom` contracts hold; unimplemented qualities reported by all four entry points |
-| `large_window` | large window | `WindowBits::large` contract holds; qualities 0 and 1 refuse rather than dropping the request; bound, determinism, backend identity; C decoder round-trip up to 30 declared bits, and above it the stream differs from the 30-bit stream only in the six header bits |
-| `shared_context` | shared context | preparation is a transaction — a count or limit refusal yields no context; the accessors agree with what was attached; a reported prefix match really matches those bytes and fits inside both sides; the offset-to-distance mapping round-trips and saturates at both ends; the match does not depend on which backend the compressor resolved; an empty context emits exactly what `compress` emits and round-trips; a non-empty one is refused with `UnsupportedSharedContextForQuality` rather than ignored |
+| `parameter_parsing` | numeric | `TryFrom` contracts hold; every legal quality compresses and round-trips; qualities 0 to 2 refuse a large window through all four entry points |
+| `large_window` | large window | `WindowBits::large` contract holds; qualities 0, 1 and 2 refuse rather than dropping the request; bound, determinism, backend identity; C decoder round-trip up to 30 declared bits, and above it the stream differs from the 30-bit stream only in the six header bits |
+| `shared_context` | shared context | preparation is a transaction — a count or limit refusal yields no context; the accessors agree with what was attached; a reported prefix match really matches those bytes and fits inside both sides; the offset-to-distance mapping round-trips and saturates at both ends; the match does not depend on which backend the compressor resolved; an empty context emits exactly what `compress` emits and round-trips; below quality 5 a non-empty one is refused rather than ignored; at quality 5 and above it compresses inside the shared bound, and the slice and vector entry points agree |
 
 The oracles are layered rather than independent: `differential_c` is the
 strongest (byte identity with the reference), `params_roundtrip` and the
@@ -167,7 +167,7 @@ sequenceDiagram
 ```
 
 A panic is the signal; nothing catches it. Errors that are part of the API
-contract — `UnsupportedQuality`, `OutputTooSmall`, the `TryFrom` rejections —
+contract — `UnsupportedLargeWindow`, `OutputTooSmall`, the `TryFrom` rejections —
 are asserted on rather than treated as crashes.
 
 ## SIMD dispatch point
@@ -236,9 +236,12 @@ sets are identical; the corpus takes under two seconds instead of minutes.
 
 - **No decompression target.** There is no decoder in `mbrotli`; round-trip
   oracles use Google's C decoder. A decoder target has to wait for one.
-- **Qualities 2 and 6 through 11 are only fuzzed for their refusal.**
-  `parameter_parsing` asserts they report `UnsupportedQuality` from all four
-  entry points; there is no implementation behind them to fuzz.
+- **No target drives an attached prefix through a whole compression.**
+  `shared_context` attaches dictionaries and checks the bound, determinism and
+  the two entry points against each other, but it does not round-trip a stream
+  whose distances reached into the prefix — that needs the C decoder with the
+  same dictionaries attached, which the target layer does not wire up yet.
+  `tests/shared_dictionary.rs` covers it deterministically instead.
 - **Payloads are capped at 128 KiB.** Inputs longer than that are truncated, so
   windows of 2^17 and above never span multiple encoder blocks under the
   fuzzer. `tests/vendor_corpus.rs` covers multi-fragment inputs instead,

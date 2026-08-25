@@ -57,7 +57,7 @@ impl TryFrom<QualityLevel> for HqQuality {
 }
 
 /// Every parameter the high-quality encoder needs, already sanitised.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct HqParams {
     /// Quality this encoder runs at.
     pub(crate) quality: HqQuality,

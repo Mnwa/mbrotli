@@ -17,8 +17,14 @@ use super::constants::{NUM_COMMAND_SYMBOLS, NUM_LITERAL_SYMBOLS};
 use super::distance::{DistanceParams, MAX_SIMPLE_DISTANCE_ALPHABET_SIZE};
 use super::fast_log::log2_floor_non_zero;
 use super::format::{ContextMode, NUM_BLOCK_LEN_SYMBOLS, PREFIX_CODE_RANGES};
-use super::huffman::{HuffmanNode, build_and_store_huffman_tree, tree_capacity};
+use super::huffman::{
+    HuffmanNode, build_and_store_huffman_tree, build_and_store_huffman_tree_fast, tree_capacity,
+};
 use super::metablock::{DISTANCE_CONTEXT_BITS, LITERAL_CONTEXT_BITS, MetaBlockSplit};
+use super::tables::{
+    STATIC_COMMAND_CODE_BITS, STATIC_COMMAND_CODE_DEPTH, STATIC_DISTANCE_CODE_BITS,
+    STATIC_DISTANCE_CODE_DEPTH,
+};
 
 /// Nodes a prefix-code build over the largest alphabet needs.
 const MAX_HUFFMAN_TREE_SIZE: usize = tree_capacity(NUM_COMMAND_SYMBOLS);
@@ -604,7 +610,7 @@ impl MetaBlockWriter {
         clippy::too_many_arguments,
         reason = "mirrors BrotliStoreMetaBlock, whose parameters are all needed"
     )]
-    #[hotpath::measure]
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) fn store_meta_block(
         &mut self,
         input: &[u8],
@@ -748,6 +754,138 @@ impl MetaBlockWriter {
         }
     }
 
+    /// Writes a meta-block whose command and distance codes may be static.
+    ///
+    /// Mirrors `BrotliStoreMetaBlockFast`, the storage quality two uses. Below
+    /// a hundred and twenty-nine commands only the literal code is built from
+    /// the data; the command and distance codes are the fixed ones the format
+    /// defines, which costs ratio but saves two prefix-code builds and their
+    /// descriptions. Above that the three codes are built the fast way, which
+    /// orders leaves by count alone rather than running the full package-merge
+    /// that [`MetaBlockWriter::store_meta_block_trivial`] uses.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors BrotliStoreMetaBlockFast, whose parameters are all needed"
+    )]
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    pub(crate) fn store_meta_block_fast(
+        &mut self,
+        input: &[u8],
+        start_pos: usize,
+        length: usize,
+        mask: usize,
+        is_last: bool,
+        dist: &DistanceParams,
+        commands: &[Command],
+        w: &mut BitWriter,
+    ) {
+        let num_distance_symbols = dist.alphabet_size_max;
+        let distance_alphabet_bits = log2_floor_non_zero(num_distance_symbols as usize - 1) + 1;
+
+        store_compressed_meta_block_header(is_last, length, w);
+
+        // One literal, one command and one distance block type, and no context
+        // map: thirteen zero bits.
+        w.write(13, 0);
+
+        if commands.len() <= MAX_COMMANDS_FOR_STATIC_CODES {
+            // Only the literals are worth a code of their own at this size.
+            let mut literals = [0u32; NUM_LITERAL_SYMBOLS];
+            let mut pos = start_pos;
+            let mut num_literals = 0usize;
+            for command in commands {
+                for _ in 0..command.insert_len {
+                    let byte = usize::from(input.get(pos & mask).copied().unwrap_or(0));
+                    literals[byte] += 1;
+                    pos += 1;
+                }
+                num_literals += command.insert_len as usize;
+                pos += command.copy_len() as usize;
+            }
+            build_and_store_huffman_tree_fast(
+                &mut self.tree,
+                &literals,
+                num_literals,
+                8,
+                &mut self.literal_depth,
+                &mut self.literal_bits,
+                w,
+            );
+            store_static_command_huffman_tree(w);
+            store_static_distance_huffman_tree(w);
+            store_data_with_huffman_codes(
+                input,
+                start_pos,
+                mask,
+                commands,
+                &self.literal_depth,
+                &self.literal_bits,
+                &STATIC_COMMAND_CODE_DEPTH,
+                &STATIC_COMMAND_CODE_BITS,
+                &STATIC_DISTANCE_CODE_DEPTH,
+                &STATIC_DISTANCE_CODE_BITS,
+                w,
+            );
+        } else {
+            let mut lit_histo = super::histogram::HistogramLiteral::default();
+            let mut cmd_histo = super::histogram::HistogramCommand::default();
+            let mut dist_histo = super::histogram::HistogramDistance::default();
+            build_histograms(
+                input,
+                start_pos,
+                mask,
+                commands,
+                &mut lit_histo,
+                &mut cmd_histo,
+                &mut dist_histo,
+            );
+            build_and_store_huffman_tree_fast(
+                &mut self.tree,
+                &lit_histo.data,
+                lit_histo.total_count,
+                8,
+                &mut self.literal_depth,
+                &mut self.literal_bits,
+                w,
+            );
+            build_and_store_huffman_tree_fast(
+                &mut self.tree,
+                &cmd_histo.data,
+                cmd_histo.total_count,
+                10,
+                &mut self.command_depth,
+                &mut self.command_bits,
+                w,
+            );
+            build_and_store_huffman_tree_fast(
+                &mut self.tree,
+                &dist_histo.data,
+                dist_histo.total_count,
+                distance_alphabet_bits,
+                &mut self.distance_depth,
+                &mut self.distance_bits,
+                w,
+            );
+            store_data_with_huffman_codes(
+                input,
+                start_pos,
+                mask,
+                commands,
+                &self.literal_depth,
+                &self.literal_bits,
+                &self.command_depth,
+                &self.command_bits,
+                &self.distance_depth,
+                &self.distance_bits,
+                w,
+            );
+        }
+
+        if is_last {
+            w.jump_to_byte_boundary();
+        }
+    }
+
     /// Writes a meta-block with one prefix code per stream.
     ///
     /// Mirrors `BrotliStoreMetaBlockTrivial`, the storage quality three uses.
@@ -755,7 +893,7 @@ impl MetaBlockWriter {
         clippy::too_many_arguments,
         reason = "mirrors BrotliStoreMetaBlockTrivial, whose parameters are all needed"
     )]
-    #[hotpath::measure]
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) fn store_meta_block_trivial(
         &mut self,
         input: &[u8],
@@ -832,6 +970,28 @@ impl MetaBlockWriter {
             w.jump_to_byte_boundary();
         }
     }
+}
+
+/// Largest command count that still gets the fixed command and distance codes.
+///
+/// Mirrors the `n_commands <= 128` test in `BrotliStoreMetaBlockFast`: below
+/// this a code description costs more than the fixed code wastes.
+const MAX_COMMANDS_FOR_STATIC_CODES: usize = 128;
+
+/// Writes the description of the static command prefix code.
+///
+/// Mirrors `StoreStaticCommandHuffmanTree`, which ships the description as the
+/// fifty-nine literal bits it encodes to rather than rebuilding it.
+fn store_static_command_huffman_tree(w: &mut BitWriter) {
+    w.write(56, 0x0092_6244_1630_7003);
+    w.write(3, 0);
+}
+
+/// Writes the description of the static distance prefix code.
+///
+/// Mirrors `StoreStaticDistanceHuffmanTree`.
+fn store_static_distance_huffman_tree(w: &mut BitWriter) {
+    w.write(28, 0x0369_DC03);
 }
 
 /// Gathers the three histograms of a meta-block (`BuildHistograms`).

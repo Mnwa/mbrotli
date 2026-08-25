@@ -14,15 +14,16 @@ The subsystem is a three-layer funnel:
    construction time, and carries it as a `Copy` value.
 2. **API layer** — `Compressor` pairs that level with per-call
    `CompressParams` and exposes bound calculation, one-shot to a `Vec`,
-   one-shot into a caller slice, and the two streaming adapters — plus the
-   RFC 9841 shared-context entry points that mirror the first three and take a
+   one-shot into a caller slice, and the two streaming adapters — plus a
+   workspace-reusing variant of each one-shot entry point, and the RFC 9841
+   shared-context entry points that mirror the first three and take a
    caller-owned `SharedContext` as a separate argument. Those are described in
    [shared-brotli.md](shared-brotli.md).
 3. **Core layer** — private `compressor::core` modules own the algorithms:
    `core::bound` computes the compressed-size upper bound, `core::driver`
    routes a quality to an encoder and owns what both encoders share,
    `core::shared` holds the primitives they all use, `core::fast` owns the
-   quality 0 and 1 encoders, `core::greedy` owns the quality 3 to 9 encoder,
+   quality 0 and 1 encoders, `core::greedy` owns the quality 2 to 9 encoder,
    and `core::hq` owns the quality 10 and 11 encoder. Each encoder performs the
    single runtime SIMD dispatch itself.
 
@@ -82,6 +83,8 @@ classDiagram
         +calculate_bound(params, usize) BrotliResult~usize~
         +compress(params, src) BrotliResult~Vec~u8~~
         +compress_to_slice(params, src, dst) BrotliResult~usize~
+        +compress_with(&mut ws, params, src) BrotliResult~Vec~u8~~
+        +compress_to_slice_with(&mut ws, params, src, dst) BrotliResult~usize~
         +compress_writer(params, w) CompressorWriter
         +compress_reader(params, r) CompressorReader
         +shared_context_builder(quality) SharedContextBuilder
@@ -210,19 +213,19 @@ Quality routing happens once, when a `core::driver::Encoder` is built:
 ```mermaid
 flowchart TD
     q["CompressParams::quality()"] --> lw{"lgwin().is_large()?"}
-    lw -->|yes, quality 0 or 1| lwerr["BrotliCompressError::Shared<br/>(UnsupportedLargeWindow)"]
+    lw -->|"yes, quality 0, 1 or 2"| lwerr["BrotliCompressError::Shared<br/>(UnsupportedLargeWindow)"]
     lw -->|"no, or quality 3 to 11"| fast{"0 or 1?"}
     fast -->|yes| f["Encoder::Fast(FastEncoder)"]
-    fast -->|no| greedy{"3 to 9?"}
+    fast -->|no| greedy{"2 to 9?"}
     greedy -->|yes| g["Encoder::Greedy(GreedyEncoder)"]
-    greedy -->|no| hq{"10 or 11?"}
-    hq -->|yes| h["Encoder::Hq(HqEncoder)"]
-    hq -->|no| err["BrotliCompressError::UnsupportedQuality<br/>(quality 2 only)"]
+    greedy -->|no| h["Encoder::Hq(HqEncoder)"]
 ```
 
-The large-window branch runs in `core::driver` before the empty-input shortcut,
-and again in `FastEncoder::new` for the streaming adapters, which build their
-encoder lazily. See [shared-brotli.md](shared-brotli.md) §5.
+Every quality the format defines now routes to an encoder. The large-window
+branch runs in `core::driver` before the empty-input shortcut, and again in
+`FastEncoder::new` and `GreedyParams::new` for the streaming adapters, which
+build their encoder lazily and so never reach the driver's check. See
+[shared-brotli.md](shared-brotli.md) §5.
 
 ### 1.4. The size hint
 
@@ -300,10 +303,95 @@ stateDiagram-v2
 
 The writer only emits a block once **more** than a whole block is buffered, so
 the final call always has data for the terminating meta-block.
-`Write::flush` flushes the inner writer without terminating the stream, because
-a fragment boundary need not fall on a byte boundary;
-`CompressorWriter::finish` writes the final meta-block and returns the
-inner writer.
+`CompressorWriter::finish` writes the final meta-block and returns the inner
+writer.
+
+### 3.1. Flushing
+
+`Write::flush` compresses everything buffered and brings the stream to a point
+a decoder can read up to, without terminating it. It mirrors the reference's
+`BROTLI_OPERATION_FLUSH` in two steps:
+
+1. the buffered input is written out as a meta-block even where the encoder
+   would rather keep gathering — `force_flush` in `EncodeData`, and a short
+   non-final fragment on the fast path;
+2. the stream is realigned to a byte boundary by
+   `core::shared::bits::inject_byte_padding`, which emits the six-bit empty
+   metadata block `ISLAST = 0, MNIBBLES = 3, reserved = 0, MSKIPBYTES = 0` and
+   zero-fills to the next byte — `InjectBytePaddingBlock`.
+
+Nothing is emitted when there was no buffered input *and* the stream was
+already aligned, which is what makes a redundant flush free. A flush before any
+input still emits the stream header, because the header is what has to be
+realigned.
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Writer as CompressorWriter
+    participant Enc as core::driver::Encoder
+    participant Sink as inner writer
+
+    Caller->>Writer: write(bytes)
+    Writer->>Writer: buffer; emit whole blocks
+    Caller->>Writer: flush()
+    Writer->>Enc: flush_block(pending)
+    Enc->>Enc: encode_data(is_last = false, force_flush = true)
+    Enc->>Enc: inject_byte_padding(last_bytes, last_bytes_bits)
+    Enc-->>Writer: meta-block + padding
+    Writer->>Sink: write_all, then flush
+    Note over Sink: everything written so far now decodes
+    Caller->>Writer: finish()
+    Writer->>Enc: encode_block(rest, is_last = true)
+    Enc-->>Writer: final meta-block
+    Writer->>Sink: write_all, then flush
+```
+
+Flushing trades ratio for latency and the trade is steep: it ends a meta-block
+early, so the entropy codes are built from less data, and it adds the padding
+block. Measured over 256 KiB of text, flushing every kibibyte grew the stream
+2.4 times at quality 11 and seventeen times at quality 1. A handful of flushes
+is close to free. See [`docs/api_benchmarks.md`](../docs/api_benchmarks.md) §2.
+
+The reader has no flush: it is pulled rather than pushed, so a caller that
+wants a decodable prefix simply stops reading.
+
+### 3.2. Reuse across calls
+
+`CompressWorkspace` retains one `core::driver::Encoder` between one-shot calls,
+behind `core::driver::EncoderCache`. On each call the cache resets the retained
+encoder when the new parameters resolve to the same shape and rebuilds it
+otherwise, so reuse can never change a byte:
+
+| Encoder | What "same shape" means |
+| --- | --- |
+| `Fast` | `FastEncoder::matches` — same quality, fragment limit and stream header |
+| `Greedy` | `GreedyParams` compares equal, which covers the matcher, both block sizes and the distance alphabet |
+| `Hq` | `HqParams` compares equal |
+
+The reset keeps every allocation and puts back only the state a stream owns.
+Two details make it correct rather than merely cheap:
+
+- `MatchFinder::prepare` may clear only the slots a short one-shot input
+  reaches, which is sound solely on a table that was never stored into. The
+  reset replays that same sweep over the previous stream's own bytes — still in
+  the ring buffer at that moment — which clears exactly what that stream could
+  have dirtied. Where the previous stream swept the whole table instead, the
+  encoder records that the table is dirty and the next `prepare` takes the full
+  path.
+- The ring buffer is not wiped. A backward reference is bounded by the distance
+  to the start of the stream, so the next stream never reads further back than
+  it has written; `write` re-establishes the head bytes, the tail mirror and
+  the sentinel, and `clear_margin` re-zeroes the margin.
+
+A call that fails part-written drops the retained encoder rather than resetting
+it, so no half-written stream can reach the next call.
+
+What it is worth depends on how much the quality allocates, and it is the whole
+of the quality 7 to 9 gap: on a 256-byte payload a retained workspace is 16.6
+times faster at quality 9 and 1.13 times at quality 1, and the win falls away
+once compression dominates the call. See
+[`docs/api_benchmarks.md`](../docs/api_benchmarks.md) §1.
 
 The reader keeps one byte more than a block buffered, which is what lets it
 tell a full block apart from the last one. That makes its output identical to
@@ -382,27 +470,37 @@ unbounded; see [hq-encoder.md](hq-encoder.md) §10.1 for what that gives up.
 
 ## Known gaps
 
-- **Quality 2 is not implemented.** It is the only quality the format defines
-  that has no encoder here; `compress` returns
-  `BrotliCompressError::UnsupportedQuality(2)`. The reference reaches it through
-  the two-pass fragment compressor with static entropy codes, which is a fourth
-  encoder core rather than a variant of any of the three that exist.
 - **No decoder.** Round-trip verification uses Google's C decoder from the
   `google-brotli-ffi` workspace crate.
 - **Large window is refused below quality 3.** RFC 9841 Large Window Brotli is
-  implemented for qualities 3 to 11, selected by
-  `WindowBits::large`; see
-  [shared-brotli.md](shared-brotli.md). Qualities 0 and 1 report
-  `SharedBrotliError::UnsupportedLargeWindow` rather than dropping the request.
-  Retained history stops at 30 bits however wide the header declares, so the
-  reference's `H35`, `H55` and `H65` match finders remain unreachable.
-- **No shared dictionary and no framing container.** The rest of RFC 9841 — the
-  caller-owned `SharedContext`, prefix and serialized dictionaries, and the
-  framing format — is not implemented. Only Brotli's built-in static dictionary
-  is used.
+  implemented for qualities 3 to 11, selected by `WindowBits::large`; see
+  [shared-brotli.md](shared-brotli.md). Qualities 0, 1 and 2 report
+  `SharedBrotliError::UnsupportedLargeWindow` rather than dropping the request,
+  because all three may write distances through a code built for the RFC 7932
+  alphabet. Retained history stops at 30 bits however wide the header declares,
+  so the reference's `H35`, `H55` and `H65` match finders remain unreachable.
+- **An attached prefix is refused below quality 5.** The reference compiles its
+  compound-dictionary search only for the match finders qualities five and
+  above select, and silently ignores the dictionary elsewhere; this crate
+  refuses instead. See [shared-brotli.md](shared-brotli.md).
+- **No serialized dictionary and no framing container.** The caller-owned
+  `SharedContext` and its LZ77 prefix dictionaries are implemented, and the
+  encoder consults them; see [shared-brotli.md](shared-brotli.md). The rest of
+  RFC 9841 — serialized shared dictionaries with custom word and transform
+  lists, and the framing container format — is not. Beyond an attached prefix,
+  only Brotli's built-in static dictionary is used.
+- **No shared streaming adapters.** `compress_shared` and
+  `compress_shared_to_slice` are one-shot; a `SharedCompressorWriter` would
+  have to hold the context's exclusive borrow for the life of the adapter,
+  which is a separate API decision.
 - **No stream offset.** The reference parameter that starts a stream at a
   non-zero position, and poisons the distance cache to match, is not exposed.
-- **`Write::flush` does not terminate the stream.** Callers must use
-  `CompressorWriter::finish`; dropping the adapter discards buffered
-  input.
+- **`Write::flush` does not terminate the stream.** It makes everything written
+  so far decodable — see §3.1 — but `CompressorWriter::finish` still has to be
+  called, and dropping the adapter discards buffered input and leaves the
+  stream unterminated.
+- **The workspace is one encoder deep.** `CompressWorkspace` retains exactly
+  one encoder, so alternating between two parameter shapes rebuilds on every
+  call. It is also not used by the streaming adapters, which build one encoder
+  per adapter anyway.
 - **No `Send`/`Sync` guarantees are documented** beyond what the fields imply.

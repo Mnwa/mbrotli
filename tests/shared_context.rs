@@ -190,11 +190,19 @@ fn preparation_does_not_depend_on_the_quality_it_was_prepared_for() {
 
 #[test]
 fn an_attached_dictionary_is_refused_rather_than_ignored() {
+    // Qualities below five have no match finder that could carry a prefix
+    // match, so a dictionary handed to one must be refused, never dropped.
+    // The qualities that can consult one are covered by
+    // `tests/shared_dictionary.rs`, which checks the bytes against the C
+    // encoder configured the same way.
     let compressor = compressor();
     for quality in IMPLEMENTED_QUALITIES {
+        let numeric = usize::from(quality);
+        if numeric >= 5 {
+            continue;
+        }
         let mut context = filled_context(&compressor, quality);
         let params = params(quality, 22);
-        let numeric = usize::from(quality);
         assert!(
             matches!(
                 compressor.compress_shared(params, &mut context, b"payload payload"),
@@ -208,14 +216,21 @@ fn an_attached_dictionary_is_refused_rather_than_ignored() {
 }
 
 #[test]
-fn a_quality_with_no_encoder_is_reported_before_the_context_is() {
+fn a_large_window_is_reported_before_the_context_is() {
+    // Quality two cannot carry a large window, and that has to be the error a
+    // caller sees even when the context would also have been refused.
     let compressor = compressor();
     let mut context = filled_context(&compressor, QualityLevel::Q11);
-    let params = params(QualityLevel::Q2, 22);
+    let params = CompressParams::new(
+        QualityLevel::Q2,
+        WindowBits::large(30).expect("a legal large window"),
+    );
 
     assert!(matches!(
         compressor.compress_shared(params, &mut context, b"payload"),
-        Err(BrotliCompressError::UnsupportedQuality(2))
+        Err(BrotliCompressError::Shared(
+            SharedBrotliError::UnsupportedLargeWindow { quality: 2 }
+        ))
     ));
 }
 

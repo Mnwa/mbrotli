@@ -191,6 +191,14 @@ impl SharedContextInner {
         &self.dictionaries
     }
 
+    /// Returns the prepared index of the `index`-th attachment.
+    ///
+    /// `None` for an attachment too short to hold a single hashable position,
+    /// which has an empty index rather than none at all.
+    pub(crate) fn prepared_prefix(&self, index: usize) -> Option<&PreparedPrefix> {
+        self.prepared.prefix(index)
+    }
+
     /// Returns whether the context addresses any prefix bytes at all.
     ///
     /// An empty context is not a special case anywhere else: it is what makes

@@ -93,11 +93,12 @@ arithmetic on a length, an offset or a distance wraps: the addressing functions
 use checked `u64` throughout and return `None` rather than a wrapped value at
 either end of the prefix.
 
-## Not implemented: dictionary trust
+## Implemented: dictionary trust
 
-Serialized shared dictionaries are not implemented, and no encoder consults an
-attached prefix dictionary yet. When they do, the following will apply and this
-section will be rewritten as behaviour rather than intent:
+Qualities five to eleven consult an attached prefix dictionary, so the
+following applies to streams this crate emits today. Serialized shared
+dictionaries — custom word and transform lists — remain unimplemented, and
+their own risks are not covered here.
 
 - **Dictionary bytes deserve the same suspicion as decompressed content.**
   Changing one byte of a dictionary changes what a stream decodes to. A decoder
@@ -106,11 +107,11 @@ section will be rewritten as behaviour rather than intent:
   with secret data leaks the secret through the compressed size, and a
   caller-chosen dictionary makes that leak *steerable*: an attacker who
   supplies the dictionary can probe secret input one guess at a time. A public
-  dictionary does not make the payloads safe to mix. Nothing this crate emits
-  today is affected, because a non-empty context is refused rather than used —
-  but `Compressor::longest_prefix_match` already reports how much of an input a
-  dictionary covers, which is the same information a size oracle leaks. Do not
-  expose it to a caller who does not already own the dictionary and the input.
+  dictionary does not make the payloads safe to mix. This now affects streams
+  the crate emits: at qualities five and above the compressed size depends on
+  the dictionary. `Compressor::longest_prefix_match` reports the same
+  information directly. Do not expose either to a caller who does not already
+  own both the dictionary and the input.
 - **Resource exhaustion from parsed structure.** Serialized dictionaries carry
   lengths and counts read from bytes. Every one of them has to be checked
   against a configured limit before anything is allocated for it; the two

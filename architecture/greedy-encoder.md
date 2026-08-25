@@ -1,4 +1,4 @@
-# Greedy Encoder Core (qualities 3 to 9)
+# Greedy Encoder Core (qualities 2 to 9)
 
 Scope: `src/compressor/core/greedy/`. This document describes the code as it
 stands; the [Known gaps](#known-gaps) section lists what is not implemented.
@@ -33,7 +33,7 @@ graph TD
     subgraph greedy["compressor::core::greedy"]
         enc["encoder<br/>(GreedyEncoder, dispatch)"]
         params["params<br/>(GreedyParams, HasherPlan)"]
-        hash["hashers<br/>(H3, H4, H54, H40/41/42, H5, H6)"]
+        hash["hashers<br/>(H2, H3, H4, H54, H40/41/42, H5, H6)"]
         refs["backward_references<br/>(greedy search)"]
         score["score<br/>(reference scoring)"]
         ctx["context_model<br/>(literal contexts)"]
@@ -95,27 +95,39 @@ The shaded modules on the right are shared with the high-quality encoder; see
 
 ### 1.1. What each quality adds
 
-| Feature | q3 | q4 | q5 | q6 | q7 | q8 | q9 |
-| --- | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
-| Default `lgblock` | 14 | 16 | 16 | 16 | 16 | 16 | `min(18, lgwin)` |
-| Block splitting | no | yes | yes | yes | yes | yes | yes |
-| Non-zero distance parameters | no | yes | yes | yes | yes | yes | yes |
-| Histogram optimisation | no | yes | yes | yes | yes | yes | yes |
-| Extensive delayed search | no | no | yes | yes | yes | yes | yes |
-| Literal context modelling | no | no | yes | yes | yes | yes | yes |
-| Three-context model eligible | no | no | no | no | yes | yes | yes |
-| Sparse-search threshold | 64 | 64 | 64 | 64 | 64 | 64 | 512 |
-| Bucket candidates | — | — | 16 | 32 | 64 | 128 | 256 |
-| Cached distances probed | 4 | 4 | 4 | 4 | 10 | 10 | 16 |
-| Small-window matcher | — | — | `H40` | `H40` | `H41` | `H41` | `H42` |
-| Chain hops | — | — | 16 | 32 | 56 | 112 | 224 |
-| Meta-block storage | trivial | greedy split | greedy split | greedy split | greedy split | greedy split | greedy split |
+| Feature | q2 | q3 | q4 | q5 | q6 | q7 | q8 | q9 |
+| --- | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
+| Default `lgblock` | 14 | 14 | 16 | 16 | 16 | 16 | 16 | `min(18, lgwin)` |
+| Block splitting | no | no | yes | yes | yes | yes | yes | yes |
+| Non-zero distance parameters | no | no | yes | yes | yes | yes | yes | yes |
+| Histogram optimisation | no | no | yes | yes | yes | yes | yes | yes |
+| Extensive delayed search | no | no | no | yes | yes | yes | yes | yes |
+| Literal context modelling | no | no | no | yes | yes | yes | yes | yes |
+| Three-context model eligible | no | no | no | no | no | yes | yes | yes |
+| Large window allowed | no | yes | yes | yes | yes | yes | yes | yes |
+| Attached prefix consulted | no | no | no | yes | yes | yes | yes | yes |
+| Sparse-search threshold | 64 | 64 | 64 | 64 | 64 | 64 | 64 | 512 |
+| Bucket candidates | — | — | — | 16 | 32 | 64 | 128 | 256 |
+| Cached distances probed | 4 | 4 | 4 | 4 | 4 | 10 | 10 | 16 |
+| Small-window matcher | — | — | — | `H40` | `H40` | `H41` | `H41` | `H42` |
+| Chain hops | — | — | — | 16 | 32 | 56 | 112 | 224 |
+| Meta-block storage | fast | trivial | greedy split | greedy split | greedy split | greedy split | greedy split | greedy split |
 
-Quality three is not "quality four with fewer candidates": it stores a
-meta-block through a different, simpler path, and it flushes on a symbol count
-rather than on a block-splitting decision. From quality five upwards the shape
-of the search is fixed and only its depth changes — which is why one code path
-serves all five.
+Qualities two and three are not "quality four with fewer candidates": each
+stores a meta-block through a different, simpler path, and both flush on a
+symbol count rather than on a block-splitting decision. From quality five
+upwards the shape of the search is fixed and only its depth changes — which is
+why one code path serves all five.
+
+Quality two differs from quality three in exactly two places, which is why it
+lives here rather than in a core of its own: it selects `H2` instead of `H3`,
+and it stores a meta-block with `store_meta_block_fast` instead of
+`store_meta_block_trivial`. Everything between those two points is shared.
+
+Because the fixed distance code `store_meta_block_fast` may fall back to is
+built for the RFC 7932 alphabet, quality two cannot carry a large window;
+`GreedyParams::new` refuses one, the same way `FastEncoder::new` does for
+qualities zero and one.
 
 ## 2. Parameter resolution and the hasher plan
 
@@ -126,6 +138,7 @@ takes part, which is what makes the output identical across SIMD backends.
 ```mermaid
 flowchart TD
     q["quality"] --> plan{"which quality?"}
+    plan -->|2| h2["H2"]
     plan -->|3| h3["H3"]
     plan -->|4| q4{"size_hint >= 1 MiB?"}
     q4 -->|no| h4["H4"]
@@ -137,15 +150,19 @@ flowchart TD
     big -->|no| h5["H5"]
 
     classDef fixed fill:#d9ead3,stroke:#38761d;
-    class h3,h4,h54,chain,h5,h6 fixed;
+    class h2,h3,h4,h54,chain,h5,h6 fixed;
 ```
 
 The depth of whichever matcher is chosen then follows the quality: the bucket
 matchers take `block_bits = quality - 1`, and the chain matchers take
 `max_hops = (quality > 6 ? 7 : 8) << (quality - 4)`.
 
+`ChooseHasher` sets the type to the quality itself below five, which is where
+`H2`, `H3` and `H4` come from.
+
 | Plan | Hash bytes | Bucket bits | Slots per bucket | Static dictionary |
 | --- | --: | --: | --- | --- |
+| `H2` | 5 | 16 | 1 sweep slot | yes, shallow |
 | `H3` | 5 | 16 | 1 sweep slot | no |
 | `H4` | 5 | 17 | 4 sweep slots | yes, shallow |
 | `H54` | 7 | 20 | 4 sweep slots | no |
@@ -164,6 +181,13 @@ The candidate depth, the chain depth and the number of cached distances are
 ordinary fields rather than const generics. They only bound loops, and turning
 five bucket depths into five monomorphisations would cost far more instruction
 cache than the bound is worth.
+
+`H2` and `H3` share a shape but not a path: with one slot per bucket the probe
+has no loop to leave, so the reference returns as soon as it has a match and
+reaches the static dictionary only by falling out of the bottom. `H3` never
+consults the dictionary, so that distinction is invisible there; `H2` does, so
+the single-slot branch must fall through rather than return — the two are the
+only matchers where the difference is observable.
 
 ### 2.2. The tagged matchers
 
@@ -225,7 +249,11 @@ stateDiagram-v2
 A meta-block is emitted when any of these holds, mirroring `EncodeData`:
 
 - this is the last block;
-- quality three has buffered `0x2FFF` literals and commands together;
+- a quality that does not split blocks — two or three — has buffered `0x2FFF`
+  literals and commands together;
+- the caller asked for a flush, which forces the meta-block out and then
+  realigns the stream to a byte boundary; see
+  [compressor.md](compressor.md) §3.1;
 - another whole input block would not fit inside the largest meta-block;
 - buffered literals or commands reached an eighth of the largest meta-block.
 
@@ -244,6 +272,7 @@ sequenceDiagram
     participant Search as create_backward_references
     participant Finder as Matcher
     participant Dict as dictionary
+    participant Prefix as attached prefix
     participant Cmds as command buffer
 
     loop while position + hash length < end
@@ -254,6 +283,10 @@ sequenceDiagram
             Finder->>Dict: search(shallow?)
         end
         Finder-->>Search: SearchResult
+        opt a context is attached (q5 and above)
+            Search->>Prefix: find_match(position)
+            Prefix-->>Search: improved SearchResult
+        end
         alt no match
             Search->>Search: one more literal, maybe stride ahead
         else match found
@@ -271,6 +304,43 @@ sequenceDiagram
         end
     end
 ```
+
+### 4.1. The attached prefix
+
+An attached RFC 9841 prefix widens the distance space rather than the search.
+Every distance that would address the dictionary sits past the window by
+`gap` — the total attached bytes — so three things shift together, exactly as
+they do in the reference:
+
+- the match finder is told the static dictionary starts at
+  `dictionary_start + gap` rather than `dictionary_start`, which pushes the
+  built-in dictionary past the attached one;
+- `SharedContextInner::find_match` runs after the ordinary search at each
+  position and may replace its result, using `dictionary_start` itself as the
+  boundary between window and prefix;
+- `compute_distance_code` and the distance-cache update both compare against
+  `dictionary_start + gap`, so a prefix reference is coded as an ordinary
+  distance but never enters the cache.
+
+`extend_last_command` gains the matching branch: a copy whose distance is past
+the window continues into the concatenated prefix, and unlike the search it
+runs on across attachment seams. See [shared-brotli.md](shared-brotli.md).
+
+`create_backward_references` is generic over a `const ENABLE_PREFIX: bool`, and
+`GreedyEncoder::create_references` instantiates both — the reference's
+`ENABLE_COMPOUND_DICTIONARY`, which it uses to compile the same function twice
+per match finder. This is not style. Folding the two into one runtime
+`Option::is_some` branch cost **2.1% of the geometric-mean throughput** over
+the eleven `oneshot/q3` corpora on an Apple M5 Pro, and 9.7% on `text-1MiB`,
+against a same-machine baseline built from `HEAD`. With the split the same
+measurement is +1.3% — inside the noise of no change. The loop is layout
+sensitive enough that one extra register and one always-untaken branch per
+position are measurable.
+
+The high-quality path keeps a runtime check instead, because that is what the
+reference does there too: `backward_references_hq.c` tests
+`addon->num_chunks != 0` rather than compiling two copies, and its per-position
+cost is dominated by the tree query and the dynamic program.
 
 Two details separate the qualities:
 
@@ -294,17 +364,27 @@ flowchart TD
     cmds["commands + ring buffer"] --> should{"ShouldCompress?"}
     should -->|no| raw["store_uncompressed_meta_block"]
     should -->|yes| q{"quality splits blocks?"}
-    q -->|no, q3| trivial["store_meta_block_trivial<br/>one code per stream"]
-    q -->|yes, q4 and q5| ctx["decide_over_literal_context_modeling<br/>(q5 only)"]
+    q -->|"no, q2"| fastst["store_meta_block_fast<br/>static command and distance codes<br/>below 129 commands"]
+    q -->|"no, q3"| trivial["store_meta_block_trivial<br/>one code per stream"]
+    q -->|"yes, q4 and above"| ctx["decide_over_literal_context_modeling<br/>(q5 and above)"]
     ctx --> build["build_meta_block_greedy<br/>literal / command / distance splitters"]
     build --> opt["optimize_histograms<br/>(RLE-friendly counts)"]
     opt --> store["store_meta_block<br/>block switches, context maps, codes"]
-    trivial --> grew{"grew by more than four bytes?"}
+    fastst --> grew{"grew by more than four bytes?"}
+    trivial --> grew
     store --> grew
     grew -->|yes| raw
     grew -->|no| done["done"]
     raw --> done
 ```
+
+`store_meta_block_fast` is quality two's storage — `BrotliStoreMetaBlockFast`.
+Below a hundred and twenty-nine commands only the literal code is built from
+the data; the command and distance codes are the fixed ones the format defines,
+written as the fifty-nine and twenty-eight literal bits their descriptions
+encode to. Above that all three codes are built, but by the leaves-ordered-by-
+count builder `build_and_store_huffman_tree_fast` rather than the full
+package-merge `store_meta_block_trivial` uses.
 
 `ShouldCompress` refuses blocks of at most two bytes outright, and samples
 every thirteenth literal of a block that is almost all literals: if the sample's
@@ -455,12 +535,18 @@ sized by the same `2 * bytes + 503` reservation the reference uses.
 | `tests/differential_c.rs`, `tests/vendor_corpus.rs`, `tests/randomized.rs` | Byte identity over the shared corpora, including Google's own multi-megabyte test data. |
 | `tests/simd_backends.rs` | Byte identity between the scalar fallback and every SIMD backend the host supports. |
 | `tests/streaming.rs` | Chunk-size independence and one-shot equivalence. |
+| `tests/shared_dictionary.rs` | Byte identity against the C encoder with the same prefixes prepared and attached, and a round trip through the C decoder with them attached too. |
 | `fuzz/afl/` | `q3_roundtrip`, `q4_roundtrip`, `q5_roundtrip` and the shared parameter-driven targets; see [fuzzing.md](fuzzing.md). |
 
 ## Known gaps
 
-- **Large-window brotli is unreachable.** `WindowBits` stops at 24, so the
-  reference's `H35`, `H55` and `H65` composite match finders are never built.
+- **The large-window match finders are unreachable.** `WindowBits::large`
+  reaches these qualities, so a large window is declared and the widened
+  distance alphabet is used, but `ResolvedWindow::encoder_bits` caps retained
+  history at 30 bits and every matcher is sized from that. The reference's
+  `H35`, `H55` and `H65` composite match finders are selected only above that
+  cap, so they are never built. See [shared-brotli.md](shared-brotli.md)
+  decision D2.
 - **The tagged `H58` and `H68` match finders are not built.** They are
   byte-for-byte equivalent to `H5` and `H6` — see
   [§2.2](#22-the-tagged-matchers) — so building them would add a second code
@@ -468,22 +554,34 @@ sized by the same `2 * bytes + 503` reservation the reference uses.
   the tag mask itself, which is the reference's main SIMD opportunity on this
   path and would be worth revisiting if profiling shows the candidate loop
   dominating.
-- **No compound or custom dictionary.** Only the built-in static dictionary is
-  used, matching the reference's non-experimental build.
+- **An attached prefix reaches only qualities five and above.** The reference
+  compiles its compound-dictionary search for `H5`, `H6`, `H40`, `H41`, `H42`,
+  `H55` and `H65` only, so `H2`, `H3`, `H4` and `H54` have nowhere to put a
+  prefix match; where the reference then ignores the dictionary, this crate
+  refuses. Custom word and transform lists are not implemented at any quality.
 - **No stream offset.** The reference parameter that starts a stream at a
   non-zero position is not exposed, so its poisoned distance cache is
   unreachable.
-- **The distance cache is four entries, not sixteen.** Every match finder these
-  qualities can select checks exactly four cached distances, so
-  `PrepareDistanceCache` has nothing to do; qualities seven and above would
-  need the extended cache.
 - **No SIMD beyond the match-length scan.** Tag masks, histogram accumulation
   and context sampling are still scalar.
-- **The throughput gate is not met.** These qualities run at roughly 0.77× to
-  0.80× of the reference on an Apple M5 Pro, and short inputs at about 0.5×,
-  while emitting identical bytes. The largest known cause is initialisation the
-  reference skips: the block splitters allocate and clear one histogram per
-  possible block type per meta-block, where the reference clears only the one it
-  is about to use, and the Huffman node pool is initialised on first use.
-  Measurements, profiles and the changes already tried are in
-  [`docs/q3_q5_benchmarks.md`](../docs/q3_q5_benchmarks.md).
+- **The throughput gate is not met, and the reason splits in two.** Geometric
+  means against the reference on an Apple M5 Pro, emitting identical bytes:
+  0.774x at quality two, 0.795x at three, down to 0.748x at six — then 0.612x,
+  0.536x and 0.377x at seven, eight and nine.
+
+  Qualities two to six are search-bound. The largest known cause is
+  initialisation the reference skips: the block splitters allocate and clear one
+  histogram per possible block type per meta-block, where the reference clears
+  only the one it is about to use, and the Huffman node pool is initialised on
+  first use. See [`docs/q3_q5_benchmarks.md`](../docs/q3_q5_benchmarks.md).
+
+  Qualities seven to nine are **setup-bound**, which the measurement of these
+  qualities was missing until now. Quality nine costs a flat 146 microseconds
+  per call before it looks at a byte — the same for sixteen input bytes as for
+  a thousand — against the reference's 2.9. It selects the largest tables the
+  crate builds, and `MatchFinder::prepare` wipes them in full because its
+  partial sweep only applies below a threshold those tables rarely reach. On a
+  mebibyte of text quality nine runs at 0.791x, in line with the rest; the gap
+  is entirely the floor. A retained `CompressWorkspace` removes it and takes
+  quality nine to 0.892x on a 256-byte payload, a 16.6x speed-up. See
+  [`docs/all_qualities_benchmarks.md`](../docs/all_qualities_benchmarks.md).

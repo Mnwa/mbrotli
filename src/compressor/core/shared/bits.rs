@@ -171,6 +171,57 @@ impl<'a> BitWriter<'a> {
     }
 }
 
+/// Bytes [`inject_byte_padding`] can write, and therefore the headroom a
+/// flushing encoder has to keep past the bytes it already completed.
+///
+/// The seal is at most seven carried bits plus the six of the header, so it
+/// spans at most two bytes; the third is the fresh partial byte the writer
+/// would resume in, which this function never leaves behind.
+pub(crate) const BYTE_PADDING_SLACK: usize = 3;
+
+/// Realigns the stream to a byte boundary with an empty metadata meta-block.
+///
+/// Ports `InjectBytePaddingBlock` from `c/enc/encode.c`. The six bits it emits
+/// are `ISLAST = 0`, `MNIBBLES = 3` (the metadata escape), one reserved zero
+/// and `MSKIPBYTES = 0`, which a decoder reads as a metadata block carrying no
+/// bytes. Everything above them in the final byte is left zero, so the stream
+/// resumes on a byte boundary and every byte handed out so far decodes to the
+/// input the encoder has already consumed.
+///
+/// `last_bytes` and `last_bytes_bits` are the partial byte the encoder carries
+/// between meta-blocks. On return they are zero: the padded stream is aligned,
+/// so there is nothing left to carry.
+///
+/// Returns the number of bytes written at the start of `dst`, which is zero
+/// when the stream was already aligned — the reference injects nothing in that
+/// case, and emitting a bare metadata block would change the output. `dst`
+/// must hold [`BYTE_PADDING_SLACK`] bytes; a shorter buffer writes nothing and
+/// reports zero, leaving the carried byte untouched so the caller can retry.
+pub(crate) fn inject_byte_padding(
+    last_bytes: &mut u16,
+    last_bytes_bits: &mut u32,
+    dst: &mut [u8],
+) -> usize {
+    if *last_bytes_bits == 0 {
+        return 0;
+    }
+    let Some(window) = dst.first_chunk_mut::<BYTE_PADDING_SLACK>() else {
+        return 0;
+    };
+
+    let seal_bits = *last_bytes_bits;
+    // `0x6` is the six-bit header itself: bit 0 is ISLAST, bits 1 and 2 are
+    // MNIBBLES = 3, bit 3 is reserved and bits 4 and 5 are MSKIPBYTES = 0.
+    let seal = u32::from(*last_bytes) | (0x6u32 << seal_bits);
+    *last_bytes = 0;
+    *last_bytes_bits = 0;
+
+    window[0] = seal as u8;
+    window[1] = (seal >> 8) as u8;
+    window[2] = (seal >> 16) as u8;
+    ((seal_bits as usize + 6) + 7) >> 3
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,5 +405,64 @@ mod tests {
         let writer = BitWriter::new(&mut storage, 0);
         assert_eq!(writer.byte(0), 7);
         assert_eq!(writer.byte(9), 0);
+    }
+
+    #[test]
+    fn byte_padding_seals_every_unaligned_position() {
+        // Reproduces `InjectBytePaddingBlock` by hand at every bit offset a
+        // meta-block can leave behind, carrying a byte whose low bits are set
+        // so the seal has to preserve them.
+        for bits in 1..8u32 {
+            let carried = u16::from(u8::MAX >> (8 - bits));
+            let mut last_bytes = carried;
+            let mut last_bytes_bits = bits;
+            let mut dst = [0u8; BYTE_PADDING_SLACK];
+
+            let written = inject_byte_padding(&mut last_bytes, &mut last_bytes_bits, &mut dst);
+
+            assert_eq!(written, ((bits as usize + 6) + 7) >> 3, "bits {bits}");
+            assert_eq!(last_bytes, 0, "bits {bits}: a carried byte survived");
+            assert_eq!(last_bytes_bits, 0, "bits {bits}: the stream stayed open");
+
+            let expected = u32::from(carried) | (0x6u32 << bits);
+            let mut seen = 0u32;
+            for (index, byte) in dst[..written].iter().enumerate() {
+                seen |= u32::from(*byte) << (index * 8);
+            }
+            assert_eq!(seen, expected, "bits {bits}: wrong seal");
+            // Nothing above the six header bits is set, so the stream resumes
+            // on a byte boundary with a zero partial byte.
+            assert_eq!(seen >> (bits + 6), 0, "bits {bits}: bits above the seal");
+        }
+    }
+
+    #[test]
+    fn byte_padding_writes_nothing_when_already_aligned() {
+        let mut last_bytes = 0u16;
+        let mut last_bytes_bits = 0u32;
+        let mut dst = [0xAAu8; BYTE_PADDING_SLACK];
+
+        assert_eq!(
+            inject_byte_padding(&mut last_bytes, &mut last_bytes_bits, &mut dst),
+            0
+        );
+        assert_eq!(
+            dst, [0xAA; BYTE_PADDING_SLACK],
+            "an aligned stream was padded"
+        );
+    }
+
+    #[test]
+    fn byte_padding_leaves_the_carry_alone_when_the_buffer_is_short() {
+        let mut last_bytes = 0x1u16;
+        let mut last_bytes_bits = 3u32;
+        let mut dst = [0u8; BYTE_PADDING_SLACK - 1];
+
+        assert_eq!(
+            inject_byte_padding(&mut last_bytes, &mut last_bytes_bits, &mut dst),
+            0
+        );
+        assert_eq!(last_bytes, 0x1, "the carried byte was consumed");
+        assert_eq!(last_bytes_bits, 3, "the carried bit count was consumed");
     }
 }

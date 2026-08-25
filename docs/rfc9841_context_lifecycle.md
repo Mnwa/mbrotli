@@ -128,9 +128,11 @@ for:
 1. `Compressor::compress_shared*` — the context's `max_quality`
    (`SharedContextQualityMismatch`).
 2. `core::driver::check_shared`:
-   1. quality support (`UnsupportedQuality(2)`);
+   1. quality support — every quality the format defines has an encoder, so
+      this step is now vacuous and kept only as the fixed place to consult;
    2. large-window support at this quality (`UnsupportedLargeWindow`);
-   3. the shared path itself (`UnsupportedSharedContextForQuality`).
+   3. the shared path itself — a non-empty context below quality five reports
+      `UnsupportedSharedContextForQuality`.
 
 Everything runs before any input is consumed and before the output bound is
 allocated.

@@ -246,13 +246,24 @@ fn the_fast_qualities_refuse_a_large_window_rather_than_dropping_it()
 }
 
 #[test]
-fn an_unimplemented_quality_is_reported_before_the_window() -> Result<(), Box<dyn std::error::Error>>
-{
+fn the_static_entropy_qualities_refuse_a_large_window() -> Result<(), Box<dyn std::error::Error>> {
+    // `SanitizeParams` forces `large_window` off at or below quality two; this
+    // crate refuses instead of silently dropping the request, exactly as it
+    // does for qualities zero and one.
     let compressor = Brotli::default().compressor();
-    assert!(matches!(
-        compressor.compress(large(QualityLevel::Q2, 30)?, b"payload"),
-        Err(BrotliCompressError::UnsupportedQuality(2))
-    ));
+    for quality in [QualityLevel::Q0, QualityLevel::Q1, QualityLevel::Q2] {
+        let outcome = compressor.compress(large(quality, 30)?, b"payload");
+        let expected = usize::from(quality);
+        assert!(
+            matches!(
+                outcome,
+                Err(BrotliCompressError::Shared(
+                    SharedBrotliError::UnsupportedLargeWindow { quality: reported }
+                )) if reported == expected
+            ),
+            "quality {quality:?} did not refuse a large window"
+        );
+    }
     Ok(())
 }
 

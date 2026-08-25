@@ -19,6 +19,7 @@ use super::cost::ZopfliCostModel;
 use super::h10::{BackwardMatch, BinaryTreeMatcher, HASH_TYPE_LENGTH, STORE_LOOKAHEAD};
 use super::nodes::{PosData, StartPosQueue, ZopfliNode};
 use super::params::HqParams;
+use crate::compressor::core::rfc9841::context::SharedContextInner;
 use crate::compressor::core::shared::command::{
     Command, combine_length_codes, copy_length_code, insert_length_code,
     prefix_encode_copy_distance,
@@ -242,6 +243,10 @@ struct UpdateContext<'a> {
     params: &'a HqParams,
     max_backward_limit: usize,
     starting_dist_cache: &'a [i32; 4],
+    /// Total attached prefix bytes; the reference's `gap`, zero without one.
+    gap: usize,
+    /// The attached prefix, when a cached distance may address it.
+    attached: Option<&'a SharedContextInner>,
 }
 
 /// Prices every command that could start at `pos`, returning the longest copy.
@@ -263,10 +268,7 @@ fn update_nodes<S: Simd>(
     let cur_ix = ctx.block_start + pos;
     let cur_ix_masked = cur_ix & ctx.ringbuffer_mask;
     let max_distance = cur_ix.min(ctx.max_backward_limit);
-    // No compound dictionary is reachable through this crate's public API, so
-    // the reference's `gap` is zero and `dictionary_start` coincides with
-    // `max_distance`.
-    let gap = 0usize;
+    let gap = ctx.gap;
     let dictionary_start = cur_ix.min(ctx.max_backward_limit);
     let max_len = ctx.num_bytes - pos;
     let max_zopfli_len = ctx.params.max_zopfli_len();
@@ -317,21 +319,47 @@ fn update_nodes<S: Simd>(
                 // A static-dictionary distance: the matches list covers those.
                 continue;
             }
-            if backward > max_distance {
-                // Addressable by a decoder, but this encoder does not hold the
-                // bytes, so it must not look at them.
+            let len = if backward <= max_distance {
+                // An ordinary backward reference into the window.
+                if prev_ix >= cur_ix {
+                    continue;
+                }
+                let prev_ix = prev_ix & ctx.ringbuffer_mask;
+                if prev_ix + best_len > ctx.ringbuffer_mask
+                    || continuation != ctx.ringbuffer[prev_ix + best_len]
+                {
+                    continue;
+                }
+                find_match_length(simd, ctx.ringbuffer, prev_ix, cur_ix_masked, max_len)
+            } else if backward > dictionary_start {
+                // Past the window and inside the attached prefix.
+                let Some(context) = ctx.attached else {
+                    continue;
+                };
+                let sources = context.dictionaries().prefix();
+                let logical = (dictionary_start + gap - backward) as u64;
+                let Some((segment, offset)) = sources.locate(logical) else {
+                    continue;
+                };
+                let source = sources.segment(segment);
+                let Some(candidate) = source.get(offset..) else {
+                    continue;
+                };
+                // The match stops at the end of the attachment it started in,
+                // exactly as the reference's `limit` does.
+                let limit = candidate.len().min(max_len);
+                if best_len >= limit || candidate.get(best_len) != Some(&continuation) {
+                    continue;
+                }
+                let Some(target) = ctx.ringbuffer.get(cur_ix_masked..) else {
+                    continue;
+                };
+                prefix_match_length(candidate, target, limit)
+            } else {
+                // "Gray" area: a decoder could address it, but this encoder
+                // does not hold those bytes, so it must not look at them.
                 continue;
-            }
-            if prev_ix >= cur_ix {
-                continue;
-            }
-            let prev_ix = prev_ix & ctx.ringbuffer_mask;
-            if prev_ix + best_len > ctx.ringbuffer_mask
-                || continuation != ctx.ringbuffer[prev_ix + best_len]
-            {
-                continue;
-            }
-            let len = find_match_length(simd, ctx.ringbuffer, prev_ix, cur_ix_masked, max_len);
+            };
 
             let dist_cost = base_cost + model.distance_cost(j);
             for l in best_len + 1..=len {
@@ -432,11 +460,11 @@ fn create_commands(
     block_start: usize,
     nodes: &[ZopfliNode],
     params: &HqParams,
+    gap: usize,
     state: &mut ZopfliState,
     commands: &mut Vec<Command>,
 ) {
     let max_backward_limit = params.max_backward_limit();
-    let gap = 0usize;
     let mut pos = 0usize;
     let mut offset = nodes[0].next();
     let mut first = true;
@@ -495,6 +523,8 @@ fn zopfli_iterate<S: Simd>(
     ringbuffer: &[u8],
     ringbuffer_mask: usize,
     params: &HqParams,
+    gap: usize,
+    attached: Option<&SharedContextInner>,
     starting_dist_cache: &[i32; 4],
     model: &ZopfliCostModel,
     num_matches: &[u32],
@@ -510,9 +540,10 @@ fn zopfli_iterate<S: Simd>(
         params,
         max_backward_limit: params.max_backward_limit(),
         starting_dist_cache,
+        gap,
+        attached,
     };
     let max_zopfli_len = params.max_zopfli_len();
-    let gap = 0usize;
 
     nodes[0].length = 0;
     nodes[0].set_cost(0.0);
@@ -563,6 +594,86 @@ fn zopfli_iterate<S: Simd>(
 /// Runs the dynamic program while discovering matches
 /// (`BrotliZopfliComputeShortestPath`).
 ///
+/// Returns how many leading bytes two windows share, at most `limit`.
+///
+/// The attached prefix is a plain slice rather than the ring buffer, so it
+/// cannot go through [`find_match_length`], which indexes one buffer twice.
+fn prefix_match_length(left: &[u8], right: &[u8], limit: usize) -> usize {
+    let limit = limit.min(left.len()).min(right.len());
+    let (Some(left), Some(right)) = (left.get(..limit), right.get(..limit)) else {
+        return 0;
+    };
+    let (left_words, left_tail) = left.as_chunks::<8>();
+    let (right_words, right_tail) = right.as_chunks::<8>();
+    let mut matched = 0usize;
+    for (left_word, right_word) in left_words.iter().zip(right_words) {
+        let difference = u64::from_le_bytes(*left_word) ^ u64::from_le_bytes(*right_word);
+        if difference != 0 {
+            return matched + (difference.trailing_zeros() >> 3) as usize;
+        }
+        matched += 8;
+    }
+    for (left_byte, right_byte) in left_tail.iter().zip(right_tail) {
+        if left_byte != right_byte {
+            break;
+        }
+        matched += 1;
+    }
+    matched
+}
+
+/// Shortest attached-dictionary match the high-quality search collects.
+///
+/// The reference passes a literal `3` to `LookupAllCompoundDictionaryMatches`.
+const MIN_PREFIX_MATCH_LENGTH: usize = 3;
+
+/// Most attached-dictionary matches one position may contribute.
+///
+/// The reference reserves sixty-four slots ahead of the tree's own matches and
+/// passes that as the limit.
+const MAX_PREFIX_MATCHES: usize = 64;
+
+/// Merges attached-dictionary matches into the tree's, in the reference order.
+///
+/// Mirrors `MergeMatches`, which the dynamic program relies on: both inputs
+/// are ascending in length, and the merged sequence has to stay ascending, with
+/// the smaller distance first on a tie. `prefix` is `(distance, length)`
+/// because the attached search has no length code to carry.
+fn merge_prefix_matches(prefix: &[(usize, usize)], tree: &mut Vec<BackwardMatch>) {
+    if prefix.is_empty() {
+        return;
+    }
+    let mut merged = Vec::with_capacity(prefix.len() + tree.len());
+    let mut left = prefix.iter().copied().peekable();
+    let mut right = tree.drain(..).peekable();
+    loop {
+        match (left.peek(), right.peek()) {
+            (Some(&(distance, length)), Some(other)) => {
+                if length < other.length()
+                    || (length == other.length() && distance < other.distance as usize)
+                {
+                    merged.push(BackwardMatch::new(distance, length));
+                    left.next();
+                } else {
+                    merged.push(*other);
+                    right.next();
+                }
+            }
+            (Some(&(distance, length)), None) => {
+                merged.push(BackwardMatch::new(distance, length));
+                left.next();
+            }
+            (None, Some(other)) => {
+                merged.push(*other);
+                right.next();
+            }
+            (None, None) => break,
+        }
+    }
+    drop(right);
+    *tree = merged;
+}
+
 /// Quality ten's inner loop: one tree query per position, priced immediately
 /// and then thrown away.
 #[expect(
@@ -576,6 +687,7 @@ fn zopfli_compute_shortest_path<S: Simd>(
     ringbuffer: &[u8],
     ringbuffer_mask: usize,
     params: &HqParams,
+    attached: Option<&SharedContextInner>,
     starting_dist_cache: &[i32; 4],
     matcher: &mut BinaryTreeMatcher,
     workspace: &mut ZopfliWorkspace,
@@ -583,7 +695,7 @@ fn zopfli_compute_shortest_path<S: Simd>(
     let max_backward_limit = params.max_backward_limit();
     let max_zopfli_len = params.max_zopfli_len();
     let short_scan = params.short_scan();
-    let gap = 0usize;
+    let gap = attached.map_or(0, SharedContextInner::total_size);
     let store_end = if num_bytes >= STORE_LOOKAHEAD {
         position + num_bytes - STORE_LOOKAHEAD + 1
     } else {
@@ -610,7 +722,13 @@ fn zopfli_compute_shortest_path<S: Simd>(
         params,
         max_backward_limit,
         starting_dist_cache,
+        gap,
+        attached,
     };
+    // Scratch for the attached dictionary's own candidates, merged into the
+    // tree's below. Sixty-four is the reference's `LookupAllCompoundDictionary`
+    // limit, and it never grows past that.
+    let mut prefix_matches: Vec<(usize, usize)> = Vec::new();
 
     let mut i = 0usize;
     while i + HASH_TYPE_LENGTH - 1 < num_bytes {
@@ -631,6 +749,21 @@ fn zopfli_compute_shortest_path<S: Simd>(
             short_scan,
             scratch,
         );
+        if let Some(context) = attached {
+            prefix_matches.clear();
+            context.find_all_matches(
+                ringbuffer,
+                ringbuffer_mask,
+                pos,
+                MIN_PREFIX_MATCH_LENGTH,
+                num_bytes - i,
+                dictionary_start,
+                params.dist.max_distance as usize,
+                MAX_PREFIX_MATCHES,
+                &mut prefix_matches,
+            );
+            merge_prefix_matches(&prefix_matches, scratch);
+        }
         // A copy longer than the cap makes every shorter candidate irrelevant.
         if let Some(&longest) = scratch.last()
             && longest.length() > max_zopfli_len
@@ -694,6 +827,7 @@ pub(crate) fn create_zopfli_backward_references<S: Simd>(
     ringbuffer: &[u8],
     ringbuffer_mask: usize,
     params: &HqParams,
+    attached: Option<&SharedContextInner>,
     matcher: &mut BinaryTreeMatcher,
     workspace: &mut ZopfliWorkspace,
     state: &mut ZopfliState,
@@ -701,6 +835,7 @@ pub(crate) fn create_zopfli_backward_references<S: Simd>(
 ) {
     workspace.prepare(num_bytes, params.dist.alphabet_size_limit as usize);
     let starting_dist_cache = state.dist_cache;
+    let gap = attached.map_or(0, SharedContextInner::total_size);
     zopfli_compute_shortest_path(
         simd,
         num_bytes,
@@ -708,6 +843,7 @@ pub(crate) fn create_zopfli_backward_references<S: Simd>(
         ringbuffer,
         ringbuffer_mask,
         params,
+        attached,
         &starting_dist_cache,
         matcher,
         workspace,
@@ -717,6 +853,7 @@ pub(crate) fn create_zopfli_backward_references<S: Simd>(
         position,
         &workspace.nodes,
         params,
+        gap,
         state,
         commands,
     );
@@ -740,6 +877,7 @@ pub(crate) fn create_hq_zopfli_backward_references<S: Simd>(
     ringbuffer: &[u8],
     ringbuffer_mask: usize,
     params: &HqParams,
+    attached: Option<&SharedContextInner>,
     matcher: &mut BinaryTreeMatcher,
     workspace: &mut ZopfliWorkspace,
     state: &mut ZopfliState,
@@ -750,7 +888,8 @@ pub(crate) fn create_hq_zopfli_backward_references<S: Simd>(
     let max_backward_limit = params.max_backward_limit();
     let max_zopfli_len = params.max_zopfli_len();
     let short_scan = params.short_scan();
-    let gap = 0usize;
+    let gap = attached.map_or(0, SharedContextInner::total_size);
+    let mut prefix_matches: Vec<(usize, usize)> = Vec::new();
     let store_end = if num_bytes >= STORE_LOOKAHEAD {
         position + num_bytes - STORE_LOOKAHEAD + 1
     } else {
@@ -785,6 +924,27 @@ pub(crate) fn create_hq_zopfli_backward_references<S: Simd>(
             short_scan,
             &mut workspace.arena,
         );
+        if let Some(context) = attached {
+            prefix_matches.clear();
+            context.find_all_matches(
+                ringbuffer,
+                ringbuffer_mask,
+                pos,
+                MIN_PREFIX_MATCH_LENGTH,
+                max_length,
+                dictionary_start,
+                params.dist.max_distance as usize,
+                MAX_PREFIX_MATCHES,
+                &mut prefix_matches,
+            );
+            if !prefix_matches.is_empty() {
+                // The arena holds every position's matches end to end, so only
+                // this position's tail takes part in the merge.
+                let mut tail: Vec<BackwardMatch> = workspace.arena.split_off(cur_match_pos);
+                merge_prefix_matches(&prefix_matches, &mut tail);
+                workspace.arena.append(&mut tail);
+            }
+        }
         let found = workspace.arena.len() - cur_match_pos;
         workspace.num_matches[i] = found as u32;
 
@@ -859,6 +1019,8 @@ pub(crate) fn create_hq_zopfli_backward_references<S: Simd>(
             ringbuffer,
             ringbuffer_mask,
             params,
+            gap,
+            attached,
             &orig_dist_cache,
             model,
             num_matches,
@@ -871,6 +1033,7 @@ pub(crate) fn create_hq_zopfli_backward_references<S: Simd>(
             position,
             &workspace.nodes,
             params,
+            gap,
             state,
             commands,
         );
@@ -913,11 +1076,11 @@ mod tests {
         match params.quality {
             HqQuality::Q10 => dispatch!(level, simd => create_zopfli_backward_references(
                 simd, data.len(), 0, buffer.buffer(), buffer.mask(), &params,
-                &mut matcher, &mut workspace, &mut state, &mut commands,
+                None, &mut matcher, &mut workspace, &mut state, &mut commands,
             )),
             HqQuality::Q11 => dispatch!(level, simd => create_hq_zopfli_backward_references(
                 simd, data.len(), 0, buffer.buffer(), buffer.mask(), &params,
-                &mut matcher, &mut workspace, &mut state, &mut commands,
+                None, &mut matcher, &mut workspace, &mut state, &mut commands,
             )),
         }
         (commands, state, params)

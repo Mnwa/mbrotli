@@ -384,8 +384,28 @@ which reaches far more codes per store than a fixed quadruple. Batching that
 loop four at a time to amortise its per-literal branch measures within noise on
 every corpus, so it keeps the simpler shape.
 
+## Flushing
+
+`FastEncoder::flush_block` is the fast path's `BROTLI_OPERATION_FLUSH`. These
+qualities already close a meta-block on every call, so the flush is only the
+empty metadata block that pushes the stream back onto a byte boundary — and,
+when there is buffered input, a short non-final fragment ahead of it. An empty
+input skips the fragment entirely, exactly as the reference does when a flush
+arrives with nothing buffered, and nothing at all is emitted when the stream
+was already aligned. See [compressor.md](compressor.md) §3.1.
+
+Flushing costs these qualities more ratio than it costs any other: quality 1
+rebuilds a whole code description per meta-block with nothing to amortise it
+over, so flushing every kibibyte of a 256 KiB text made the stream seventeen
+times larger. The time cost is nil — the ratio against the reference is flat
+across flush counts, because a flush is work both implementations do the same
+way. See [`docs/api_benchmarks.md`](../docs/api_benchmarks.md) §2.
+
 ## Known gaps
 
+- **No attached prefix.** These qualities carry no compound-dictionary search
+  in the reference either, so a non-empty `SharedContext` is refused rather
+  than ignored.
 - **No static dictionary matching**, no block splitting and no context
   modelling: out of scope for both fast qualities, as in the reference.
 - **`ShouldMergeBlock` and `ShouldCompress` use floating point.** They

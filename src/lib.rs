@@ -1,15 +1,12 @@
 //! Brotli compression, in safe Rust.
 //!
-//! `mbrotli` implements every Brotli quality but 2 as a port of Google's
-//! reference encoder, and emits bytes that are identical to it. There is no
-//! `unsafe` in this crate, and the SIMD instruction set is resolved once per
-//! compressed block rather than inside any loop.
+//! `mbrotli` implements every Brotli quality as a port of Google's reference
+//! encoder, and emits bytes that are identical to it. There is no `unsafe` in
+//! this crate, and the SIMD instruction set is resolved once per compressed
+//! block rather than inside any loop.
 //!
-//! Quality 2 is the one quality the format defines that has no encoder here;
-//! it is reported as [`BrotliCompressError::UnsupportedQuality`]. There is no
-//! decoder.
-//!
-//! [`BrotliCompressError::UnsupportedQuality`]: compressor::BrotliCompressError::UnsupportedQuality
+//! There is no decoder: round-trip verification uses Google's C decoder, and
+//! this crate compresses only.
 //!
 //! # Choosing a quality
 //!
@@ -157,6 +154,21 @@
 //! assert_eq!(compressed, compressor.compress(params, b"chunk one chunk two ")?);
 //! # Ok::<(), std::io::Error>(())
 //! ```
+
+// The port is safe Rust by construction: the bit writer, the match scans and
+// the SIMD kernels all shed their bounds checks through `as_chunks`,
+// `first_chunk` and const-generic widths rather than through raw pointers.
+// `forbid` rather than `deny`, so no module can opt back in.
+//
+// The differential unit tests inside `core::hq` and `core::rfc9841` call
+// Google's C encoder through `google-brotli-ffi` to compare a stage against
+// its reference, which is unavoidably `unsafe`. Those live behind `cfg(test)`
+// and reach nothing that ships, so the ban is on everything but the test
+// build rather than weakened to a `deny` the shipped code could opt out of.
+#![cfg_attr(not(test), forbid(unsafe_code))]
+#![deny(missing_docs)]
+#![deny(missing_debug_implementations)]
+#![deny(rustdoc::broken_intra_doc_links)]
 
 use crate::compressor::Compressor;
 use fearless_simd::Level;

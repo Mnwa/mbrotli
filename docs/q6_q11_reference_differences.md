@@ -159,5 +159,4 @@ of the output:
   cached-distance loop unreachable.
 - **Stream offset.** Always zero; the reference uses it only for shared
   dictionaries.
-- **Quality 2.** The only quality the format defines that has no encoder here.
 - **The `BROTLI_EXPERIMENTAL` trie** in the static dictionary search.

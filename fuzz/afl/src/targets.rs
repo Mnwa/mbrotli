@@ -227,12 +227,12 @@ pub fn output_capacity(ctx: &Context, input: &[u8]) {
 /// Parameter parsing must reject illegal settings and never panic.
 ///
 /// The other targets only ever build legal parameters, which leaves the
-/// validating conversions and the unimplemented-quality path unexercised. This
-/// target drives both from raw bytes: byte 0 is a numeric quality, byte 1 a
-/// numeric window size, and the rest is a payload. It asserts the documented
-/// contract of [`QualityLevel::try_from`] and [`WindowBits::try_from`], and
-/// that every entry point reports an unimplemented quality rather than
-/// panicking or emitting a stream.
+/// validating conversions and the refusal paths unexercised. This target
+/// drives both from raw bytes: byte 0 is a numeric quality, byte 1 a numeric
+/// window size, and the rest is a payload. It asserts the documented contract
+/// of [`QualityLevel::try_from`] and [`WindowBits::try_from`], and that every
+/// entry point refuses a large window at the qualities that cannot carry one
+/// the same way, rather than panicking or emitting a stream.
 pub fn parameter_parsing(ctx: &Context, input: &[u8]) {
     let (header, data) = input.split_at(input.len().min(2));
     let data = cap(data);
@@ -276,47 +276,63 @@ pub fn parameter_parsing(ctx: &Context, input: &[u8]) {
     };
     let params = CompressParams::new(quality, window);
 
-    if IMPLEMENTED_QUALITIES
-        .iter()
-        .any(|&implemented| usize::from(implemented) == quality_value)
-    {
-        let compressed = ctx
-            .compressor
-            .compress(params, data)
-            .expect("an implemented quality must compress");
-        assert_round_trip(data, &compressed);
+    // Every quality the format defines now has an encoder, so a legal pair is
+    // always accepted and always decodes back.
+    assert!(
+        IMPLEMENTED_QUALITIES
+            .iter()
+            .any(|&implemented| usize::from(implemented) == quality_value),
+        "quality {quality_value} parsed but is not in the implemented set"
+    );
+    let compressed = ctx
+        .compressor
+        .compress(params, data)
+        .expect("an implemented quality must compress");
+    assert_round_trip(data, &compressed);
+
+    // The refusal that is left: qualities at or below two write distances
+    // through a model built for the RFC 7932 alphabet, so they cannot carry a
+    // large window. Every entry point has to say so the same way, and the
+    // streaming adapters have to carry it out through `std::io::Error` rather
+    // than panicking.
+    if quality_value > 2 {
         return;
     }
+    let Ok(wide) = WindowBits::large(window_value.clamp(10, 62)) else {
+        return;
+    };
+    let params = CompressParams::new(quality, wide);
 
-    // Every entry point has to refuse an unimplemented quality the same way,
-    // and the streaming adapters have to carry that refusal out through
-    // `std::io::Error` rather than panicking.
     assert!(
         matches!(
             ctx.compressor.compress(params, data),
-            Err(BrotliCompressError::UnsupportedQuality(reported)) if reported == quality_value
+            Err(BrotliCompressError::Shared(
+                SharedBrotliError::UnsupportedLargeWindow { quality: reported }
+            )) if reported == quality_value
         ),
-        "quality {quality_value} must be reported as unimplemented"
+        "quality {quality_value} must refuse a large window"
     );
 
     let mut scratch = vec![0u8; data.len() + 64];
     assert!(
         matches!(
             ctx.compressor.compress_to_slice(params, data, &mut scratch),
-            Err(BrotliCompressError::UnsupportedQuality(reported)) if reported == quality_value
+            Err(BrotliCompressError::Shared(
+                SharedBrotliError::UnsupportedLargeWindow { quality: reported }
+            )) if reported == quality_value
         ),
-        "the slice entry point must report quality {quality_value}"
+        "the slice entry point must refuse a large window at quality {quality_value}"
     );
 
     let mut sink = ctx.compressor.compress_writer(params, Vec::new());
     let refused = sink.write_all(data).is_err() || sink.finish().is_err();
-    assert!(refused, "the writer must refuse quality {quality_value}");
+    assert!(refused, "the writer must refuse a large window");
 
     let mut source = ctx.compressor.compress_reader(params, data);
     let mut drained = Vec::new();
     assert!(
         source.read_to_end(&mut drained).is_err(),
-        "the reader must refuse quality {quality_value}"
+        "the reader must refuse a large window"
     );
 }
 
@@ -381,9 +397,13 @@ pub fn large_window(ctx: &Context, input: &[u8]) {
     assert_eq!(params.lgwin(), window);
     assert!(params.lgwin().is_large());
 
-    // Qualities zero and one refuse rather than dropping the request, and
-    // refuse it the same way whatever the payload is.
-    if matches!(params.quality(), QualityLevel::Q0 | QualityLevel::Q1) {
+    // The qualities that may write distances through the format's fixed code
+    // refuse rather than dropping the request, and refuse it the same way
+    // whatever the payload is.
+    if matches!(
+        params.quality(),
+        QualityLevel::Q0 | QualityLevel::Q1 | QualityLevel::Q2
+    ) {
         assert!(
             matches!(
                 ctx.compressor.compress(params, case.data),
@@ -391,7 +411,7 @@ pub fn large_window(ctx: &Context, input: &[u8]) {
                     SharedBrotliError::UnsupportedLargeWindow { .. }
                 ))
             ),
-            "a fast quality must refuse a large window"
+            "a static-entropy quality must refuse a large window"
         );
         return;
     }
@@ -633,7 +653,12 @@ fn assert_shared_search(
     }
 }
 
-/// An empty context compresses ordinarily; a non-empty one is refused.
+/// The three outcomes a shared compression can have, all checked here.
+///
+/// An empty context has to produce exactly the ordinary stream. A non-empty
+/// one has to be consulted at a quality whose match finder can, and refused at
+/// one that cannot — never silently ignored, which is the failure this target
+/// exists to rule out.
 fn assert_shared_compression(
     ctx: &Context,
     context: &mut SharedContext,
@@ -676,13 +701,37 @@ fn assert_shared_compression(
     }
 
     let quality = usize::from(params.quality());
+    if quality < 5 {
+        assert!(
+            matches!(
+                outcome,
+                Err(BrotliCompressError::Shared(
+                    SharedBrotliError::UnsupportedSharedContextForQuality { quality: reported }
+                )) if reported == quality
+            ),
+            "an attached dictionary was not refused at quality {quality}"
+        );
+        return;
+    }
+
+    // The dictionary was consulted. Two things have to hold whatever it found:
+    // the stream stays inside the bound the caller sized a buffer from, and it
+    // still decodes — to the same bytes, through a decoder that knows nothing
+    // about the dictionary only when no distance actually reached into it.
+    let compressed = outcome.expect("an attachable quality must compress");
     assert!(
-        matches!(
-            outcome,
-            Err(BrotliCompressError::Shared(
-                SharedBrotliError::UnsupportedSharedContextForQuality { quality: reported }
-            )) if reported == quality
-        ),
-        "an attached dictionary was not refused at quality {quality}"
+        compressed.len() <= bound,
+        "output exceeded the shared bound"
+    );
+
+    let mut buffer = vec![0u8; bound];
+    let written = ctx
+        .compressor
+        .compress_shared_to_slice(params, context, data, &mut buffer)
+        .expect("the slice entry point must agree with the vector one");
+    assert_eq!(
+        &buffer[..written],
+        compressed.as_slice(),
+        "the two shared entry points disagreed"
     );
 }

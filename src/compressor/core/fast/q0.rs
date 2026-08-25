@@ -133,7 +133,7 @@ fn is_match(data: &[u8], left: usize, right: usize) -> bool {
 ///
 /// Returns the estimated encoding ratio in millibytes per literal, which drives
 /// the uncompressed-mode heuristic.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn build_and_store_literal_prefix_code(
     histogram: &mut [u32; NUM_LITERAL_SYMBOLS],
     tree: &mut [HuffmanNode],
@@ -183,7 +183,7 @@ fn build_and_store_literal_prefix_code(
 /// The fast path keeps the 64 command symbols in a permuted order that removes
 /// branches from the emit helpers, so the code is built in that order and then
 /// scattered into the full alphabet for serialisation.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn build_and_store_command_prefix_code(
     histogram: &[u32; 128],
     depth: &mut [u8; 128],
@@ -228,7 +228,7 @@ fn build_and_store_command_prefix_code(
 }
 
 /// Decides whether the next chunk should extend the current meta-block.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn should_merge_block(
     histogram: &mut [u32; NUM_LITERAL_SYMBOLS],
     data: &[u8],
@@ -275,7 +275,7 @@ fn emit_uncompressed_meta_block(
 }
 
 /// Compresses one fragment with a table width baked in.
-#[hotpath::measure]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn compress_fragment_impl<S: Simd, const TABLE_BITS: usize>(
     simd: S,
     arena: &mut OnePassArena,

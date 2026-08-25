@@ -129,6 +129,286 @@ pub fn c_compress_with(params: CParams, input: &[u8]) -> Vec<u8> {
     output
 }
 
+/// Compresses `input` with the pinned C encoder, flushing at `flush_after`.
+///
+/// The chunks are fed one at a time; every chunk but the last is followed by
+/// `BROTLI_OPERATION_FLUSH`, and the last by `BROTLI_OPERATION_FINISH`. This
+/// is the reference behaviour `CompressorWriter::flush` has to reproduce byte
+/// for byte.
+///
+/// # Panics
+///
+/// Panics when the C encoder reports failure, which would mean the harness is
+/// misconfigured rather than the encoder under test being wrong.
+pub fn c_compress_flushing(params: CParams, chunks: &[&[u8]]) -> Vec<u8> {
+    let total: usize = chunks.iter().map(|chunk| chunk.len()).sum();
+    // A flush costs a padding block per chunk on top of the bound, and an
+    // incompressible chunk can round up; 64 bytes a chunk is far past either.
+    let capacity =
+        unsafe { ffi::BrotliEncoderMaxCompressedSize(total) }.max(64) + 4096 + 64 * chunks.len();
+    let mut output = vec![0u8; capacity];
+    let mut written = 0usize;
+    unsafe {
+        let state = ffi::BrotliEncoderCreateInstance(None, None, std::ptr::null_mut());
+        assert!(!state.is_null(), "the C encoder could not be created");
+        let set = |parameter, value| {
+            assert_eq!(
+                ffi::BrotliEncoderSetParameter(state, parameter, value),
+                ffi::BROTLI_TRUE,
+                "the C encoder rejected a parameter"
+            );
+        };
+        set(ffi::BROTLI_PARAM_QUALITY, params.quality as u32);
+        set(ffi::BROTLI_PARAM_LGWIN, params.lgwin as u32);
+        set(ffi::BROTLI_PARAM_MODE, params.mode as u32);
+        set(ffi::BROTLI_PARAM_NPOSTFIX, params.npostfix);
+        set(ffi::BROTLI_PARAM_NDIRECT, params.ndirect);
+        set(
+            ffi::BROTLI_PARAM_DISABLE_LITERAL_CONTEXT_MODELING,
+            u32::from(params.disable_literal_context_modeling),
+        );
+        if let Some(size_hint) = params.size_hint {
+            set(ffi::BROTLI_PARAM_SIZE_HINT, size_hint);
+        }
+        if let Some(lgblock) = params.lgblock {
+            set(ffi::BROTLI_PARAM_LGBLOCK, lgblock);
+        }
+
+        for (index, chunk) in chunks.iter().enumerate() {
+            let operation = if index + 1 == chunks.len() {
+                ffi::BROTLI_OPERATION_FINISH
+            } else {
+                ffi::BROTLI_OPERATION_FLUSH
+            };
+            let mut available_in = chunk.len();
+            let mut next_in = chunk.as_ptr();
+            // The reference only completes an operation once it stops asking
+            // to be called again, which it signals through these two.
+            loop {
+                let mut available_out = output.len() - written;
+                let mut next_out = output.as_mut_ptr().add(written);
+                let mut total_out = 0usize;
+                let ok = ffi::BrotliEncoderCompressStream(
+                    state,
+                    operation,
+                    &raw mut available_in,
+                    &raw mut next_in,
+                    &raw mut available_out,
+                    &raw mut next_out,
+                    &raw mut total_out,
+                );
+                assert_eq!(ok, ffi::BROTLI_TRUE, "the C encoder failed");
+                written = output.len() - available_out;
+                if available_in == 0 && ffi::BrotliEncoderHasMoreOutput(state) != ffi::BROTLI_TRUE {
+                    break;
+                }
+            }
+        }
+        assert_eq!(
+            ffi::BrotliEncoderIsFinished(state),
+            ffi::BROTLI_TRUE,
+            "the C encoder did not finish"
+        );
+        ffi::BrotliEncoderDestroyInstance(state);
+    }
+    output.truncate(written);
+    output
+}
+
+/// Compresses `input` with the C encoder, with `prefixes` attached.
+///
+/// Each prefix is prepared with `BrotliEncoderPrepareDictionary` and attached
+/// in order, which is the reference's compound dictionary — the thing RFC 9841
+/// calls an LZ77 prefix.
+///
+/// # Panics
+///
+/// Panics when the C encoder rejects a dictionary or reports failure, which
+/// would mean the harness is misconfigured rather than the encoder under test
+/// being wrong.
+pub fn c_compress_with_prefixes(params: CParams, prefixes: &[&[u8]], input: &[u8]) -> Vec<u8> {
+    let capacity = unsafe { ffi::BrotliEncoderMaxCompressedSize(input.len()) }.max(64) + 4096;
+    let mut output = vec![0u8; capacity];
+    let mut prepared = Vec::with_capacity(prefixes.len());
+    unsafe {
+        let state = ffi::BrotliEncoderCreateInstance(None, None, std::ptr::null_mut());
+        assert!(!state.is_null(), "the C encoder could not be created");
+        let set = |parameter, value| {
+            assert_eq!(
+                ffi::BrotliEncoderSetParameter(state, parameter, value),
+                ffi::BROTLI_TRUE,
+                "the C encoder rejected a parameter"
+            );
+        };
+        set(ffi::BROTLI_PARAM_QUALITY, params.quality as u32);
+        set(ffi::BROTLI_PARAM_LGWIN, params.lgwin as u32);
+        set(ffi::BROTLI_PARAM_MODE, params.mode as u32);
+        set(ffi::BROTLI_PARAM_NPOSTFIX, params.npostfix);
+        set(ffi::BROTLI_PARAM_NDIRECT, params.ndirect);
+        set(
+            ffi::BROTLI_PARAM_DISABLE_LITERAL_CONTEXT_MODELING,
+            u32::from(params.disable_literal_context_modeling),
+        );
+        if let Some(size_hint) = params.size_hint {
+            set(ffi::BROTLI_PARAM_SIZE_HINT, size_hint);
+        }
+        if let Some(lgblock) = params.lgblock {
+            set(ffi::BROTLI_PARAM_LGBLOCK, lgblock);
+        }
+
+        for prefix in prefixes {
+            let dictionary = ffi::BrotliEncoderPrepareDictionary(
+                ffi::BROTLI_SHARED_DICTIONARY_RAW,
+                prefix.len(),
+                prefix.as_ptr(),
+                params.quality,
+                None,
+                None,
+                std::ptr::null_mut(),
+            );
+            assert!(
+                !dictionary.is_null(),
+                "the C encoder could not prepare a dictionary"
+            );
+            assert_eq!(
+                ffi::BrotliEncoderAttachPreparedDictionary(state, dictionary),
+                ffi::BROTLI_TRUE,
+                "the C encoder rejected a prepared dictionary"
+            );
+            prepared.push(dictionary);
+        }
+
+        let mut available_in = input.len();
+        let mut next_in = input.as_ptr();
+        let mut available_out = output.len();
+        let mut next_out = output.as_mut_ptr();
+        let mut total_out = 0usize;
+        let ok = ffi::BrotliEncoderCompressStream(
+            state,
+            ffi::BROTLI_OPERATION_FINISH,
+            &raw mut available_in,
+            &raw mut next_in,
+            &raw mut available_out,
+            &raw mut next_out,
+            &raw mut total_out,
+        );
+        assert_eq!(ok, ffi::BROTLI_TRUE, "the C encoder failed");
+        assert_eq!(
+            ffi::BrotliEncoderIsFinished(state),
+            ffi::BROTLI_TRUE,
+            "the C encoder did not finish"
+        );
+        ffi::BrotliEncoderDestroyInstance(state);
+        for dictionary in prepared {
+            ffi::BrotliEncoderDestroyPreparedDictionary(dictionary);
+        }
+        output.truncate(total_out);
+    }
+    output
+}
+
+/// Decompresses `input` with the C decoder, with `prefixes` attached.
+///
+/// The decoder needs the same dictionaries the encoder had, or a stream that
+/// references them cannot be read back. Returns [`None`] when it rejects the
+/// stream.
+///
+/// # Panics
+///
+/// Panics when the decoder cannot be created or rejects a dictionary.
+pub fn c_decompress_with_prefixes(
+    prefixes: &[&[u8]],
+    input: &[u8],
+    expected_size: usize,
+) -> Option<Vec<u8>> {
+    let mut output = vec![0u8; expected_size.max(1)];
+    unsafe {
+        let state = ffi::BrotliDecoderCreateInstance(None, None, std::ptr::null_mut());
+        assert!(!state.is_null(), "the C decoder could not be created");
+        assert_eq!(
+            ffi::BrotliDecoderSetParameter(state, ffi::BROTLI_DECODER_PARAM_LARGE_WINDOW, 1),
+            ffi::BROTLI_TRUE,
+            "the C decoder rejected the large window parameter"
+        );
+        for prefix in prefixes {
+            assert_eq!(
+                ffi::BrotliDecoderAttachDictionary(
+                    state,
+                    ffi::BROTLI_SHARED_DICTIONARY_RAW,
+                    prefix.len(),
+                    prefix.as_ptr(),
+                ),
+                ffi::BROTLI_TRUE,
+                "the C decoder rejected a dictionary"
+            );
+        }
+
+        let mut available_in = input.len();
+        let mut next_in = input.as_ptr();
+        let mut available_out = output.len();
+        let mut next_out = output.as_mut_ptr();
+        let mut total_out = 0usize;
+        let result = ffi::BrotliDecoderDecompressStream(
+            state,
+            &raw mut available_in,
+            &raw mut next_in,
+            &raw mut available_out,
+            &raw mut next_out,
+            &raw mut total_out,
+        );
+        let finished = ffi::BrotliDecoderIsFinished(state);
+        ffi::BrotliDecoderDestroyInstance(state);
+
+        if result != ffi::BROTLI_DECODER_RESULT_SUCCESS
+            || finished != ffi::BROTLI_TRUE
+            || available_in != 0
+        {
+            return None;
+        }
+        output.truncate(total_out);
+    }
+    Some(output)
+}
+
+/// Decodes as much of an unterminated `input` as the C decoder will produce.
+///
+/// Returns what the decoder emitted once it asked for more input, which for a
+/// stream that has just been flushed is everything the encoder has consumed.
+/// Returns [`None`] when the decoder rejects the bytes outright.
+///
+/// # Panics
+///
+/// Panics when the decoder cannot be created, which would mean the harness is
+/// misconfigured rather than the encoder under test being wrong.
+pub fn c_decompress_partial(input: &[u8], capacity: usize) -> Option<Vec<u8>> {
+    let mut output = vec![0u8; capacity.max(1)];
+    unsafe {
+        let state = ffi::BrotliDecoderCreateInstance(None, None, std::ptr::null_mut());
+        assert!(!state.is_null(), "the C decoder could not be created");
+
+        let mut available_in = input.len();
+        let mut next_in = input.as_ptr();
+        let mut available_out = output.len();
+        let mut next_out = output.as_mut_ptr();
+        let mut total_out = 0usize;
+        let result = ffi::BrotliDecoderDecompressStream(
+            state,
+            &raw mut available_in,
+            &raw mut next_in,
+            &raw mut available_out,
+            &raw mut next_out,
+            &raw mut total_out,
+        );
+        ffi::BrotliDecoderDestroyInstance(state);
+
+        if result == ffi::BROTLI_DECODER_RESULT_ERROR {
+            return None;
+        }
+        output.truncate(total_out);
+    }
+    Some(output)
+}
+
 /// Decompresses `input` with the pinned C decoder.
 pub fn c_decompress(input: &[u8], expected_size: usize) -> Option<Vec<u8>> {
     let mut output = vec![0u8; expected_size.max(1)];
@@ -230,8 +510,9 @@ pub fn params_with_hint(quality: QualityLevel, lgwin: u8, size_hint: usize) -> C
 /// The two qualities the fast encoder implements.
 pub const FAST_QUALITIES: [QualityLevel; 2] = [QualityLevel::Q0, QualityLevel::Q1];
 
-/// The seven qualities the greedy encoder implements.
-pub const GREEDY_QUALITIES: [QualityLevel; 7] = [
+/// The eight qualities the greedy encoder implements.
+pub const GREEDY_QUALITIES: [QualityLevel; 8] = [
+    QualityLevel::Q2,
     QualityLevel::Q3,
     QualityLevel::Q4,
     QualityLevel::Q5,
@@ -269,9 +550,10 @@ pub fn prefix_for(quality: QualityLevel, data: &[u8]) -> &[u8] {
 }
 
 /// Every quality this crate implements.
-pub const IMPLEMENTED_QUALITIES: [QualityLevel; 11] = [
+pub const IMPLEMENTED_QUALITIES: [QualityLevel; 12] = [
     QualityLevel::Q0,
     QualityLevel::Q1,
+    QualityLevel::Q2,
     QualityLevel::Q3,
     QualityLevel::Q4,
     QualityLevel::Q5,

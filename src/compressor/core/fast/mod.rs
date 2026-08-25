@@ -23,7 +23,7 @@ pub(crate) use crate::compressor::core::shared::{bits, huffman, match_len};
 
 use fearless_simd::{Level, Simd, dispatch};
 
-use self::bits::BitWriter;
+use self::bits::{BYTE_PADDING_SLACK, BitWriter, inject_byte_padding};
 use self::constants::{OUTPUT_RESERVE_CONST, OUTPUT_SLACK, WINDOW_BITS_FAST};
 use self::q1::TwoPassState;
 use self::workspace::OnePassArena;
@@ -76,6 +76,27 @@ impl FastCore {
             FastQuality::Q1 => Self::TwoPass {
                 state: Box::default(),
             },
+        }
+    }
+
+    /// Returns the quality this core implements.
+    const fn quality(&self) -> FastQuality {
+        match self {
+            Self::OnePass { .. } => FastQuality::Q0,
+            Self::TwoPass { .. } => FastQuality::Q1,
+        }
+    }
+
+    /// Restores the arena to the state [`FastCore::new`] would produce.
+    ///
+    /// Assigns through the `Box` rather than replacing it, so the allocation
+    /// is reused. Quality 0 carries its pre-compressed command code from one
+    /// fragment to the next, and quality 1 its histograms, so neither is
+    /// scratch that the next fragment would have overwritten regardless.
+    fn reset(&mut self) {
+        match self {
+            Self::OnePass { arena } => **arena = OnePassArena::default(),
+            Self::TwoPass { state } => state.reset(),
         }
     }
 
@@ -132,6 +153,8 @@ pub(crate) struct FastEncoder {
     level: Level,
     core: FastCore,
     block_size_limit: usize,
+    /// The stream header, kept so a reused encoder can start over from it.
+    header: (u16, u32),
     last_bytes: u16,
     last_bytes_bits: u32,
     table: Vec<i32>,
@@ -166,6 +189,7 @@ impl FastEncoder {
             level,
             core: FastCore::new(quality),
             block_size_limit: 1usize << lgwin,
+            header: (last_bytes, last_bytes_bits),
             last_bytes,
             last_bytes_bits,
             table: Vec::new(),
@@ -182,6 +206,38 @@ impl FastEncoder {
     /// Returns whether the final meta-block has already been written.
     pub(crate) const fn is_finished(&self) -> bool {
         self.finished
+    }
+
+    /// Returns whether `params` would build an encoder of exactly this shape.
+    ///
+    /// A workspace uses this to decide whether resetting is equivalent to
+    /// rebuilding. Nothing is allocated: the three things that shape a fast
+    /// encoder — the quality, the fragment limit and the stream header — are
+    /// all recomputed from `params` directly.
+    pub(crate) fn matches(&self, params: &CompressParams) -> bool {
+        let Ok(quality) = FastQuality::try_from(params.quality()) else {
+            return false;
+        };
+        if params.lgwin().is_large() {
+            return false;
+        }
+        let window = ResolvedWindow::new(params);
+        self.core.quality() == quality
+            && self.block_size_limit == 1usize << window.encoder_bits()
+            && self.header == window.at_least(WINDOW_BITS_FAST).header()
+    }
+
+    /// Restores the encoder to the state its constructor left it in.
+    ///
+    /// Every allocation is kept: the hash table and the scratch buffer are
+    /// resized and cleared per fragment anyway, and the arena is rebuilt in
+    /// place so its `Box` survives. What has to go back is the stream state —
+    /// the carried bits, the pre-compressed command code the next fragment
+    /// would have reused, and the finished flag.
+    pub(crate) fn reset(&mut self) {
+        self.core.reset();
+        (self.last_bytes, self.last_bytes_bits) = self.header;
+        self.finished = false;
     }
 
     /// Returns the scratch capacity one fragment of `input_len` bytes needs.
@@ -267,7 +323,7 @@ impl FastEncoder {
     ///
     /// Returns [`BrotliCompressError::BufferOverflow`] if the internal scratch
     /// buffer proved too small, which would indicate a bug in the size bound.
-    #[hotpath::measure]
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) fn encode_block(&mut self, input: &[u8], is_last: bool) -> BrotliResult<&[u8]> {
         debug_assert!(!self.finished);
         debug_assert!(input.len() <= self.block_size_limit);
@@ -285,6 +341,66 @@ impl FastEncoder {
         Ok(&self.storage[..complete])
     }
 
+    /// Compresses `input` as a non-final fragment and realigns the stream.
+    ///
+    /// Mirrors `BROTLI_OPERATION_FLUSH` on the reference's fast path. These
+    /// qualities already close a meta-block on every call, so the flush adds
+    /// only the empty metadata block that pushes the stream back onto a byte
+    /// boundary — after which everything returned so far decodes to everything
+    /// fed in so far.
+    ///
+    /// An empty `input` skips the fragment entirely, exactly as the reference
+    /// does when a flush arrives with nothing buffered. The result is then
+    /// empty too whenever the stream was already aligned.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrotliCompressError::BufferOverflow`] if the internal scratch
+    /// buffer proved too small, which would indicate a bug in the size bound.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    pub(crate) fn flush_block(&mut self, input: &[u8]) -> BrotliResult<&[u8]> {
+        debug_assert!(!self.finished);
+        debug_assert!(input.len() <= self.block_size_limit);
+
+        let reserve = Self::fragment_reserve(input.len())?;
+        if self.storage.len() < reserve {
+            self.storage = vec![0u8; reserve];
+        }
+
+        let mut storage = core::mem::take(&mut self.storage);
+        let outcome = self.run_flush(input, &mut storage);
+        self.storage = storage;
+        let complete = outcome?;
+        match self.storage.get(..complete) {
+            Some(output) => Ok(output),
+            None => Err(BrotliCompressError::BufferOverflow),
+        }
+    }
+
+    /// Compresses `input` as a non-final fragment, then pads to a byte.
+    ///
+    /// `storage` must hold at least [`FastEncoder::fragment_reserve`] bytes,
+    /// whose slack covers the padding block on top of the fragment.
+    fn run_flush(&mut self, input: &[u8], storage: &mut [u8]) -> BrotliResult<usize> {
+        let complete = if input.is_empty() {
+            0
+        } else {
+            let entries = self.prepare_table(input.len());
+            self.run_fragment(input, false, entries, storage)?
+        };
+
+        // The padding starts inside the byte the fragment left partly written,
+        // which is `storage[complete]` — the same bits `last_bytes` carries —
+        // so the seal overwrites it rather than following it.
+        let padded = match storage.get_mut(complete..) {
+            Some(tail) if tail.len() >= BYTE_PADDING_SLACK => {
+                inject_byte_padding(&mut self.last_bytes, &mut self.last_bytes_bits, tail)
+            }
+            _ => return Err(BrotliCompressError::BufferOverflow),
+        };
+        Ok(complete + padded)
+    }
+
     /// Compresses one fragment straight into `dst`, returning its length.
     ///
     /// This is the in-place path: nothing is copied afterwards. `dst` has to
@@ -296,7 +412,7 @@ impl FastEncoder {
     /// Returns [`BrotliCompressError::OutputTooSmall`] when `dst` is shorter
     /// than the reservation, and [`BrotliCompressError::BufferOverflow`] if
     /// the encoder still ran out of room.
-    #[hotpath::measure]
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) fn encode_block_into(
         &mut self,
         input: &[u8],

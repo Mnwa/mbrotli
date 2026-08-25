@@ -39,6 +39,22 @@ pub struct CompressorReader<T: Read> {
     pub(crate) eof: bool,
 }
 
+impl<T: Read> std::fmt::Debug for CompressorReader<T> {
+    /// Reports the session's parameters and queue state.
+    ///
+    /// Neither the inner reader nor the encoder is shown: the reader has no
+    /// `Debug` bound, and the encoder is a private implementation type.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompressorReader")
+            .field("params", &self.params)
+            .field("started", &self.encoder.is_some())
+            .field("buffered", &self.input.len())
+            .field("queued", &(self.output.len() - self.served))
+            .field("eof", &self.eof)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<T: Read> CompressorReader<T> {
     /// Creates an adapter compressing the bytes produced by `reader`.
     pub(crate) const fn new(reader: T, level: Level, params: CompressParams) -> Self {
