@@ -21,9 +21,6 @@ exclude = [
     "target/**",
 ]
 
-[dependencies]
-tempfile = "3.27"
-
 [dependencies.fearless_simd]
 version = "=0.7.0"
 features = ["libm", "force_support_fallback"]
@@ -40,6 +37,7 @@ optional = true
 
 [dev-dependencies]
 rayon = "1.11"
+tempfile = "3.27"
 
 [dev-dependencies.criterion]
 version = "0.8"

@@ -2,6 +2,7 @@
 mod artifact;
 mod batch;
 pub(in crate::compressor::parallel) mod source;
+mod spool;
 mod task;
 use super::*;
 use crate::compressor::core::fragment::FragmentEncoder;

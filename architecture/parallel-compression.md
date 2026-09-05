@@ -22,7 +22,9 @@ conversions use `From`. Source wrappers use `From<Arc<[u8]>>` and
 `TryFrom<File>`. These trait-based spellings follow repository API conventions.
 There is no mandatory executor trait, runtime dependency, or hidden thread pool.
 Rayon is a development dependency for examples of scheduling in tests/benchmarks.
-`tempfile` supplies exclusive spool creation.
+`tempfile` is a development dependency for test and benchmark fixtures only.
+The private `parallel::core::spool` module uses the standard library for exclusive
+spool creation and cleanup.
 
 ```mermaid
 graph TD
@@ -36,7 +38,8 @@ graph TD
     Fragment --> Driver[serial core::driver::Encoder]
     Driver --> Families[Fast / Greedy / HQ]
     Families --> Dispatch[core::dispatch Selected S, INDEPENDENT]
-    Task --> Artifact[private memory artifact or NamedTempFile]
+    Task --> Artifact[private memory artifact or Spool]
+    Artifact --> Spool[parallel::core::spool: File + cleanup guard]
     Task --> Slot[one completion slot per task]
     Slot --> Batch
     Batch --> Destination[Vec / Write]
@@ -223,6 +226,37 @@ tasks release their own resources. The default retention count is zero; callers
 can retain compatible workspaces and trim them by aggregate size.
 
 ## Assembly and output failure
+
+Directory staging resolves the existing directory to an absolute path. Each
+task uses a fresh `RandomState` to hash candidate names, then atomically opens a
+read/write file with `OpenOptions::create_new(true)`. Existing files and symlinks
+are never opened or overwritten. Name collisions retry up to 128 times; other
+filesystem errors propagate immediately through the existing staging I/O error
+path. Unix files are created with mode `0600` (subject to the process umask);
+other platforms use their default file permissions.
+
+The spool owns its `File` before a separate path cleanup guard in declaration
+order, so dropping an artifact closes the handle before attempting removal,
+including on Windows. Success, errors, cancellation and unwinding all use this
+same ownership cleanup. Removal is best effort because destructors cannot return
+I/O errors. Callers must keep the staging directory stable and trusted; path
+replacement, process termination or filesystem errors can prevent cleanup.
+Spooling adds no SIMD dispatch or changes to encoded bytes.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Creating: canonicalize directory
+    Creating --> Creating: candidate already exists, retry within limit
+    Creating --> Failed: filesystem error or collision limit
+    Creating --> Open: exclusive read/write create
+    Open --> Open: append / validate length / seek and copy
+    Open --> Closed: artifact dropped, File drops first
+    Closed --> Removed: path guard removes file
+    Closed --> LeftBehind: removal fails, error ignored
+    Failed --> [*]
+    Removed --> [*]
+    LeftBehind --> [*]
+```
 
 ```mermaid
 flowchart TD
