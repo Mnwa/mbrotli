@@ -1,5 +1,13 @@
 # RFC 9841 wire map
 
+> **Written before the pre-release API redesign.** The public names in this
+> document — `Brotli`, `CompressParams`, `CompressWorkspace`, `QualityLevel`,
+> `WindowBits`, `SharedContext` and the `compress_*` method families — no
+> longer exist. The encoders below them did not change.
+> [`pre_release_api_redesign.md`](pre_release_api_redesign.md) maps the old
+> names onto the new ones.
+
+
 Every RFC 9841 field this encoder writes or reads, with its width, its byte or
 bit order, the rule that validates it, and the function that implements it.
 Fields belonging to parts of the format that are not implemented are listed at

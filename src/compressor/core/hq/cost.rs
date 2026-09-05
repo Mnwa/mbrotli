@@ -95,6 +95,19 @@ impl ZopfliCostModel {
         }
     }
 
+    /// Returns the bytes this cost model keeps allocated.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        (self.cost_cmd.capacity()
+            + self.cost_dist.capacity()
+            + self.literal_costs.capacity()
+            + self.cost_literal.capacity())
+            * size_of::<f32>()
+            + (self.histogram_literal.capacity()
+                + self.histogram_cmd.capacity()
+                + self.histogram_dist.capacity())
+                * size_of::<u32>()
+    }
+
     /// Makes sure the model can price a block of `num_bytes` bytes.
     ///
     /// Growth is the only allocation the model ever does after construction,

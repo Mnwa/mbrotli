@@ -153,6 +153,11 @@ impl BinaryTreeMatcher {
         (word.wrapping_mul(HASH_MUL32) >> (32 - BUCKET_BITS)) as usize
     }
 
+    /// Returns the bytes this match finder keeps allocated.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        (self.buckets.capacity() + self.forest.capacity()) * size_of::<u32>()
+    }
+
     /// Empties every tree (`Prepare`).
     pub(crate) fn prepare(&mut self) {
         self.buckets.fill(self.invalid_pos);

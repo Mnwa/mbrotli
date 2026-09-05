@@ -1,5 +1,13 @@
 # RFC 9841 security notes
 
+> **Written before the pre-release API redesign.** The public names in this
+> document — `Brotli`, `CompressParams`, `CompressWorkspace`, `QualityLevel`,
+> `WindowBits`, `SharedContext` and the `compress_*` method families — no
+> longer exist. The encoders below them did not change.
+> [`pre_release_api_redesign.md`](pre_release_api_redesign.md) maps the old
+> names onto the new ones.
+
+
 What an attacker can influence through the RFC 9841 features this crate
 implements, and what the implementation does about it. Sections about features
 that are not implemented say so rather than describing protections that do not

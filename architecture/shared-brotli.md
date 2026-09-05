@@ -7,7 +7,7 @@ features:
 | Feature | State |
 | --- | --- |
 | Large Window Brotli | **implemented** for qualities 3 to 11 |
-| LZ77 prefix dictionaries: context, indexes, addressing, search | **implemented** |
+| LZ77 prefix dictionaries: preparation, indexes, addressing, search | **implemented** |
 | LZ77 prefix dictionaries: use by an encoder | **implemented** for qualities 5 to 11 — refused below, not ignored |
 | Serialized shared dictionaries | not implemented |
 | Framing container format | not implemented |
@@ -25,12 +25,16 @@ symbol-by-symbol mapping is in
 
 ## 1. Module boundaries
 
-`mbrotli::compressor::shared` is the public home of every RFC 9841 feature that
-is not a per-call encoder parameter: the error enum, the caller-owned
-`SharedContext` and its builder, the limits a context is prepared under, and the
-result type of a prefix search. Large Window Brotli *is* a per-call parameter —
-it is one of the two headers a `WindowBits` can carry — so it lives beside the
-others in `mbrotli::compressor` rather than in this module.
+`mbrotli::dictionary` is the public home of RFC 9841's prefix dictionaries: the
+immutable `PreparedDictionary`, the builder that indexes one, the limits it is
+built under, and the error preparation reports. Large Window Brotli is not
+there, because it is a configuration value rather than a dictionary — it is one
+of the two headers a `Window` can carry — so it lives in `EncoderConfig`
+alongside the quality and the mode.
+
+`mbrotli::compressor::shared` is what is left: a private module holding the
+low-level error the encoders raise, which the public `DictionaryError`,
+`ConfigError` and `EncodeError` are built from.
 
 Below the API, `compressor::core::rfc9841` owns the wire primitives. It is
 distinct from `compressor::core::shared`, which predates it and means "code more
@@ -39,14 +43,15 @@ than one quality needs".
 ```mermaid
 graph TD
     subgraph public["Public API"]
-        comp["mbrotli::compressor<br/>CompressParams, WindowBits,<br/>ParseWindowBitsError"]
-        entry["Compressor<br/>shared_context_builder, calculate_shared_bound,<br/>compress_shared, compress_shared_to_slice,<br/>longest_prefix_match"]
-        sharedmod["mbrotli::compressor::shared"]
-        ctx["SharedContext, SharedContextBuilder,<br/>SharedContextLimits, PrefixMatch"]
-        err["SharedBrotliError<br/>→ BrotliCompressError::Shared"]
+        comp["mbrotli::EncoderConfig<br/>Window, WindowEncoding, ConfigError"]
+        entry["Compressor<br/>compress_with_dictionary,<br/>compress_with_dictionary_into,<br/>compress_with_dictionary_to_slice,<br/>start_with_dictionary,<br/>writer_with_dictionary, reader_with_dictionary"]
+        sharedmod["mbrotli::dictionary"]
+        ctx["PreparedDictionary, DictionaryBuilder,<br/>DictionaryLimits"]
+        err["DictionaryError, EncodeError<br/>::DictionaryUnsupportedForQuality"]
     end
 
     subgraph private["Private implementation"]
+        sharederr["compressor::shared<br/>SharedBrotliError"]
         rfc["core::rfc9841"]
         window["core::rfc9841::window<br/>ResolvedWindow"]
         inner["core::rfc9841::context<br/>SharedContextInner, Budget,<br/>SharedDictionaryData,<br/>PreparedDictionaryIndexes"]
@@ -72,6 +77,7 @@ graph TD
     sharedmod --> ctx
     sharedmod --> err
     ctx --> inner
+    ctx --> sharederr
     entry --> driver
     driver --> window
     driver --> fast
@@ -101,7 +107,7 @@ graph TD
     driver -->|refuses a non-empty context| err
 
     classDef privateNode fill:#f6e8c3,stroke:#8a6d3b;
-    class rfc,window,inner,pfx,prep,search,driver,dist,mlen,gparams,hparams,fast,gmeta,bitstream,ring,gsearch,hsearch,cmd privateNode;
+    class sharederr,rfc,window,inner,pfx,prep,search,driver,dist,mlen,gparams,hparams,fast,gmeta,bitstream,ring,gsearch,hsearch,cmd privateNode;
 ```
 
 ## 2. Selecting a large window
@@ -111,42 +117,44 @@ is never inferred from the size, the input, the quality, the target, or anything
 else.
 
 ```rust
-let params = CompressParams::new(QualityLevel::Q5, WindowBits::large(30)?);
+let config = EncoderConfig::default()
+    .with_quality(Quality::Q5)
+    .with_window(Window::large(30)?);
 ```
 
-`WindowBits` is a newtype over a private `WindowKind` enum, so the two
-constructors are the only way to build one and each validates its own range:
-`standard` takes `10..=24`, `large` takes `10..=62`. The ranges overlap, and
-that is the point — `WindowBits::large(22)` and `WindowBits::standard(22)` are
-different windows of the same size, because they select different headers and
-different distance alphabets.
+`Window` carries both the size and the header that declares it, in one value,
+because they are one decision. The two constructors are the only way to build
+one and each validates its own range: `standard` takes `10..=24`, `large` takes
+`10..=62`. The ranges overlap, and that is the point — `Window::large(22)` and
+`Window::standard(22)` are different windows of the same size, because they
+select different headers and different distance alphabets.
 
-Keeping the enum private is what makes the invalid state unrepresentable:
-nothing downstream has to re-check a range, because no `WindowBits` can exist
-that no header can express.
+There is no separate `large_window` flag that could disagree with the size, and
+nothing downstream re-checks a range, because no `Window` can exist that no
+header can express.
 
 ```mermaid
 classDiagram
-    class CompressParams {
-        -QualityLevel quality
-        -WindowBits lgwin
-        +new(quality, lgwin)
-        +lgwin() WindowBits
+    class EncoderConfig {
+        -Quality quality
+        -Window window
+        +with_window(Window) EncoderConfig
+        +window() Window
     }
-    class WindowBits {
-        <<newtype over WindowKind>>
-        +MIN = Standard(10)
-        +MAX = Standard(24)
-        +DEFAULT = Standard(22)
-        +LARGE_MIN = Large(10)
-        +LARGE_MAX = Large(62)
+    class Window {
+        -u8 bits
+        -WindowEncoding encoding
+        +MIN_BITS = 10
+        +MAX_STANDARD_BITS = 24
+        +MAX_LARGE_BITS = 62
+        +DEFAULT = standard(22)
         +standard(u8) Result
         +large(u8) Result
         +bits() u8
-        +is_large() bool
+        +encoding() WindowEncoding
     }
     class WindowKind {
-        <<private enum>>
+        <<private enum, internal::WindowBits>>
         Standard(u8)
         Large(u8)
     }
@@ -159,9 +167,9 @@ classDiagram
         +encoder_bits() usize
         +header() (u16, u32)
     }
-    CompressParams *-- WindowBits
-    WindowBits *-- WindowKind
-    ResolvedWindow ..> CompressParams : resolved from
+    EncoderConfig *-- Window
+    Window ..> WindowKind : lowers into
+    ResolvedWindow ..> WindowKind : resolved from
 ```
 
 ## 3. Declared window versus retained history
@@ -179,7 +187,7 @@ largest backward distance. Only `header()` reads the declared bits.
 
 ```mermaid
 flowchart TD
-    p["CompressParams::lgwin()"] --> q{"is_large()?"}
+    p["EncoderConfig::window()"] --> q{"encoding == Large?"}
     q -->|no| std["ResolvedWindow<br/>declared = bits (10..=24)<br/>large = false"]
     q -->|yes| lw["ResolvedWindow<br/>declared = bits (10..=62)<br/>large = true"]
     std --> hdr{"header()"}
@@ -248,36 +256,40 @@ cheapest. Building a candidate with the RFC 7932 constructor there would emit a
 first few bytes would fail to decode. `for_window` carries the flag so it
 cannot.
 
-## 5. The shared context
+## 5. The prepared dictionary
 
-A `SharedContext` is the caller's. It owns the dictionary bytes, it is built by
-a builder that consumes them, and it is handed to a compression call by
-exclusive borrow. There is no `Arc`, no `Rc`, no `Mutex`, no `RwLock`, no
-atomic, no global registry and no interior mutability anywhere in it or below
-it — the type is `Send` and `Sync` because its fields are, and one context
-backs at most one call at a time because `&mut` says so.
+A `PreparedDictionary` is the caller's. It owns the dictionary bytes, it is
+built by a builder that consumes them, and it is handed to a compression call by
+*shared* borrow. There is no `Arc`, no `Rc`, no `Mutex`, no `RwLock`, no atomic,
+no global registry and no interior mutability anywhere in it or below it — the
+type is `Send` and `Sync` because its fields are, and because nothing in it is
+mutable, any number of compressors may borrow one at the same time, on any
+number of threads, with no synchronisation of this crate's making. A caller who
+wants shared *ownership* wraps it in an `Arc`, and that is their policy.
+
+Building one takes no quality. The indexes a dictionary carries are the same
+whichever quality later reads them, so one prepared dictionary serves every
+quality that can consult one.
 
 ```mermaid
 classDiagram
-    class SharedContextBuilder {
+    class DictionaryBuilder {
         <<public, consuming>>
-        -QualityLevel max_quality
-        -SharedContextLimits limits
+        -DictionaryLimits limits
         -Vec~Box~u8~~ attachments
-        +add_prefix_dictionary(B: Into~Box~u8~~) Self
-        +with_limits(SharedContextLimits) Self
-        +prepare() BrotliResult~SharedContext~
+        +new() Self
+        +add_prefix(B: Into~Box~u8~~) Self
+        +with_limits(DictionaryLimits) Self
+        +build() Result~PreparedDictionary, DictionaryError~
     }
-    class SharedContext {
-        <<public>>
-        +max_quality() QualityLevel
+    class PreparedDictionary {
+        <<public, immutable, Send + Sync>>
         +attachment_count() usize
-        +prefix_dictionary_count() usize
-        +has_custom_static_dictionary() bool
-        +source_size() usize
-        +allocated_size() usize
+        +source_bytes() usize
+        +retained_bytes() usize
         +backward_distance(u64, u64) Option~u64~
-        +dictionary_offset(u64, u64) Option~u64~
+        +prefix_offset(u64, u64) Option~u64~
+        +longest_match(&u8) Option~PrefixMatch~
     }
     class SharedContextInner {
         <<private>>
@@ -311,8 +323,8 @@ classDiagram
         -Box~u32~ items
         +candidates(u64) Candidates
     }
-    SharedContextBuilder ..> SharedContext : prepare()
-    SharedContext *-- SharedContextInner
+    DictionaryBuilder ..> PreparedDictionary : build()
+    PreparedDictionary *-- SharedContextInner
     SharedContextInner *-- SharedDictionaryData
     SharedContextInner *-- PreparedDictionaryIndexes
     SharedDictionaryData *-- PrefixSources
@@ -327,24 +339,29 @@ collection that grows, and it is a `Vec`.
 
 ### 5.1. Preparation is a transaction
 
-`prepare` is all-or-nothing, and every check runs before the first table is
+`build` is all-or-nothing, and every check runs before the first table is
 allocated — including the allocation check, which compares a computed upper
-bound rather than the finished size, so a context that would not fit its limit
-is never built and thrown away.
+bound rather than the finished size, so a dictionary that would not fit its
+limit is never built and thrown away. A dictionary with no bytes in it is
+refused outright rather than behaving like no dictionary at all: the two would
+be indistinguishable, which is exactly the confusion this crate avoids
+elsewhere by refusing a dictionary a quality cannot read.
 
 ```mermaid
 flowchart TD
-    b["SharedContextBuilder::prepare"] --> c{"attachments &le; 15?"}
-    c -->|no| e1["Err(TooManyPrefixDictionaries)"]
+    b["DictionaryBuilder::build"] --> z{"any bytes at all?"}
+    z -->|no| e0["Err(Empty)"]
+    z -->|yes| c{"attachments &le; 15?"}
+    c -->|no| e1["Err(TooManyAttachments)"]
     c -->|yes| d{"each segment &le; 2^31 - 1?"}
-    d -->|no| e2["Err(DictionaryTooLarge)"]
-    d -->|yes| f{"total &le; max_prefix_bytes<br/>and max_total_source_bytes?"}
+    d -->|no| e2["Err(TooLarge)"]
+    d -->|yes| f{"total &le; max_prefix_bytes<br/>and max_source_bytes?"}
     f -->|no| e2
-    f -->|yes| g{"peak estimate &le;<br/>max_allocated_bytes?"}
-    g -->|no| e3["Err(SharedContextTooLarge)"]
+    f -->|yes| g{"peak estimate &le;<br/>max_retained_bytes?"}
+    g -->|no| e3["Err(PreparationTooLarge)"]
     g -->|yes| h["build one PreparedPrefix per attachment"]
     h --> i["PrefixSources::new: cumulative offsets"]
-    i --> j["SharedContext"]
+    i --> j["PreparedDictionary"]
 ```
 
 The estimate bounds the build's *peak*, not the finished size: step 3 fills the
@@ -387,9 +404,9 @@ Both are checked `u64` arithmetic and return `None` rather than wrapping,
 outside the prefix range in either direction.
 `prefix::addressing_round_trips_through_the_distance` walks every address of a
 three-attachment prefix through both directions, and
-`shared_context::a_prefix_offset_maps_to_the_distance_that_addresses_it` does
-the same through the public `SharedContext::backward_distance` and
-`SharedContext::dictionary_offset`.
+`dictionary::a_dictionary_reports_its_own_shape` does the same through the
+public `PreparedDictionary::backward_distance` and
+`PreparedDictionary::prefix_offset`.
 
 ### 5.3. The prepared index
 
@@ -420,7 +437,7 @@ from.
 
 ```mermaid
 sequenceDiagram
-    participant C as Compressor::longest_prefix_match
+    participant C as PreparedDictionary::longest_match
     participant I as SharedContextInner
     participant P as PreparedPrefix
     participant S as PrefixSources
@@ -444,8 +461,10 @@ sequenceDiagram
     I-->>C: Option<PrefixMatch { offset, length }>
 ```
 
-This is the standalone probe `Compressor::longest_prefix_match` exposes, not
-the search a match finder runs; that one is §5.5.
+This is the standalone diagnostic `PreparedDictionary::longest_match` exposes
+behind the `diagnostics` feature, not the search a match finder runs; that one
+is §5.5. It is feature-gated because the candidate order it breaks ties by is an
+implementation detail no application should depend on.
 
 The scan is **scalar**, and its own — a whole-word compare with a byte tail,
 not the vector kernel `core::shared::match_len` gives the encoders. Reaching
@@ -517,83 +536,81 @@ compound-dictionary search only for `H5`, `H6`, `H40`, `H41`, `H42`, `H55`,
 qualities zero to four have nowhere to put a match. Where the reference then
 silently ignores the dictionary, this crate refuses.
 
-### 5.6. What a shared compression call does
+### 5.6. What a dictionary compression call does
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Q: compress_shared / compress_shared_to_slice
-    Q --> Mismatch: params.quality() > context.max_quality()
-    Mismatch --> [*]: Err(Shared(SharedContextQualityMismatch))
-    Q --> LW: large window at quality 0, 1 or 2
-    LW --> [*]: Err(Shared(UnsupportedLargeWindow))
-    Q --> NonEmpty: context has prefix bytes
-    NonEmpty --> Low: quality below 5
-    Low --> [*]: Err(Shared(UnsupportedSharedContextForQuality))
-    NonEmpty --> Attached: quality 5 to 11
+    [*] --> Build: Compressor::new(config)
+    Build --> LW: large window at quality 0, 1 or 2
+    LW --> [*]: Err(ConfigError::LargeWindowUnsupportedForQuality)
+    Build --> Q: a compressor
+    Q --> Low: quality below 5
+    Low --> [*]: Err(EncodeError::DictionaryUnsupportedForQuality)
+    Q --> Attached: quality 5 to 11
     Attached --> Consulted: every match finder consults the prefix
     Consulted --> [*]: a stream whose distances may address the prefix
-    Q --> Empty: context is empty
-    Empty --> Ordinary: the ordinary driver, unchanged
-    Ordinary --> [*]: byte-identical to compress(params, src)
+    Q --> EmptyInput: input empty
+    EmptyInput --> [*]: one byte, 0x06
 ```
 
-The order is fixed: the context's prepared quality is checked by the public
-entry point, which is the only layer that knows it; the rest is checked in
-`core::driver::check_shared`. Everything runs before any input is consumed.
+The order is fixed and every check runs before any input is consumed: the window
+against the quality when the compressor is built, then the quality against the
+dictionary when the operation starts.
 
-Below quality five a non-empty context is **refused, not ignored**. A stream
-compressed without the dictionary it was handed decodes perfectly well on its
-own, so a silent drop would only surface as corruption at a decoder that *did*
-attach the dictionary.
+Below quality five a dictionary is **refused, not ignored**. A stream compressed
+without the dictionary it was handed decodes perfectly well on its own, so a
+silent drop would only surface as corruption at a decoder that *did* attach the
+dictionary. Refusing costs the caller nothing: the compressor is untouched and
+the next ordinary call works.
 
-An empty context takes the ordinary driver with no wrapper and no extra
-allocation — `attachment` maps it to `None` rather than to an empty
-attachment — so it emits exactly the bytes `compress` emits, for ordinary and
-large-window streams alike.
+There is no empty dictionary to reason about — `DictionaryBuilder::build`
+refuses one — so a compressor either has a dictionary attached to a call or it
+does not, and the second case is byte for byte the ordinary path.
 
 An empty *input* keeps the one-shot shortcut and emits the single byte
 `BrotliEncoderCompress` emits, dictionary or not: a stream with no bytes in it
 cannot reference one. See decision D5.
 
+Every entry point that takes a dictionary — the three one-shot forms, the
+session, the writer and the reader — reaches the same bytes for the same
+declared size, which `dictionary::every_dictionary_entry_point_reaches_the_same_bytes`
+checks. A flush carries the dictionary too, so the bytes after one are still
+compressed against it.
+
 ### 5.7. Reuse determinism
 
-Nothing a context owns is stream state. There is no LZ77 history in it, no
+Nothing a dictionary owns is stream state. There is no LZ77 history in it, no
 distance cache, no pending command, no meta-block state and no input position —
-only the caller's bytes and indexes derived from them by a pure function. So
-the specification's reuse contract holds by construction rather than by a
-reset: `compress A; compress B; fail C; compress A` emits the same bytes for
-both runs of `A`, which
-`shared_context::reusing_one_context_is_deterministic_across_failures` checks
-with both a buffer-too-small failure and a quality-mismatch failure in between.
+only the caller's bytes and indexes derived from them by a pure function. That
+is what makes a shared borrow sound, and it makes the reuse contract hold by
+construction rather than by a reset.
 
-The generation counter and the RAII idle guard the specification describes
-belong to the reusable *encoder workspace*, which no context owns yet; they
-land with the match finders that need them.
+The compressor is the mutable half, and it *does* reset:
+`dictionary::reusing_one_compressor_with_a_dictionary_is_deterministic` runs a
+deliberate failure, an ordinary call and an abandoned session between two
+dictionary calls and requires the same bytes from both.
 
 ## 6. Where a large window is refused
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Check: compress / compress_to_slice
-    Check --> Ordinary: lgwin() is not large
+    [*] --> Check: Compressor::new / reconfigure
+    Check --> Ordinary: the window is not large
     Check --> Q012: quality 0, 1 or 2
     Check --> Large: quality 3..=11
-    Q012 --> [*]: Err(Shared(UnsupportedLargeWindow { quality }))
-    Ordinary --> Empty: input empty
-    Large --> Empty: input empty
+    Q012 --> [*]: Err(ConfigError::LargeWindowUnsupportedForQuality)
+    Ordinary --> Encode: any operation
+    Large --> Encode: any operation
+    Encode --> Empty: input empty
     Empty --> [*]: one byte, 0x06
-    Ordinary --> Encode
-    Large --> Encode
     Encode --> [*]: stream
 ```
 
-The check runs *before* the empty-input shortcut, so an explicit request is
-never dropped on the way to a one-byte stream; and it inspects only the field
-this extension added, so nothing that was constructible before reaches it. The
-streaming adapters build their encoder lazily and reach the same refusal through
-`FastEncoder::new` and `GreedyParams::new`, which is why `compress_writer` did
-not have to become fallible to construct — and why the check has to exist in
-both places rather than only in the driver.
+The check runs when the compressor is built, so a refused request never reaches
+an operation at all and cannot be dropped on the way to a one-byte stream. The
+encoders keep their own copies of the refusal in `FastEncoder::new` and
+`GreedyParams::new`, which is now unreachable from a validated configuration and
+is reported as `EncodeError::InternalInvariant` if it ever fires.
 
 Qualities 0, 1 and 2 are refused rather than downgraded because all three may
 write distances through a code built for the 64-symbol RFC 7932 alphabet: the
@@ -605,20 +622,24 @@ silently instead; see decision D4 for what lifting the restriction would take.
 
 ```mermaid
 graph LR
-    lw["UnsupportedLargeWindow"] --> shared
+    lw["large window at q0, q1, q2"] --> cfg["ConfigError::LargeWindowUnsupportedForQuality<br/>(Compressor::new / reconfigure)"]
     tm["TooManyPrefixDictionaries"] --> shared
     dl["DictionaryTooLarge"] --> shared
     ct["SharedContextTooLarge"] --> shared
-    qm["SharedContextQualityMismatch"] --> shared
-    us["UnsupportedSharedContextForQuality"] --> shared
-    shared["SharedBrotliError"] -->|"#[from]"| bce["BrotliCompressError::Shared<br/>#[error(transparent)]"]
-    io["std::io::Error"] -->|"#[from]"| bce
-    bce -->|"From&lt;BrotliCompressError&gt;"| io2["std::io::Error<br/>(streaming adapters)"]
+    shared["SharedBrotliError<br/>(private)"] --> de["DictionaryError<br/>(DictionaryBuilder::build)"]
+    q5["dictionary below quality 5"] --> ee["EncodeError::DictionaryUnsupportedForQuality<br/>(the operation)"]
+    de --> caller["the caller"]
+    cfg --> caller
+    ee --> caller
+    ee -->|"From&lt;EncodeError&gt;"| io["std::io::Error<br/>(the io adapters)"]
 ```
 
-`SharedBrotliError` is public and `#[non_exhaustive]`. Its variants are added as
-they become reachable rather than declared ahead of the code that raises them,
-so the enum is always an accurate list of what can happen.
+The split is by domain rather than by layer: a window the quality cannot carry
+is a *configuration* mistake and is reported when the compressor is built; a
+dictionary that cannot be prepared is a *dictionary* mistake and is reported
+when it is built; a dictionary the quality cannot read needs an operation to
+happen at all. `SharedBrotliError` is private and exists only to carry the
+low-level refusals up to whichever public error owns them.
 
 ## 8. Determinism and SIMD
 
@@ -639,9 +660,7 @@ optimisation; Section 45 puts scalar parity first in any case.
 The consequence is worth stating plainly: prepared indexes, candidate order and
 search results are identical on every machine, so a context prepared once may
 be used by a compressor that later resolves a different backend, and no test
-has to prove it. `Compressor::longest_prefix_match` still takes `&self` so that
-a vectorised scan can be dispatched from the level that type already holds,
-without moving the method.
+has to prove it.
 
 ## 9. Verification topology
 
@@ -653,39 +672,27 @@ without moving the method.
 | `core::rfc9841::prefix` unit tests | attachment ordering; addressing over empty attachments; the distance round trip; saturating arithmetic at `u64::MAX`; the match scan against a materialised oracle over every start, seam and limit; the word scan against a byte-by-byte comparison at every shared length and limit |
 | `core::rfc9841::prepared` unit tests | the shape ladder; every hashable position indexed once; newest-first, capped bucket chains; **entry-for-entry equality with `CreatePreparedDictionary`** through the workspace shim, over six corpora including one that triggers shape scaling |
 | `core::rfc9841::context` unit tests | attachment order and per-attachment indexes; every construction limit; the allocation estimate bounding the real size; the search's longest-match, seam-crossing and longest-over-nearest behaviour |
-| `tests/shared_context.rs` | the public surface end to end: accessors, the fifteen-dictionary limit, every limit refusal, the quality-mismatch refusal on all three entry points, empty-context byte equality with `compress` over the structural corpora at every quality with a C round trip, large-window equality, slice and vector agreement, reuse determinism across two kinds of failure, `Send` across threads and behind `Arc<Mutex<_>>`, the prefix search and the distance mapping |
-| `tests/shared_dictionary.rs` | **byte identity with the C encoder** over six dictionary-and-payload shapes at qualities 5 to 11, with the same bytes prepared by `BrotliEncoderPrepareDictionary` and attached by `BrotliEncoderAttachPreparedDictionary`; a round trip through the C decoder with the same dictionaries attached; a ratio floor that fails if the dictionary were ignored; the refusal below quality 5; empty-context and empty-input behaviour; slice and vector agreement |
+| `tests/dictionary.rs` | **byte identity with the C encoder** over six dictionary-and-payload shapes at qualities 5 to 11, with the same bytes prepared by `BrotliEncoderPrepareDictionary` and attached by `BrotliEncoderAttachPreparedDictionary`; a round trip through the C decoder with the same dictionaries attached; a ratio floor that fails if the dictionary were ignored; agreement between all six dictionary entry points; the refusal below quality 5 on every one of them; attachment order changing the stream and both orders matching the reference; one dictionary shared by four threads; flush with a dictionary attached; every preparation limit; reuse determinism across a failure and an abandoned session; and that a dictionary call never changes the next ordinary one |
+| `fuzz/afl/src/bin/dictionary.rs` | the same oracles driven from fuzz input: attachment counts past the format limit, impossible budgets, the addressing round trip, and the refusal below quality five |
 | `tests/differential_c.rs`, `tests/roundtrip.rs`, and the rest | unchanged, and still byte-identical to the C encoder — which is the evidence that no ordinary stream moved |
 
 ## Known gaps
 
 - **An attached prefix reaches qualities 5 to 11 only.** The reference compiles
   its compound-dictionary search for `H5`, `H6`, `H40`, `H41`, `H42`, `H55`,
-  `H65` and the binary tree, so qualities 0 to 4 have no match finder that
-  could carry a prefix match. Where the reference then ignores the dictionary,
-  `compress_shared` and `compress_shared_to_slice` refuse with
-  `UnsupportedSharedContextForQuality`.
-- **No streaming shared adapters.** `SharedCompressorWriter` and
-  `SharedCompressorReader` do not exist. The encoders take the context per
-  call rather than holding it, so an adapter would have to keep the context's
-  exclusive borrow for its whole life — a separate API decision, not a missing
-  mechanism.
-- **The prefix is not consulted by the workspace-reusing entry points.**
-  `compress_with` and `compress_to_slice_with` take no context; a shared call
-  builds its encoder fresh.
-- **No serialized shared dictionaries.** `SharedDictionary`, custom word lists,
-  custom transform lists and the context map are not implemented, so
-  `SharedContextBuilder::add_serialized_dictionary` does not exist,
-  `SharedContext::has_custom_static_dictionary` is always `false`, and the
-  reference's `contextual.dict[dict_id]` selection has no counterpart.
-- **Three of the six specified limits are absent.** `SharedContextLimits`
-  carries the three that something checks today. `max_transformed_word_bytes`
-  and `max_trie_nodes` land with the serialized dictionary;
-  `max_reusable_workspace_bytes` lands with a workspace that can hold a
-  context.
-- **No session guard.** A context holds nothing a call can disturb, which is
-  why reuse determinism holds by construction and why the generation counter
-  and RAII idle guard of the specification are not written yet.
+  `H65` and the binary tree, so qualities 0 to 4 have no match finder that could
+  carry a prefix match. Where the reference then ignores the dictionary, every
+  dictionary entry point refuses with
+  `EncodeError::DictionaryUnsupportedForQuality`.
+- **No serialized shared dictionaries.** Custom word lists, custom transform
+  lists and the context map are not implemented, so
+  `DictionaryBuilder::add_serialized` does not exist and the reference's
+  `contextual.dict[dict_id]` selection has no counterpart.
+- **Three of the six specified limits are absent.** `DictionaryLimits` carries
+  the three that something checks today. `max_transformed_word_bytes` and
+  `max_trie_nodes` land with the serialized dictionary;
+  `max_reusable_workspace_bytes` would bound the compressor's workspace, which
+  `RetentionPolicy::Bounded` now does instead.
 - **No framing container.** No signature, chunks, metadata, references, central
   directory or final footer. `Compressor::framed_writer` does not exist.
 - **No varint module.** It lands with the serialized dictionary parser, its

@@ -1,5 +1,13 @@
 # The three newest APIs, measured
 
+> **Written before the pre-release API redesign.** The public names in this
+> document — `Brotli`, `CompressParams`, `CompressWorkspace`, `QualityLevel`,
+> `WindowBits`, `SharedContext` and the `compress_*` method families — no
+> longer exist. The encoders below them did not change.
+> [`pre_release_api_redesign.md`](pre_release_api_redesign.md) maps the old
+> names onto the new ones.
+
+
 `CompressWorkspace`, `Write::flush` and attached RFC 9841 prefix dictionaries,
 each against the reference doing the same work. The per-quality sweep is in
 [`all_qualities_benchmarks.md`](all_qualities_benchmarks.md); this report

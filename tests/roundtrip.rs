@@ -5,19 +5,18 @@
 
 mod support;
 
-use mbrotli::Brotli;
+use mbrotli::Compressor;
 use support::{
-    IMPLEMENTED_QUALITIES, boundary_corpora, c_decompress, host_levels, params, prefix_for,
-    structural_corpora,
+    IMPLEMENTED_QUALITIES, boundary_corpora, c_decompress, encoder, encoder_on, host_levels,
+    prefix_for, structural_corpora,
 };
 
 /// Compresses one input and requires the C decoder to recover it exactly.
 fn assert_round_trips(name: &str, data: &[u8], lgwin: u8) {
-    let compressor = Brotli::default().compressor();
     for quality in IMPLEMENTED_QUALITIES {
         let data = prefix_for(quality, data);
-        let compressed = compressor
-            .compress(params(quality, lgwin), data)
+        let compressed = encoder(quality, lgwin)
+            .compress(data)
             .expect("compression failed");
         let decoded = c_decompress(&compressed, data.len())
             .unwrap_or_else(|| panic!("case {name}: the decoder rejected the stream"));
@@ -25,13 +24,13 @@ fn assert_round_trips(name: &str, data: &[u8], lgwin: u8) {
             decoded.len(),
             data.len(),
             "case {name}, quality {}, lgwin {lgwin}: decoded length differs",
-            usize::from(quality)
+            quality.get()
         );
         assert_eq!(
             decoded,
             data,
             "case {name}, quality {}, lgwin {lgwin}",
-            usize::from(quality)
+            quality.get()
         );
     }
 }
@@ -64,11 +63,10 @@ fn every_window_size_round_trips() {
 fn every_backend_round_trips() {
     let corpora = structural_corpora();
     for (level_name, level) in host_levels() {
-        let compressor = Brotli::from(level).compressor();
         for corpus in &corpora {
             for quality in IMPLEMENTED_QUALITIES {
-                let compressed = compressor
-                    .compress(params(quality, 22), &corpus.data)
+                let compressed = encoder_on(level, quality, 22)
+                    .compress(&corpus.data)
                     .expect("compression failed");
                 let decoded = c_decompress(&compressed, corpus.data.len()).unwrap_or_else(|| {
                     panic!(
@@ -84,31 +82,32 @@ fn every_backend_round_trips() {
 
 #[test]
 fn compression_is_deterministic() {
-    let compressor = Brotli::default().compressor();
     for corpus in structural_corpora() {
         for quality in IMPLEMENTED_QUALITIES {
-            let first = compressor
-                .compress(params(quality, 22), &corpus.data)
-                .expect("compression failed");
-            let second = compressor
-                .compress(params(quality, 22), &corpus.data)
+            let mut warm = encoder(quality, 22);
+            let first = warm.compress(&corpus.data).expect("compression failed");
+            let second = warm.compress(&corpus.data).expect("compression failed");
+            let fresh = encoder(quality, 22)
+                .compress(&corpus.data)
                 .expect("compression failed");
             assert_eq!(first, second, "case {}", corpus.name);
+            assert_eq!(
+                first, fresh,
+                "case {}: a warm compressor differed",
+                corpus.name
+            );
         }
     }
 }
 
 #[test]
 fn output_stays_within_the_documented_bound() {
-    let compressor = Brotli::default().compressor();
     for corpus in structural_corpora() {
         for quality in IMPLEMENTED_QUALITIES {
-            let parameters = params(quality, 22);
-            let bound = compressor
-                .calculate_bound(&parameters, corpus.data.len())
-                .expect("bound overflowed");
-            let compressed = compressor
-                .compress(parameters, &corpus.data)
+            let bound =
+                Compressor::max_compressed_size(corpus.data.len()).expect("bound overflowed");
+            let compressed = encoder(quality, 22)
+                .compress(&corpus.data)
                 .expect("compression failed");
             assert!(
                 compressed.len() <= bound,

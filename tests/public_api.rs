@@ -1,146 +1,233 @@
-//! Coverage of the public API surface: constructors, conversions, accessors
-//! and the error model.
+//! Coverage of the public API surface, from outside the crate.
+//!
+//! Constructors, conversions, accessors, the error model, and the promise that
+//! every entry point reaches the same bytes.
 
 mod support;
 
-use mbrotli::Brotli;
-use mbrotli::compressor::shared::SharedBrotliError;
-use mbrotli::compressor::{
-    BlockBits, BrotliCompressError, CompressMode, CompressParams, Compressor, DistanceCodes,
-    ParseBlockBitsError, ParseDistanceCodesError, ParseQualityLevelError, ParseWindowBitsError,
-    QualityLevel, WindowBits,
+use mbrotli::dictionary::{DictionaryBuilder, DictionaryError, DictionaryLimits};
+use mbrotli::io::FinishError;
+use mbrotli::{
+    BlockBits, BlockSize, CompressionMode, Compressor, ConfigError, DistanceParams, EncodeError,
+    EncoderConfig, EncoderStatus, InputSize, LiteralContextMode, Operation, Progress, Quality,
+    RetentionPolicy, SizeOverflow, StreamConfig, Window, WindowEncoding,
 };
 use std::io::{Read, Write};
-use support::{IMPLEMENTED_QUALITIES, c_decompress, params};
+use support::{IMPLEMENTED_QUALITIES, c_decompress, config, encoder};
 
 #[test]
-fn a_compressor_can_be_built_from_a_level_or_from_brotli() {
-    let level = fearless_simd::Level::new();
-    let from_level = Compressor::from(level);
-    let from_brotli = Compressor::from(Brotli::from(level));
-    let from_entry = Brotli::from(level).compressor();
+fn quality_round_trips_through_its_numeric_value() {
+    for value in 0u8..=11 {
+        let quality = Quality::try_from(value).expect("a legal quality");
+        assert_eq!(quality.get(), value);
+        assert_eq!(u8::from(quality), value);
+    }
+    assert_eq!(
+        Quality::try_from(12u8),
+        Err(ConfigError::Quality { requested: 12 })
+    );
+    assert_eq!(Quality::MIN, Quality::Q0);
+    assert_eq!(Quality::MAX, Quality::Q11);
+    assert_eq!(Quality::default(), Quality::Q11);
+    assert!(Quality::Q1 < Quality::Q5);
+}
 
-    let parameters = params(QualityLevel::Q0, 22);
-    let expected = from_level
-        .compress(parameters, b"identical output please")
+#[test]
+fn the_default_configuration_is_the_reference_encoders() {
+    let config = EncoderConfig::default();
+    assert_eq!(config.quality(), Quality::Q11);
+    assert_eq!(config.window(), Window::DEFAULT);
+    assert_eq!(config.window().bits(), 22);
+    assert_eq!(config.window().encoding(), WindowEncoding::Standard);
+    assert_eq!(config.block_size(), BlockSize::Auto);
+    assert_eq!(config.mode(), CompressionMode::Generic);
+    assert_eq!(config.distance(), DistanceParams::Auto);
+    assert_eq!(config.literal_context(), LiteralContextMode::Auto);
+}
+
+#[test]
+fn every_configuration_setter_survives_a_round_trip() {
+    let codes = DistanceParams::explicit(2, 8).expect("a legal layout");
+    let config = EncoderConfig::default()
+        .with_quality(Quality::Q5)
+        .with_window(Window::large(40).expect("a legal window"))
+        .with_block_size(BlockSize::Bits(BlockBits::MAX))
+        .with_mode(CompressionMode::Font)
+        .with_distance(codes)
+        .with_literal_context(LiteralContextMode::Disabled);
+
+    assert_eq!(config.quality(), Quality::Q5);
+    assert_eq!(config.window().bits(), 40);
+    assert_eq!(config.block_size(), BlockSize::Bits(BlockBits::MAX));
+    assert_eq!(config.mode(), CompressionMode::Font);
+    assert_eq!(config.distance(), codes);
+    assert_eq!(config.literal_context(), LiteralContextMode::Disabled);
+
+    // Setting a value back restores the encoder's own choice.
+    let restored = config
+        .with_block_size(BlockSize::Auto)
+        .with_distance(DistanceParams::Auto);
+    assert_eq!(restored.block_size(), BlockSize::Auto);
+    assert_eq!(restored.distance(), DistanceParams::Auto);
+}
+
+#[test]
+fn block_bits_accept_exactly_the_encoders_range() {
+    for bits in 16u8..=24 {
+        let block = BlockBits::try_from(bits).expect("a legal block size");
+        assert_eq!(block.get(), bits);
+        assert_eq!(usize::from(block), usize::from(bits));
+        assert_eq!(BlockSize::from(block), BlockSize::Bits(block));
+    }
+    for bits in [0u8, 15, 25, u8::MAX] {
+        assert_eq!(
+            BlockBits::try_from(bits),
+            Err(ConfigError::BlockBits { requested: bits })
+        );
+    }
+    assert_eq!(BlockBits::MIN.get(), 16);
+    assert_eq!(BlockBits::MAX.get(), 24);
+    assert_eq!(BlockSize::default(), BlockSize::Auto);
+}
+
+#[test]
+fn distance_layouts_the_format_cannot_express_are_refused() {
+    for postfix in 0u8..=3 {
+        for groups in 0u16..16 {
+            let direct = groups << postfix;
+            if direct > DistanceParams::MAX_DIRECT_CODES {
+                continue;
+            }
+            assert_eq!(
+                DistanceParams::explicit(postfix, direct),
+                Ok(DistanceParams::Explicit {
+                    postfix_bits: postfix,
+                    direct_codes: direct
+                })
+            );
+        }
+    }
+    assert_eq!(
+        DistanceParams::explicit(4, 0),
+        Err(ConfigError::DistancePostfixBits { requested: 4 })
+    );
+    assert_eq!(
+        DistanceParams::explicit(0, 121),
+        Err(ConfigError::DirectDistanceCodes { requested: 121 })
+    );
+    assert_eq!(
+        DistanceParams::explicit(2, 6),
+        Err(ConfigError::MisalignedDistanceCodes {
+            postfix_bits: 2,
+            direct_codes: 6
+        })
+    );
+    assert_eq!(DistanceParams::MAX_POSTFIX_BITS, 3);
+    assert_eq!(DistanceParams::MAX_DIRECT_CODES, 120);
+}
+
+#[test]
+fn a_compressor_reports_what_it_was_built_with() {
+    let config = config(Quality::Q5, 18);
+    let mut encoder = Compressor::new(config).expect("a legal configuration");
+
+    assert_eq!(*encoder.config(), config);
+    assert_eq!(encoder.retention(), RetentionPolicy::Aggressive);
+    assert_eq!(encoder.retained_bytes(), 0);
+
+    encoder
+        .compress(b"payload payload")
         .expect("compression failed");
-    for compressor in [from_brotli, from_entry] {
-        let actual = compressor
-            .compress(parameters, b"identical output please")
-            .expect("compression failed");
-        assert_eq!(actual, expected);
+    assert!(encoder.retained_bytes() > 0);
+}
+
+#[test]
+fn the_bound_covers_every_stream_and_reports_an_overflow() {
+    for size in [0usize, 1, 1024, 1 << 16] {
+        let bound = Compressor::max_compressed_size(size).expect("a representable bound");
+        assert!(bound >= size);
     }
-}
-
-#[test]
-fn parameters_report_what_they_were_built_with() {
-    let parameters = CompressParams::new(QualityLevel::Q1, WindowBits::MIN);
-    assert_eq!(usize::from(parameters.quality()), 1);
-    assert_eq!(parameters.lgwin(), WindowBits::MIN);
-    assert_eq!(WindowBits::default(), WindowBits::DEFAULT);
-}
-
-#[test]
-fn quality_levels_round_trip_through_their_numeric_value() {
-    for value in 0usize..=11 {
-        let quality = QualityLevel::try_from(value).expect("valid quality");
-        assert_eq!(usize::from(quality), value);
-    }
-    assert!(matches!(
-        QualityLevel::try_from(12),
-        Err(ParseQualityLevelError::UpperBound)
-    ));
-}
-
-#[test]
-fn error_messages_describe_what_went_wrong() {
-    assert!(
-        ParseQualityLevelError::LowerBound
-            .to_string()
-            .contains("positive")
+    assert_eq!(
+        Compressor::max_compressed_size(usize::MAX),
+        Err(SizeOverflow)
     );
     assert!(
-        ParseQualityLevelError::UpperBound
+        SizeOverflow
             .to_string()
-            .contains("11")
-    );
-    assert!(ParseWindowBitsError::LowerBound.to_string().contains("10"));
-    assert!(ParseWindowBitsError::UpperBound.to_string().contains("24"));
-    assert!(
-        BrotliCompressError::UnsupportedQuality(7)
-            .to_string()
-            .contains('7')
-    );
-    assert!(
-        BrotliCompressError::OutputTooSmall
-            .to_string()
-            .contains("too small")
-    );
-    assert!(
-        BrotliCompressError::BufferOverflow
-            .to_string()
-            .contains("overflow")
-    );
-    assert!(
-        BrotliCompressError::BoundOverflow
-            .to_string()
-            .contains("overflow")
+            .contains("overflows the address space")
     );
 }
 
 #[test]
-fn encoder_errors_travel_through_the_io_error_conversion() {
-    let io_error = std::io::Error::from(BrotliCompressError::UnsupportedQuality(5));
-    assert_eq!(io_error.kind(), std::io::ErrorKind::Other);
-
-    let inner = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "gone");
-    let wrapped = std::io::Error::from(BrotliCompressError::IOError(inner));
-    assert_eq!(wrapped.kind(), std::io::ErrorKind::BrokenPipe);
-}
-
-#[test]
-fn the_bound_rejects_arithmetic_that_cannot_fit() {
-    let compressor = Brotli::default().compressor();
-    let parameters = params(QualityLevel::Q0, 10);
-    assert!(compressor.calculate_bound(&parameters, 4096).is_ok());
-    assert!(matches!(
-        compressor.calculate_bound(&parameters, usize::MAX),
-        Err(BrotliCompressError::BoundOverflow)
-    ));
-}
-
-#[test]
-fn the_slice_entry_point_reports_a_buffer_that_is_one_byte_short() {
-    let compressor = Brotli::default().compressor();
+fn every_quality_is_reachable_from_every_entry_point() {
+    let payload = b"data data data data data";
     for quality in IMPLEMENTED_QUALITIES {
-        let parameters = params(quality, 22);
+        let mut encoder = encoder(quality, 22);
+        let expected = encoder
+            .compress(payload)
+            .unwrap_or_else(|error| panic!("q{}: {error}", quality.get()));
+        assert!(!expected.is_empty());
+
+        let mut appended = Vec::new();
+        let range = encoder
+            .compress_into(payload, &mut appended)
+            .expect("appending failed");
+        assert_eq!(&appended[range], expected.as_slice());
+
+        let mut buffer = vec![0u8; Compressor::max_compressed_size(payload.len()).expect("bound")];
+        let written = encoder
+            .compress_to_slice(payload, &mut buffer)
+            .expect("the slice entry point failed");
+        assert_eq!(&buffer[..written], expected.as_slice());
+
+        // The streaming shapes need the size declared to reach the same bytes.
+        let stream = StreamConfig::from(InputSize::Exact(payload.len() as u64));
+        let mut sink = encoder.writer(Vec::new(), stream).expect("a legal stream");
+        sink.write_all(payload).expect("write failed");
+        let streamed = sink
+            .finish()
+            .map_err(FinishError::into_error)
+            .expect("finish failed");
+        assert_eq!(streamed, expected, "q{}: writer", quality.get());
+
+        let mut source = encoder
+            .reader(&payload[..], stream)
+            .expect("a legal stream");
+        let mut pulled = Vec::new();
+        source.read_to_end(&mut pulled).expect("read failed");
+        assert_eq!(pulled, expected, "q{}: reader", quality.get());
+    }
+}
+
+#[test]
+fn the_slice_entry_point_reports_a_destination_one_byte_short() {
+    for quality in IMPLEMENTED_QUALITIES {
+        let mut encoder = encoder(quality, 22);
         let input = b"a payload long enough that compressing it actually shrinks it a lot lot lot";
-        let expected = compressor
-            .compress(parameters, input)
-            .expect("compression failed");
+        let expected = encoder.compress(input).expect("compression failed");
 
         let mut exact = vec![0u8; expected.len()];
-        let written = compressor
-            .compress_to_slice(parameters, input, &mut exact)
-            .expect("an exactly sized buffer must be accepted");
+        let written = encoder
+            .compress_to_slice(input, &mut exact)
+            .expect("an exactly sized destination must be accepted");
         assert_eq!(written, expected.len());
         assert_eq!(exact, expected);
 
         let mut short = vec![0u8; expected.len() - 1];
         assert!(matches!(
-            compressor.compress_to_slice(parameters, input, &mut short),
-            Err(BrotliCompressError::OutputTooSmall)
+            encoder.compress_to_slice(input, &mut short),
+            Err(EncodeError::OutputTooSmall { .. })
         ));
 
         let mut empty: [u8; 0] = [];
         assert!(matches!(
-            compressor.compress_to_slice(parameters, b"", &mut empty),
-            Err(BrotliCompressError::OutputTooSmall)
+            encoder.compress_to_slice(b"", &mut empty),
+            Err(EncodeError::OutputTooSmall { provided: 0 })
         ));
         let mut one = [0u8; 1];
         assert_eq!(
-            compressor
-                .compress_to_slice(parameters, b"", &mut one)
+            encoder
+                .compress_to_slice(b"", &mut one)
                 .expect("one byte is enough for an empty input"),
             1
         );
@@ -148,338 +235,342 @@ fn the_slice_entry_point_reports_a_buffer_that_is_one_byte_short() {
 }
 
 #[test]
-fn every_quality_the_format_defines_is_reachable_from_every_entry_point() {
-    let compressor = Brotli::default().compressor();
-    let mut buffer = [0u8; 256];
-
-    for quality in IMPLEMENTED_QUALITIES {
-        let parameters = params(quality, 22);
-        let expected = compressor
-            .compress(parameters, b"data data data")
-            .unwrap_or_else(|error| panic!("q{quality:?}: {error}"));
-        assert!(!expected.is_empty(), "q{quality:?} produced nothing");
-
-        let written = compressor
-            .compress_to_slice(parameters, b"data data data", &mut buffer)
-            .unwrap_or_else(|error| panic!("q{quality:?} slice: {error}"));
-        assert_eq!(&buffer[..written], expected.as_slice(), "q{quality:?}");
-
-        let mut sink = compressor.compress_writer(parameters, Vec::new());
-        sink.write_all(b"data data data")
-            .unwrap_or_else(|error| panic!("q{quality:?} writer: {error}"));
-        sink.finish()
-            .unwrap_or_else(|error| panic!("q{quality:?} finish: {error}"));
-
-        let mut source = compressor.compress_reader(parameters, &b"data data data"[..]);
-        let mut out = Vec::new();
-        source
-            .read_to_end(&mut out)
-            .unwrap_or_else(|error| panic!("q{quality:?} reader: {error}"));
-        assert!(!out.is_empty(), "q{quality:?} reader produced nothing");
-    }
-}
-
-#[test]
 fn the_streaming_adapters_expose_their_inner_stream() {
-    let compressor = Brotli::default().compressor();
-    let parameters = params(QualityLevel::Q0, 22);
+    let mut encoder = encoder(Quality::Q0, 22);
 
-    let mut sink = compressor.compress_writer(parameters, Vec::new());
+    let mut sink = encoder
+        .writer(Vec::new(), StreamConfig::default())
+        .expect("a legal stream");
     assert!(sink.get_ref().is_empty());
+    sink.get_mut().reserve(64);
     sink.write_all(b"payload").expect("write failed");
     sink.flush().expect("flush failed");
-    let compressed = sink.finish().expect("finish failed");
+    assert!(!sink.is_finished());
+    let compressed = sink
+        .finish()
+        .map_err(FinishError::into_error)
+        .expect("finish failed");
     assert_eq!(
         c_decompress(&compressed, 7).as_deref(),
         Some(&b"payload"[..])
     );
 
-    let source = compressor.compress_reader(parameters, &b"payload"[..]);
+    let mut source = encoder
+        .reader(&b"payload"[..], StreamConfig::default())
+        .expect("a legal stream");
     assert_eq!(source.get_ref().len(), 7);
+    assert_eq!(source.get_mut().len(), 7);
+    assert!(!source.is_finished());
 }
 
 #[test]
-fn a_reader_yields_nothing_for_a_zero_length_buffer() {
-    let compressor = Brotli::default().compressor();
-    let parameters = params(QualityLevel::Q1, 22);
-    let mut source = compressor.compress_reader(parameters, &b"payload"[..]);
-    let mut empty: [u8; 0] = [];
-    assert_eq!(source.read(&mut empty).expect("read failed"), 0);
-}
+fn a_stream_configuration_carries_only_what_one_stream_knows() {
+    assert_eq!(StreamConfig::default().input_size(), InputSize::Unknown);
+    assert_eq!(StreamConfig::default().stream_offset(), 0);
+    assert_eq!(InputSize::default(), InputSize::Unknown);
+    assert_eq!(InputSize::from(4096u64), InputSize::Exact(4096));
 
-#[test]
-fn the_default_entry_point_uses_a_detected_level() {
-    let brotli = Brotli::default();
-    let parameters = params(QualityLevel::Q0, 22);
-    let compressed = brotli
-        .compressor()
-        .compress(parameters, b"detected level output")
-        .expect("compression failed");
+    let stream = StreamConfig::from(InputSize::Exact(10)).with_stream_offset(64);
+    assert_eq!(stream.input_size(), InputSize::Exact(10));
+    assert_eq!(stream.stream_offset(), 64);
     assert_eq!(
-        c_decompress(&compressed, 21).as_deref(),
-        Some(&b"detected level output"[..])
+        StreamConfig::default().with_input_size(InputSize::Exact(10)),
+        StreamConfig::from(InputSize::Exact(10))
     );
-    // `Brotli` is `Copy` and `Debug`, which the public API documents.
-    let copied = brotli;
-    assert!(!format!("{copied:?}").is_empty());
 }
 
 #[test]
-fn the_new_parameters_default_to_the_encoders_own_choice() {
-    let parameters = params(QualityLevel::Q5, 22);
-    assert_eq!(parameters.mode(), CompressMode::default());
-    assert_eq!(parameters.mode(), CompressMode::Generic);
-    assert_eq!(parameters.distance_codes(), DistanceCodes::default());
-    assert_eq!(DistanceCodes::default(), DistanceCodes::DEFAULT);
-    assert_eq!(DistanceCodes::default().postfix_bits(), 0);
-    assert_eq!(DistanceCodes::default().direct_codes(), 0);
-    assert!(parameters.lgblock().is_none());
-    assert!(parameters.size_hint().is_none());
-    assert!(parameters.literal_context_modeling());
+fn a_non_zero_stream_offset_is_refused_rather_than_ignored() {
+    let mut encoder = encoder(Quality::Q5, 22);
+    let stream = StreamConfig::default().with_stream_offset(64);
+
+    assert!(matches!(
+        encoder.start(stream),
+        Err(EncodeError::UnsupportedStreamOffset { offset: 64 })
+    ));
+    assert!(matches!(
+        encoder.writer(Vec::new(), stream),
+        Err(EncodeError::UnsupportedStreamOffset { offset: 64 })
+    ));
+    assert!(matches!(
+        encoder.reader(&b"payload"[..], stream),
+        Err(EncodeError::UnsupportedStreamOffset { offset: 64 })
+    ));
+    // And the compressor is still perfectly usable.
+    assert!(
+        !encoder
+            .compress(b"payload")
+            .expect("compression failed")
+            .is_empty()
+    );
 }
 
 #[test]
-fn every_parameter_survives_being_set() {
-    let codes = DistanceCodes::try_from((2u32, 8u32)).expect("a valid layout");
-    let parameters = params(QualityLevel::Q5, 22)
-        .with_mode(CompressMode::Font)
-        .with_block_bits(Some(BlockBits::MAX))
-        .with_size_hint(Some(4 << 20))
-        .with_distance_codes(codes)
-        .with_literal_context_modeling(false);
+fn a_session_reports_exactly_what_it_moved() {
+    let mut encoder = encoder(Quality::Q1, 22);
+    let mut session = encoder
+        .start(StreamConfig::from(InputSize::Exact(7)))
+        .expect("a legal stream");
+    let mut output = [0u8; 512];
 
-    assert_eq!(parameters.quality(), QualityLevel::Q5);
-    assert_eq!(parameters.mode(), CompressMode::Font);
-    assert_eq!(parameters.lgblock(), Some(BlockBits::MAX));
-    assert_eq!(parameters.size_hint(), Some(4 << 20));
-    assert_eq!(parameters.distance_codes(), codes);
-    assert!(!parameters.literal_context_modeling());
+    let progress = session
+        .process(b"payload", &mut output, Operation::Finish)
+        .expect("the session failed");
+    assert_eq!(progress.consumed, 7);
+    assert!(progress.produced > 0);
+    assert_eq!(progress.status, EncoderStatus::Finished);
+    assert!(session.is_finished());
 
-    // Setting a parameter back restores the encoder's own choice.
-    let restored = parameters.with_block_bits(None).with_size_hint(None);
-    assert!(restored.lgblock().is_none());
-    assert!(restored.size_hint().is_none());
+    // `Progress` is a plain value a caller can build and compare.
+    let sample = Progress {
+        consumed: 1,
+        produced: 2,
+        status: EncoderStatus::NeedsInput,
+    };
+    assert_eq!(sample.consumed, 1);
+    assert_eq!(sample.produced, 2);
+    assert_ne!(sample.status, EncoderStatus::Finished);
+    assert_eq!(Operation::default(), Operation::Process);
 }
 
 #[test]
-fn block_bits_reject_everything_outside_the_encoders_range() {
-    assert_eq!(BlockBits::try_from(16).ok(), Some(BlockBits::MIN));
-    assert_eq!(BlockBits::try_from(24).ok(), Some(BlockBits::MAX));
-    assert_eq!(usize::from(BlockBits::MIN), 16);
-    assert_eq!(usize::from(BlockBits::MAX), 24);
-    for value in [0usize, 1, 15] {
-        assert!(matches!(
-            BlockBits::try_from(value),
-            Err(ParseBlockBitsError::LowerBound)
-        ));
-    }
-    for value in [25usize, 64, usize::MAX] {
-        assert!(matches!(
-            BlockBits::try_from(value),
-            Err(ParseBlockBitsError::UpperBound)
-        ));
-    }
-    assert!(BlockBits::MIN < BlockBits::MAX);
+fn a_configuration_error_says_what_was_refused() {
+    assert!(
+        ConfigError::Quality { requested: 12 }
+            .to_string()
+            .contains("12")
+    );
+    assert!(
+        ConfigError::BlockBits { requested: 15 }
+            .to_string()
+            .contains("16..=24")
+    );
+    let refused = Compressor::new(
+        EncoderConfig::default()
+            .with_quality(Quality::Q0)
+            .with_window(Window::large(30).expect("a legal window")),
+    )
+    .expect_err("quality zero cannot carry a large window");
+    assert_eq!(
+        refused,
+        ConfigError::LargeWindowUnsupportedForQuality {
+            quality: Quality::Q0
+        }
+    );
+    assert!(refused.to_string().contains("large window"));
 }
 
 #[test]
-fn distance_codes_reject_layouts_the_format_cannot_express() {
-    for postfix in 0u32..=3 {
-        for groups in 0u32..16 {
-            let direct = groups << postfix;
-            if direct > 120 {
-                continue;
-            }
-            let codes = DistanceCodes::try_from((postfix, direct))
-                .unwrap_or_else(|error| panic!("({postfix}, {direct}) rejected: {error}"));
-            assert_eq!(codes.postfix_bits(), postfix);
-            assert_eq!(codes.direct_codes(), direct);
+fn an_encoding_error_travels_through_the_io_conversion() {
+    let io = std::io::Error::from(EncodeError::OutputTooSmall { provided: 4 });
+    assert_eq!(io.kind(), std::io::ErrorKind::WriteZero);
+    assert!(io.to_string().contains('4'));
+
+    let io = std::io::Error::from(EncodeError::AbandonedSession);
+    assert_eq!(io.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[test]
+fn a_dictionary_is_immutable_shareable_and_refused_where_it_cannot_be_read() {
+    let dictionary = DictionaryBuilder::new()
+        .add_prefix(&b"a common prefix worth sharing"[..])
+        .build()
+        .expect("prepared");
+    assert_eq!(dictionary.attachment_count(), 1);
+    assert_eq!(dictionary.source_bytes(), 29);
+    assert!(dictionary.retained_bytes() > dictionary.source_bytes());
+
+    for quality in IMPLEMENTED_QUALITIES {
+        let mut encoder = encoder(quality, 22);
+        let outcome = encoder.compress_with_dictionary(&dictionary, b"a common prefix");
+        if quality >= Quality::Q5 {
+            assert!(outcome.is_ok(), "q{} refused a dictionary", quality.get());
+        } else {
+            assert!(
+                matches!(
+                    outcome,
+                    Err(EncodeError::DictionaryUnsupportedForQuality { quality: reported })
+                        if reported == quality
+                ),
+                "q{} did not refuse a dictionary",
+                quality.get()
+            );
         }
     }
-    assert!(matches!(
-        DistanceCodes::try_from((4u32, 0u32)),
-        Err(ParseDistanceCodesError::PostfixBits)
-    ));
-    assert!(matches!(
-        DistanceCodes::try_from((0u32, 121u32)),
-        Err(ParseDistanceCodesError::DirectCodes)
-    ));
-    assert!(matches!(
-        DistanceCodes::try_from((2u32, 6u32)),
-        Err(ParseDistanceCodesError::Misaligned)
-    ));
-    // Sixteen groups is one too many for the four-bit field.
-    assert!(matches!(
-        DistanceCodes::try_from((0u32, 16u32)),
-        Err(ParseDistanceCodesError::Misaligned)
-    ));
 }
 
 #[test]
-fn the_new_error_messages_describe_what_went_wrong() {
+fn a_dictionary_with_nothing_in_it_is_refused() {
     assert_eq!(
-        BlockBits::try_from(0).unwrap_err().to_string(),
-        "Block bits should be greater than or equal to 16"
+        DictionaryBuilder::new().build().unwrap_err(),
+        DictionaryError::Empty
     );
     assert_eq!(
-        BlockBits::try_from(99).unwrap_err().to_string(),
-        "Block bits should be less than or equal to 24"
+        DictionaryBuilder::new()
+            .add_prefix(&b""[..])
+            .build()
+            .unwrap_err(),
+        DictionaryError::Empty
     );
-    assert_eq!(
-        DistanceCodes::try_from((7u32, 0u32))
-            .unwrap_err()
-            .to_string(),
-        "Distance postfix bits should be less than or equal to 3"
-    );
-    assert_eq!(
-        DistanceCodes::try_from((0u32, 200u32))
-            .unwrap_err()
-            .to_string(),
-        "Direct distance codes should be less than or equal to 120"
-    );
-    assert_eq!(
-        DistanceCodes::try_from((3u32, 4u32))
-            .unwrap_err()
-            .to_string(),
-        "Direct distance codes should be a whole number of postfix groups"
-    );
+    assert!(DictionaryError::Empty.to_string().contains("no bytes"));
 }
 
 #[test]
-fn quality_levels_order_by_effort() {
-    assert!(QualityLevel::Q0 < QualityLevel::Q1);
-    assert!(QualityLevel::Q3 < QualityLevel::Q5);
-    assert!(QualityLevel::Q9 < QualityLevel::Q11);
-    assert_eq!(QualityLevel::Q5, QualityLevel::Q5);
+fn the_dictionary_limits_expose_their_documented_defaults() {
+    let limits = DictionaryLimits::default();
+    assert_eq!(limits.max_source_bytes(), 64 << 20);
+    assert_eq!(limits.max_prefix_bytes(), 64 << 20);
+    assert_eq!(limits.max_retained_bytes(), 1 << 30);
 
-    let mut sorted = [QualityLevel::Q5, QualityLevel::Q0, QualityLevel::Q3];
-    sorted.sort();
-    assert_eq!(
-        sorted,
-        [QualityLevel::Q0, QualityLevel::Q3, QualityLevel::Q5]
-    );
+    let tightened = limits
+        .with_max_source_bytes(1)
+        .with_max_prefix_bytes(2)
+        .with_max_retained_bytes(3);
+    assert_eq!(tightened.max_source_bytes(), 1);
+    assert_eq!(tightened.max_prefix_bytes(), 2);
+    assert_eq!(tightened.max_retained_bytes(), 3);
+    assert_ne!(tightened, limits);
+}
+
+#[test]
+fn the_public_types_are_send_and_the_dictionary_is_sync() {
+    const fn assert_send<T: Send>() {}
+    const fn assert_sync<T: Sync>() {}
+    assert_send::<Compressor>();
+    assert_send::<mbrotli::CompressorBuilder>();
+    assert_send::<mbrotli::dictionary::PreparedDictionary>();
+    assert_sync::<mbrotli::dictionary::PreparedDictionary>();
+    assert_send::<EncoderConfig>();
+    assert_sync::<EncoderConfig>();
+}
+
+#[test]
+fn a_compressor_moves_between_threads() {
+    let mut encoder = encoder(Quality::Q5, 22);
+    let expected = encoder
+        .compress(b"payload payload")
+        .expect("compression failed");
+
+    let moved = std::thread::spawn(move || {
+        encoder
+            .compress(b"payload payload")
+            .expect("compression failed")
+    })
+    .join()
+    .expect("the worker finished");
+
+    assert_eq!(moved, expected);
 }
 
 #[test]
 fn every_implemented_quality_compresses_and_round_trips() {
-    let compressor = Brotli::default().compressor();
     let payload: Vec<u8> = (0..100_000u32).map(|index| (index % 251) as u8).collect();
     for quality in IMPLEMENTED_QUALITIES {
-        let compressed = compressor
-            .compress(params(quality, 22), &payload)
-            .unwrap_or_else(|error| panic!("quality {quality:?}: {error}"));
-        assert!(compressed.len() < payload.len(), "quality {quality:?}");
+        let compressed = encoder(quality, 22)
+            .compress(&payload)
+            .unwrap_or_else(|error| panic!("quality {}: {error}", quality.get()));
+        assert!(
+            compressed.len() < payload.len(),
+            "quality {}",
+            quality.get()
+        );
         assert_eq!(
             c_decompress(&compressed, payload.len()).as_deref(),
             Some(payload.as_slice()),
-            "quality {quality:?}"
+            "quality {}",
+            quality.get()
         );
     }
 }
 
 #[test]
-fn the_size_hint_is_what_makes_streaming_match_one_shot() {
-    use std::io::Write;
+fn every_public_type_reports_something_useful_when_debugged() {
+    // `missing_debug_implementations` is denied crate-wide, so every one of
+    // these exists; this is what checks they say something rather than nothing.
+    let dictionary = DictionaryBuilder::new()
+        .add_prefix(&b"a prefix"[..])
+        .build()
+        .expect("prepared");
+    let builder = Compressor::builder(config(Quality::Q5, 22));
+    assert!(format!("{builder:?}").contains("CompressorBuilder"));
 
-    let compressor = Brotli::default().compressor();
-    let payload: Vec<u8> = (0..(2 << 20u32)).map(|index| (index % 251) as u8).collect();
+    let mut encoder = builder.build().expect("a legal configuration");
+    assert!(format!("{encoder:?}").contains("Compressor"));
+    assert!(format!("{:?}", DictionaryBuilder::new()).contains("DictionaryBuilder"));
+    assert!(format!("{dictionary:?}").contains("PreparedDictionary"));
+    assert!(format!("{:?}", EncoderConfig::default()).contains("EncoderConfig"));
+    assert!(format!("{:?}", StreamConfig::default()).contains("StreamConfig"));
+    assert!(format!("{:?}", RetentionPolicy::default()).contains("Aggressive"));
 
-    // Without a hint the one-shot path substitutes the input length and the
-    // streaming path does not, which quality five reacts to.
-    let unpinned = params(QualityLevel::Q5, 22);
-    let one_shot = compressor
-        .compress(unpinned, &payload)
-        .expect("compression failed");
-    let mut sink = compressor.compress_writer(unpinned, Vec::new());
-    sink.write_all(&payload).expect("write failed");
-    let streamed = sink.finish().expect("finish failed");
-    assert_ne!(streamed, one_shot);
-
-    // Pinning it makes them agree.
-    let pinned = unpinned.with_size_hint(Some(payload.len()));
-    let one_shot = compressor
-        .compress(pinned, &payload)
-        .expect("compression failed");
-    let mut sink = compressor.compress_writer(pinned, Vec::new());
-    sink.write_all(&payload).expect("write failed");
-    let streamed = sink.finish().expect("finish failed");
-    assert_eq!(streamed, one_shot);
-}
-
-#[test]
-fn a_large_window_is_a_separate_constructor_not_a_wider_range() -> Result<(), ParseWindowBitsError>
-{
-    // Every size the ordinary header allows is also a legal large window, and
-    // the two are never the same value.
-    for bits in 10u8..=24 {
-        let ordinary = WindowBits::standard(bits)?;
-        let large = WindowBits::large(bits)?;
-        assert_eq!(ordinary.bits(), large.bits());
-        assert_ne!(ordinary, large);
-        assert!(!ordinary.is_large());
-        assert!(large.is_large());
+    {
+        let session = encoder
+            .start(StreamConfig::default())
+            .expect("a legal stream");
+        assert!(format!("{session:?}").contains("EncoderSession"));
     }
-    // And the large header reaches sizes the ordinary one cannot express.
-    for bits in 25u8..=62 {
-        assert!(WindowBits::large(bits)?.is_large());
-        assert!(WindowBits::standard(bits).is_err());
+    {
+        let sink = encoder
+            .writer(Vec::new(), StreamConfig::default())
+            .expect("a legal stream");
+        let rendered = format!("{sink:?}");
+        assert!(rendered.contains("EncoderWriter"));
+        assert!(rendered.contains("undelivered"));
     }
-    Ok(())
+    {
+        let source = encoder
+            .reader(&b"payload"[..], StreamConfig::default())
+            .expect("a legal stream");
+        let rendered = format!("{source:?}");
+        assert!(rendered.contains("EncoderReader"));
+        assert!(rendered.contains("buffered"));
+
+        let parts = source.into_parts();
+        assert!(format!("{parts:?}").contains("EncoderReaderParts"));
+    }
 }
 
 #[test]
-fn window_bits_reject_what_their_header_cannot_express() {
-    assert!(matches!(
-        WindowBits::standard(0),
-        Err(ParseWindowBitsError::LowerBound)
-    ));
-    assert!(matches!(
-        WindowBits::large(9),
-        Err(ParseWindowBitsError::LowerBound)
-    ));
-    assert!(matches!(
-        WindowBits::standard(25),
-        Err(ParseWindowBitsError::UpperBound)
-    ));
-    assert!(matches!(
-        WindowBits::large(63),
-        Err(ParseWindowBitsError::LargeUpperBound)
-    ));
-}
+fn a_finish_failure_carries_both_halves_and_prints_them() {
+    use std::error::Error as _;
+    use std::io::ErrorKind;
 
-#[test]
-fn the_shared_error_travels_transparently() {
-    let inner = SharedBrotliError::UnsupportedLargeWindow { quality: 0 };
-    assert_eq!(
-        inner.to_string(),
-        "Quality level 0 does not implement large window Brotli"
-    );
+    /// A sink that refuses everything, so finishing always fails.
+    #[derive(Debug)]
+    struct Refusing;
+    impl Write for Refusing {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(ErrorKind::WouldBlock, "never"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
-    let outer = BrotliCompressError::from(inner);
-    // `#[error(transparent)]`: the wrapper adds no text of its own.
-    assert_eq!(outer.to_string(), inner.to_string());
-    assert!(matches!(
-        outer,
-        BrotliCompressError::Shared(SharedBrotliError::UnsupportedLargeWindow { quality: 0 })
-    ));
+    let mut encoder = encoder(Quality::Q1, 22);
+    {
+        let mut sink = encoder
+            .writer(Refusing, StreamConfig::default())
+            .expect("a legal stream");
+        // Buffered, so the refusal only surfaces when the stream is finished.
+        sink.write_all(b"payload payload").unwrap_or_default();
 
-    // And it survives the trip through `std::io::Error` the adapters take.
-    let converted = std::io::Error::from(BrotliCompressError::from(inner));
-    assert!(converted.to_string().contains("large window"));
-}
+        let failure = sink.finish().expect_err("the sink refuses everything");
+        assert_eq!(failure.error().kind(), ErrorKind::WouldBlock);
+        assert!(format!("{failure:?}").contains("FinishError"));
+        assert!(failure.to_string().contains("could not be finished"));
+        assert!(failure.source().is_some());
 
-#[test]
-fn a_finished_empty_stream_still_declares_its_large_window()
--> Result<(), Box<dyn std::error::Error>> {
-    let compressor = Brotli::default().compressor();
-    let params = CompressParams::new(QualityLevel::Q5, WindowBits::large(30)?);
+        // Both halves come back rather than the adapter being destroyed.
+        let (error, writer) = failure.into_parts();
+        assert_eq!(error.kind(), ErrorKind::WouldBlock);
+        assert!(!writer.is_finished());
+    }
 
-    // The one-shot shortcut answers an empty input with an ordinary one-byte
-    // stream, matching the reference; a streaming session has no such shortcut
-    // and emits the header that was asked for.
-    assert_eq!(compressor.compress(params, b"")?, vec![6]);
-    let streamed = compressor.compress_writer(params, Vec::new()).finish()?;
-    assert_eq!(streamed[0], 0x11, "the large window marker");
-    assert_eq!(streamed[1] & 0x3F, 30, "the declared window");
-    Ok(())
+    // And the failure converts into a plain I/O error when the caller does not
+    // want the adapter back.
+    let sink = encoder
+        .writer(Refusing, StreamConfig::default())
+        .expect("a legal stream");
+    let converted = std::io::Error::from(sink.finish().expect_err("the sink refuses everything"));
+    assert_eq!(converted.kind(), ErrorKind::WouldBlock);
 }

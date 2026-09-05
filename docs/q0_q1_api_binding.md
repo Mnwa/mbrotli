@@ -1,5 +1,13 @@
 # Quality 0 / quality 1 API binding
 
+> **Written before the pre-release API redesign.** The public names in this
+> document — `Brotli`, `CompressParams`, `CompressWorkspace`, `QualityLevel`,
+> `WindowBits`, `SharedContext` and the `compress_*` method families — no
+> longer exist. The encoders below them did not change.
+> [`pre_release_api_redesign.md`](pre_release_api_redesign.md) maps the old
+> names onto the new ones.
+
+
 Milestone 0 artifact: the mapping between the conceptual roles the port
 specification uses and the symbols that already existed in this repository. No
 public type was invented for the port; the fast encoders are private

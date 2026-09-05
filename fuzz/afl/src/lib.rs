@@ -11,9 +11,9 @@
 
 use fearless_simd::Level;
 use google_brotli_ffi as ffi;
-use mbrotli::Brotli;
-use mbrotli::compressor::{
-    BlockBits, CompressMode, CompressParams, Compressor, DistanceCodes, QualityLevel, WindowBits,
+use mbrotli::{
+    BlockBits, BlockSize, CompressionMode, Compressor, DistanceParams, EncoderConfig, InputSize,
+    LiteralContextMode, Quality, StreamConfig, Window,
 };
 use std::ffi::c_int;
 use std::mem::discriminant;
@@ -21,26 +21,26 @@ use std::mem::discriminant;
 pub mod targets;
 
 /// Every quality this crate implements.
-pub const IMPLEMENTED_QUALITIES: [QualityLevel; 12] = [
-    QualityLevel::Q0,
-    QualityLevel::Q1,
-    QualityLevel::Q2,
-    QualityLevel::Q3,
-    QualityLevel::Q4,
-    QualityLevel::Q5,
-    QualityLevel::Q6,
-    QualityLevel::Q7,
-    QualityLevel::Q8,
-    QualityLevel::Q9,
-    QualityLevel::Q10,
-    QualityLevel::Q11,
+pub const IMPLEMENTED_QUALITIES: [Quality; 12] = [
+    Quality::Q0,
+    Quality::Q1,
+    Quality::Q2,
+    Quality::Q3,
+    Quality::Q4,
+    Quality::Q5,
+    Quality::Q6,
+    Quality::Q7,
+    Quality::Q8,
+    Quality::Q9,
+    Quality::Q10,
+    Quality::Q11,
 ];
 
 /// The three modes the encoder accepts.
-const MODES: [CompressMode; 3] = [
-    CompressMode::Generic,
-    CompressMode::Text,
-    CompressMode::Font,
+const MODES: [CompressionMode; 3] = [
+    CompressionMode::Generic,
+    CompressionMode::Text,
+    CompressionMode::Font,
 ];
 
 /// Largest payload any target will compress.
@@ -59,13 +59,13 @@ pub const MAX_PAYLOAD: usize = 128 * 1024;
 
 /// Prepared state shared by every iteration of a target.
 ///
-/// SIMD detection and level enumeration happen once, when the context is
-/// built, so no iteration repeats them. The encoder itself is stateless — a
-/// [`Compressor`] is `Copy` and carries only a resolved [`Level`] — which is
-/// why AFL's persistent mode needs no reset hook for these targets.
+/// Level enumeration happens once, when the context is built, so no iteration
+/// repeats it. A [`Compressor`] is stateful now, so each target builds the one
+/// it needs from the case's configuration; that construction is itself part of
+/// what the targets exercise, and it allocates nothing large.
 pub struct Context {
-    /// Compressor pinned to the level this host detected.
-    pub compressor: Compressor,
+    /// The level this host detected, which every ordinary target encodes on.
+    pub level: Level,
     /// Every distinct backend this host can run.
     pub levels: Vec<Level>,
 }
@@ -74,16 +74,45 @@ impl Default for Context {
     /// Detects the host's instruction set and enumerates its backends.
     fn default() -> Self {
         Self {
-            compressor: Brotli::default().compressor(),
+            level: Level::try_detect().unwrap_or_else(Level::baseline),
             levels: host_levels(),
         }
     }
 }
 
-/// Parameters and payload decoded from one fuzz input.
+impl Context {
+    /// Builds a compressor for `config` on this host's detected backend.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the configuration is one no compressor can be built for,
+    /// which [`decode_case`] never produces.
+    pub fn encoder(&self, config: EncoderConfig) -> Compressor {
+        Compressor::builder(config)
+            .with_level(self.level)
+            .build()
+            .expect("decode_case only builds legal configurations")
+    }
+
+    /// Builds a compressor for `config` on a chosen backend.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the configuration is one no compressor can be built for.
+    pub fn encoder_on(&self, level: Level, config: EncoderConfig) -> Compressor {
+        Compressor::builder(config)
+            .with_level(level)
+            .build()
+            .expect("decode_case only builds legal configurations")
+    }
+}
+
+/// Configuration and payload decoded from one fuzz input.
 pub struct Case<'a> {
-    /// Encoder parameters.
-    pub params: CompressParams,
+    /// The encoder configuration.
+    pub config: EncoderConfig,
+    /// The stream configuration, which declares the payload's length.
+    pub stream: StreamConfig,
     /// Chunk size for the streaming targets, always at least one.
     pub chunk: usize,
     /// The bytes to compress, truncated to [`MAX_PAYLOAD`].
@@ -102,46 +131,53 @@ pub const HEADER_LEN: usize = 6;
 /// [`MAX_PAYLOAD`] rather than rejected, so an oversized input still exercises
 /// whatever structure its prefix carries.
 ///
-/// The size hint is always pinned to the payload length, which is what the
-/// one-shot entry points would substitute anyway, so the streaming and
+/// The declared stream size is always the payload's true length, which is what
+/// the one-shot entry points declare for themselves, so the streaming and
 /// one-shot targets can be compared against each other and against the C
-/// reference without the hint drifting between them.
+/// reference without the declaration drifting between them.
 pub fn decode_case(input: &[u8]) -> Case<'_> {
     let (header, data) = input.split_at(input.len().min(HEADER_LEN));
     let byte =
         |index: usize, fallback: u8| usize::from(header.get(index).copied().unwrap_or(fallback));
 
     let quality = IMPLEMENTED_QUALITIES[byte(0, 0) % IMPLEMENTED_QUALITIES.len()];
-    let lgwin = WindowBits::standard(10 + (byte(1, 12) % 15) as u8).unwrap_or(WindowBits::DEFAULT);
+    let window = Window::standard(10 + (byte(1, 12) % 15) as u8).unwrap_or(Window::DEFAULT);
     let chunk = 1usize << (byte(2, 12) % 18);
 
     let flags = byte(3, 0);
     let mode = MODES[flags % MODES.len()];
-    let literal_context_modeling = (flags >> 2) & 1 == 0;
+    let literal_context = if (flags >> 2) & 1 == 0 {
+        LiteralContextMode::Auto
+    } else {
+        LiteralContextMode::Disabled
+    };
 
     // Byte 4 either leaves the block size to the encoder or pins it.
-    let lgblock = match byte(4, 0) {
-        0 => None,
-        value => BlockBits::try_from(16 + value % 9).ok(),
+    let block_size = match byte(4, 0) {
+        0 => BlockSize::Auto,
+        value => {
+            BlockBits::try_from((16 + value % 9) as u8).map_or(BlockSize::Auto, BlockSize::Bits)
+        }
     };
 
     // Byte 5 picks a layout the format can express; anything else keeps the
     // default, because the public type refuses to build an invalid one.
     let layout = byte(5, 0);
-    let postfix = (layout % 4) as u32;
-    let groups = ((layout / 4) % 16) as u32;
+    let postfix = (layout % 4) as u8;
+    let groups = ((layout / 4) % 16) as u16;
     let direct = groups << postfix;
-    let distance_codes =
-        DistanceCodes::try_from((postfix, direct)).unwrap_or(DistanceCodes::DEFAULT);
+    let distance = DistanceParams::explicit(postfix, direct).unwrap_or(DistanceParams::Auto);
 
     let data = cap(data);
     Case {
-        params: CompressParams::new(quality, lgwin)
+        config: EncoderConfig::default()
+            .with_quality(quality)
+            .with_window(window)
             .with_mode(mode)
-            .with_size_hint(Some(data.len()))
-            .with_block_bits(lgblock)
-            .with_distance_codes(distance_codes)
-            .with_literal_context_modeling(literal_context_modeling),
+            .with_block_size(block_size)
+            .with_distance(distance)
+            .with_literal_context(literal_context),
+        stream: StreamConfig::from(InputSize::Exact(data.len() as u64)),
         chunk,
         data,
     }
@@ -198,16 +234,18 @@ pub fn host_levels() -> Vec<Level> {
     levels
 }
 
-/// Compresses `input` with the pinned C encoder, configured like `params`.
+/// Compresses `input` with the pinned C encoder, configured like `config`.
 ///
 /// The streaming entry point is the only one that accepts a block size, a size
-/// hint or a distance layout, so the differential target goes through it.
+/// hint or a distance layout, so the differential target goes through it. The
+/// size hint is the input's true length, which is what both the Rust one-shot
+/// path and [`decode_case`]'s stream configuration declare.
 ///
 /// # Panics
 ///
 /// Panics when the C encoder reports failure; that would mean the harness, not
 /// the encoder under test, is broken.
-pub fn c_compress_with(params: &CompressParams, input: &[u8]) -> Vec<u8> {
+pub fn c_compress_with(config: &EncoderConfig, input: &[u8]) -> Vec<u8> {
     let capacity = unsafe { ffi::BrotliEncoderMaxCompressedSize(input.len()) }.max(64) + 4096;
     let mut output = vec![0u8; capacity];
     unsafe {
@@ -220,37 +258,32 @@ pub fn c_compress_with(params: &CompressParams, input: &[u8]) -> Vec<u8> {
                 "the C encoder rejected a parameter"
             );
         };
-        set(
-            ffi::BROTLI_PARAM_QUALITY,
-            usize::from(params.quality()) as u32,
-        );
-        set(ffi::BROTLI_PARAM_LGWIN, usize::from(params.lgwin()) as u32);
+        set(ffi::BROTLI_PARAM_QUALITY, u32::from(config.quality().get()));
+        set(ffi::BROTLI_PARAM_LGWIN, u32::from(config.window().bits()));
         set(
             ffi::BROTLI_PARAM_MODE,
-            match params.mode() {
-                CompressMode::Generic => ffi::BROTLI_MODE_GENERIC,
-                CompressMode::Text => ffi::BROTLI_MODE_TEXT,
-                CompressMode::Font => ffi::BROTLI_MODE_FONT,
+            match config.mode() {
+                CompressionMode::Generic => ffi::BROTLI_MODE_GENERIC,
+                CompressionMode::Text => ffi::BROTLI_MODE_TEXT,
+                CompressionMode::Font => ffi::BROTLI_MODE_FONT,
             } as u32,
         );
-        set(
-            ffi::BROTLI_PARAM_NPOSTFIX,
-            params.distance_codes().postfix_bits(),
-        );
-        set(
-            ffi::BROTLI_PARAM_NDIRECT,
-            params.distance_codes().direct_codes(),
-        );
+        let (postfix, direct) = match config.distance() {
+            DistanceParams::Auto => (0, 0),
+            DistanceParams::Explicit {
+                postfix_bits,
+                direct_codes,
+            } => (u32::from(postfix_bits), u32::from(direct_codes)),
+        };
+        set(ffi::BROTLI_PARAM_NPOSTFIX, postfix);
+        set(ffi::BROTLI_PARAM_NDIRECT, direct);
         set(
             ffi::BROTLI_PARAM_DISABLE_LITERAL_CONTEXT_MODELING,
-            u32::from(!params.literal_context_modeling()),
+            u32::from(config.literal_context() == LiteralContextMode::Disabled),
         );
-        set(
-            ffi::BROTLI_PARAM_SIZE_HINT,
-            params.size_hint().unwrap_or(input.len()) as u32,
-        );
-        if let Some(lgblock) = params.lgblock() {
-            set(ffi::BROTLI_PARAM_LGBLOCK, usize::from(lgblock) as u32);
+        set(ffi::BROTLI_PARAM_SIZE_HINT, input.len() as u32);
+        if let BlockSize::Bits(lgblock) = config.block_size() {
+            set(ffi::BROTLI_PARAM_LGBLOCK, u32::from(lgblock.get()));
         }
 
         let mut available_in = input.len();

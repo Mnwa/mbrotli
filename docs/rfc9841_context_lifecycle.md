@@ -1,5 +1,13 @@
 # RFC 9841 shared context lifecycle
 
+> **Written before the pre-release API redesign.** The public names in this
+> document — `Brotli`, `CompressParams`, `CompressWorkspace`, `QualityLevel`,
+> `WindowBits`, `SharedContext` and the `compress_*` method families — no
+> longer exist. The encoders below them did not change.
+> [`pre_release_api_redesign.md`](pre_release_api_redesign.md) maps the old
+> names onto the new ones.
+
+
 What a `SharedContext` is, who owns it, what happens to it during a
 compression call, and what a caller may rely on when reusing one. This
 describes the code as it stands; the parts of Sections 8.3, 12.5 and 12.6 of

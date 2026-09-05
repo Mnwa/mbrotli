@@ -404,7 +404,7 @@ way. See [`docs/api_benchmarks.md`](../docs/api_benchmarks.md) §2.
 ## Known gaps
 
 - **No attached prefix.** These qualities carry no compound-dictionary search
-  in the reference either, so a non-empty `SharedContext` is refused rather
+  in the reference either, so a `PreparedDictionary` is refused rather
   than ignored.
 - **No static dictionary matching**, no block splitting and no context
   modelling: out of scope for both fast qualities, as in the reference.

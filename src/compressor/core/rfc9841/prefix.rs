@@ -87,6 +87,7 @@ impl PrefixSources {
     ///
     /// True both for a context with nothing attached and for one whose every
     /// attachment was empty: neither can ever be the target of a distance.
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.total_len() == 0
     }
@@ -177,6 +178,7 @@ impl PrefixSources {
     /// then `history` — the stream's own output from its start. The scan stops
     /// after `limit` bytes, at the first difference, or when both sources run
     /// out, and it never reads past any of them.
+    #[cfg(any(test, feature = "diagnostics"))]
     pub(crate) fn match_length(
         &self,
         logical: u64,
@@ -214,6 +216,7 @@ impl PrefixSources {
 /// reference's `FindMatchLengthWithLimit` makes, and it needs no unsafe code
 /// because iterating fixed-size chunks is what removes the bounds check.
 /// Scalar on purpose — see the module comment.
+#[cfg(any(test, feature = "diagnostics"))]
 fn common_prefix_len(left: &[u8], right: &[u8], limit: usize) -> usize {
     let limit = limit.min(left.len()).min(right.len());
     let (Some(left), Some(right)) = (left.get(..limit), right.get(..limit)) else {

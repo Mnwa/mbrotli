@@ -94,6 +94,14 @@ impl ZopfliWorkspace {
         }
     }
 
+    /// Returns the bytes this workspace keeps allocated.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        self.nodes.capacity() * size_of::<ZopfliNode>()
+            + (self.scratch.capacity() + self.arena.capacity()) * size_of::<BackwardMatch>()
+            + self.num_matches.capacity() * size_of::<u32>()
+            + self.model.retained_bytes()
+    }
+
     /// Sizes every buffer for a block of `num_bytes` and clears the nodes.
     fn prepare(&mut self, num_bytes: usize, alphabet_size: usize) {
         self.nodes.clear();

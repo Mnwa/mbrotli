@@ -1,5 +1,13 @@
 # Differences from the pinned reference
 
+> **Written before the pre-release API redesign.** The public names in this
+> document — `Brotli`, `CompressParams`, `CompressWorkspace`, `QualityLevel`,
+> `WindowBits`, `SharedContext` and the `compress_*` method families — no
+> longer exist. The encoders below them did not change.
+> [`pre_release_api_redesign.md`](pre_release_api_redesign.md) maps the old
+> names onto the new ones.
+
+
 Reference: Google Brotli v1.2.0, commit `028fb5a`, vendored at
 `brotli-ffi/vendor/brotli`.
 

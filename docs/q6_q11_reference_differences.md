@@ -1,5 +1,13 @@
 # Qualities 6 to 11: differences from the reference
 
+> **Written before the pre-release API redesign.** The public names in this
+> document — `Brotli`, `CompressParams`, `CompressWorkspace`, `QualityLevel`,
+> `WindowBits`, `SharedContext` and the `compress_*` method families — no
+> longer exist. The encoders below them did not change.
+> [`pre_release_api_redesign.md`](pre_release_api_redesign.md) maps the old
+> names onto the new ones.
+
+
 Every divergence from `google/brotli` v1.2.0, commit `028fb5a`, in the q6–q11
 port — including the quirks reproduced on purpose. None of them changes a byte
 of output: `tests/differential_c.rs` compares all eleven implemented qualities

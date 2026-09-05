@@ -8,11 +8,10 @@
 
 mod support;
 
-use mbrotli::Brotli;
-use mbrotli::compressor::QualityLevel;
+use mbrotli::Quality;
 use support::{
-    IMPLEMENTED_QUALITIES, c_compress, c_decompress, host_levels, params, quality_number,
-    vendor_corpora, vendor_file,
+    IMPLEMENTED_QUALITIES, c_compress, c_decompress, encoder, encoder_on, host_levels,
+    quality_number, vendor_corpora, vendor_file,
 };
 
 /// Largest file size the per-corpus tests use, to keep debug runs quick.
@@ -32,8 +31,8 @@ const MAX_CORPUS_BYTES: usize = 1 << 20;
 const MAX_HQ_CORPUS_BYTES: usize = 1 << 16;
 
 /// Returns how much of a corpus `quality` should be run over.
-fn corpus_limit(quality: QualityLevel) -> usize {
-    if quality >= QualityLevel::Q10 {
+fn corpus_limit(quality: Quality) -> usize {
+    if quality >= Quality::Q10 {
         MAX_HQ_CORPUS_BYTES
     } else {
         MAX_CORPUS_BYTES
@@ -42,21 +41,20 @@ fn corpus_limit(quality: QualityLevel) -> usize {
 
 #[test]
 fn vendor_corpus_matches_the_c_encoder() {
-    let compressor = Brotli::default().compressor();
     for corpus in vendor_corpora(MAX_CORPUS_BYTES) {
         for quality in IMPLEMENTED_QUALITIES {
             let data = &corpus.data[..corpus.data.len().min(corpus_limit(quality))];
             for lgwin in [10u8, 16, 18, 22, 24] {
-                let expected = c_compress(quality_number(quality), lgwin as i32, data);
-                let actual = compressor
-                    .compress(params(quality, lgwin), data)
+                let expected = c_compress(quality_number(quality), i32::from(lgwin), data);
+                let actual = encoder(quality, lgwin)
+                    .compress(data)
                     .expect("compression failed");
                 assert_eq!(
                     actual,
                     expected,
                     "{}: quality {}, lgwin {lgwin}",
                     corpus.name,
-                    usize::from(quality)
+                    quality.get()
                 );
             }
         }
@@ -65,12 +63,11 @@ fn vendor_corpus_matches_the_c_encoder() {
 
 #[test]
 fn vendor_corpus_round_trips() {
-    let compressor = Brotli::default().compressor();
     for corpus in vendor_corpora(MAX_CORPUS_BYTES) {
         for quality in IMPLEMENTED_QUALITIES {
             let data = &corpus.data[..corpus.data.len().min(corpus_limit(quality))];
-            let compressed = compressor
-                .compress(params(quality, 22), data)
+            let compressed = encoder(quality, 22)
+                .compress(data)
                 .expect("compression failed");
             let decoded = c_decompress(&compressed, data.len())
                 .unwrap_or_else(|| panic!("{}: the decoder rejected the stream", corpus.name));
@@ -87,9 +84,8 @@ fn vendor_corpus_agrees_across_backends() {
             let data = &corpus.data[..corpus.data.len().min(corpus_limit(quality))];
             let mut reference: Option<Vec<u8>> = None;
             for &(level_name, level) in &levels {
-                let actual = Brotli::from(level)
-                    .compressor()
-                    .compress(params(quality, 22), data)
+                let actual = encoder_on(level, quality, 22)
+                    .compress(data)
                     .expect("compression failed");
                 match &reference {
                     None => reference = Some(actual),
@@ -108,26 +104,25 @@ fn multi_fragment_input_matches_the_c_encoder() {
     // fragments and exercises the carry of the trailing partial byte.
     let whole = vendor_file("bb.binast");
     assert!(whole.len() > 4 << 20, "expected a multi-fragment input");
-    let compressor = Brotli::default().compressor();
     for quality in IMPLEMENTED_QUALITIES {
         // Qualities ten and eleven see a smaller prefix; at their 256 KiB
         // default block that is still several fragments, which is the property
         // under test.
-        let data = if quality >= QualityLevel::Q10 {
+        let data = if quality >= Quality::Q10 {
             &whole[..2 << 20]
         } else {
             &whole[..]
         };
         for lgwin in [18u8, 22, 24] {
-            let expected = c_compress(quality_number(quality), lgwin as i32, data);
-            let actual = compressor
-                .compress(params(quality, lgwin), data)
+            let expected = c_compress(quality_number(quality), i32::from(lgwin), data);
+            let actual = encoder(quality, lgwin)
+                .compress(data)
                 .expect("compression failed");
             assert_eq!(
                 actual,
                 expected,
                 "bb.binast: quality {}, lgwin {lgwin}",
-                usize::from(quality)
+                quality.get()
             );
             let decoded = c_decompress(&actual, data.len()).expect("the decoder rejected it");
             assert_eq!(decoded, data);

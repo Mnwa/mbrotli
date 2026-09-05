@@ -17,10 +17,10 @@
 #                       the input
 #   seeds/large_window  the parameter seeds behind one more byte, the RFC 9841
 #                       large window the large_window target reads first
-#   seeds/shared_context
+#   seeds/dictionary
 #                       the parameter seeds behind two more bytes, the
 #                       attachment count and the limit squeeze the
-#                       shared_context target reads first
+#                       dictionary target reads first
 #
 # Usage: fuzz/afl/prepare-seeds.sh
 
@@ -31,7 +31,7 @@ testdata="$here/../../brotli-ffi/vendor/brotli/tests/testdata"
 generic="$here/seeds/generic"
 params="$here/seeds/params"
 large_window="$here/seeds/large_window"
-shared_context="$here/seeds/shared_context"
+dictionary="$here/seeds/dictionary"
 
 # AFL refuses seeds above its default input cap, and huge seeds slow the
 # fuzzer down far more than they help coverage.
@@ -43,8 +43,8 @@ if [ ! -d "$testdata" ]; then
     exit 1
 fi
 
-rm -rf "$generic" "$params" "$large_window" "$shared_context"
-mkdir -p "$generic" "$params" "$large_window" "$shared_context"
+rm -rf "$generic" "$params" "$large_window" "$dictionary"
+mkdir -p "$generic" "$params" "$large_window" "$dictionary"
 
 count=0
 for path in "$testdata"/*; do
@@ -116,14 +116,14 @@ done
 
 # The shared context target reads two bytes before the parameter header: how
 # many prefix dictionaries to cut the payload into, and whether to squeeze the
-# resource limits. Seed it with no dictionary at all (the empty-context path),
+# resource limits. Seed it with no dictionary at all (the refused-empty path),
 # one, the fifteen the format allows, and one past that, each under a generous
 # budget and a deliberately impossible one.
 for path in "$params"/*; do
     name=$(basename "$path")
     for attachments in 0 1 15 16; do
         for squeeze in 1 4; do
-            target="$shared_context/sc$attachments-s$squeeze-$name"
+            target="$dictionary/sc$attachments-s$squeeze-$name"
             printf "$(printf '\\%03o\\%03o' "$attachments" "$squeeze")" > "$target"
             cat "$path" >> "$target"
         done
@@ -133,4 +133,4 @@ done
 echo "prepared $count generic seeds in $generic"
 echo "prepared $(ls "$params" | wc -l | tr -d ' ') parameter seeds in $params"
 echo "prepared $(ls "$large_window" | wc -l | tr -d ' ') large window seeds in $large_window"
-echo "prepared $(ls "$shared_context" | wc -l | tr -d ' ') shared context seeds in $shared_context"
+echo "prepared $(ls "$dictionary" | wc -l | tr -d ' ') dictionary seeds in $dictionary"

@@ -71,31 +71,6 @@ impl Encoder {
         }
     }
 
-    /// Returns whether the final meta-block has already been written.
-    pub(crate) const fn is_finished(&self) -> bool {
-        match self {
-            Self::Fast(encoder) => encoder.is_finished(),
-            Self::Greedy(encoder) => encoder.is_finished(),
-            Self::Hq(encoder) => encoder.is_finished(),
-        }
-    }
-
-    /// Compresses one block and returns the bytes it completed.
-    ///
-    /// The result may be empty: the greedy and high-quality encoders buffer
-    /// input until a meta-block is worth emitting.
-    ///
-    /// # Errors
-    ///
-    /// Propagates [`BrotliCompressError::BufferOverflow`] from the encoders.
-    pub(crate) fn encode_block(&mut self, input: &[u8], is_last: bool) -> BrotliResult<&[u8]> {
-        match self {
-            Self::Fast(encoder) => encoder.encode_block(input, is_last),
-            Self::Greedy(encoder) => encoder.encode_block(input, is_last),
-            Self::Hq(encoder) => encoder.encode_block(input, is_last),
-        }
-    }
-
     /// Restores the encoder for another stream with the same parameters.
     ///
     /// Returns `false` when `params` and `size_hint` would not resolve to this
@@ -172,11 +147,28 @@ impl Encoder {
     /// # Errors
     ///
     /// Propagates [`BrotliCompressError::BufferOverflow`] from the encoders.
-    pub(crate) fn flush_block(&mut self, input: &[u8]) -> BrotliResult<&[u8]> {
+    pub(crate) fn flush_block(
+        &mut self,
+        input: &[u8],
+        attached: Option<&SharedContextInner>,
+    ) -> BrotliResult<&[u8]> {
         match self {
             Self::Fast(encoder) => encoder.flush_block(input),
-            Self::Greedy(encoder) => encoder.flush_block(input),
-            Self::Hq(encoder) => encoder.flush_block(input),
+            Self::Greedy(encoder) => encoder.flush_block(input, attached),
+            Self::Hq(encoder) => encoder.flush_block(input, attached),
+        }
+    }
+
+    /// Returns the bytes this encoder keeps allocated between blocks.
+    ///
+    /// Counts the buffers that dominate an encoder's footprint — the window,
+    /// the match finder, the command and output buffers — so a caller can see
+    /// what reusing a compressor is holding on to.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        match self {
+            Self::Fast(encoder) => encoder.retained_bytes(),
+            Self::Greedy(encoder) => encoder.retained_bytes(),
+            Self::Hq(encoder) => encoder.retained_bytes(),
         }
     }
 }
@@ -215,7 +207,7 @@ impl EncoderCache {
     ///
     /// Propagates whatever [`Encoder::new`] reports when a new encoder has to
     /// be built.
-    fn acquire(
+    pub(crate) fn acquire(
         &mut self,
         level: Level,
         params: &CompressParams,
@@ -239,13 +231,23 @@ impl EncoderCache {
         }
     }
 
+    /// Returns the bytes the retained encoder keeps allocated.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        self.encoder.as_ref().map_or(0, Encoder::retained_bytes)
+    }
+
+    /// Returns the retained encoder, if a call has already built one.
+    pub(crate) const fn encoder(&mut self) -> Option<&mut Encoder> {
+        self.encoder.as_mut()
+    }
+
     /// Drops the retained encoder, so a failed call cannot leak state.
     ///
     /// An encoder is reset on the way in rather than on the way out, so a
     /// mid-stream error would otherwise leave a half-written stream behind for
     /// the next call to reset. Resetting is cheap; forgetting is cheaper and
     /// removes the question.
-    fn invalidate(&mut self) {
+    pub(crate) fn invalidate(&mut self) {
         self.encoder = None;
         self.level = None;
     }
@@ -282,34 +284,6 @@ const fn check_large_window(params: &CompressParams) -> BrotliResult<()> {
     }
 }
 
-/// Rejects a quality no encoder in this crate implements.
-///
-/// Every quality the format defines now has an encoder, so this only exists so
-/// that the shared entry points keep one place to consult: they need the
-/// answer before they touch the context, because a call that cannot compress
-/// at all must not report a context problem instead.
-const fn check_quality_implemented(_params: &CompressParams) -> BrotliResult<()> {
-    Ok(())
-}
-
-/// Rejects an attached dictionary at a quality that cannot consult one.
-///
-/// Today that is every quality: no match finder reads a prefix dictionary yet.
-/// Refusing is what Section 19.6 of the implementation specification requires
-/// — a stream compressed without the dictionary it was given decodes perfectly
-/// well, so silently ignoring one would be invisible until a decoder that does
-/// attach it produces the wrong bytes.
-fn check_shared_context(params: &CompressParams, context: &SharedContextInner) -> BrotliResult<()> {
-    if context.is_empty() || quality_reads_a_prefix(params.quality()) {
-        return Ok(());
-    }
-    Err(BrotliCompressError::Shared(
-        SharedBrotliError::UnsupportedSharedContextForQuality {
-            quality: usize::from(params.quality()),
-        },
-    ))
-}
-
 /// Returns whether `quality` has a match finder that consults a prefix.
 ///
 /// The reference compiles its compound-dictionary search only for the match
@@ -319,7 +293,7 @@ fn check_shared_context(params: &CompressParams, context: &SharedContextInner) -
 /// this crate refuses: a stream compressed without the dictionary it was given
 /// decodes perfectly well, so the mistake would stay invisible until a decoder
 /// that does attach it produced the wrong bytes.
-const fn quality_reads_a_prefix(quality: QualityLevel) -> bool {
+pub(crate) const fn quality_reads_a_prefix(quality: QualityLevel) -> bool {
     matches!(
         quality,
         QualityLevel::Q5
@@ -330,86 +304,6 @@ const fn quality_reads_a_prefix(quality: QualityLevel) -> bool {
             | QualityLevel::Q10
             | QualityLevel::Q11
     )
-}
-
-/// Runs the validation every shared entry point shares.
-///
-/// The order is the one Section 21.1 of the implementation specification
-/// fixes. Its second step — the context's own prepared quality — is checked by
-/// the public entry point before this is called, because only that layer knows
-/// what the context was prepared for; the rest is here: quality support, then
-/// the window syntax, then the shared path itself. All of it runs before any
-/// input is consumed, so a rejected call leaves the context exactly as it was
-/// found — which is trivially true today, because nothing in a context is
-/// stream state a call could disturb.
-fn check_shared(params: &CompressParams, context: &SharedContextInner) -> BrotliResult<()> {
-    check_quality_implemented(params)?;
-    check_large_window(params)?;
-    check_shared_context(params, context)
-}
-
-/// Compresses `src` against a shared context, appending the stream to `out`.
-///
-/// An empty context produces exactly the bytes [`compress_to_vec`] would, and
-/// takes the same path to them: there is no wrapper, no extra allocation and
-/// no second decision about the window.
-///
-/// # Errors
-///
-/// Propagates the shared validation above, then everything
-/// [`compress_to_vec`] can report.
-pub(crate) fn compress_shared_to_vec(
-    level: Level,
-    params: &CompressParams,
-    context: &SharedContextInner,
-    src: &[u8],
-    out: &mut Vec<u8>,
-) -> BrotliResult<()> {
-    check_shared(params, context)?;
-    compress_to_vec_attached(
-        &mut EncoderCache::default(),
-        level,
-        params,
-        attachment(context),
-        src,
-        out,
-    )
-}
-
-/// Compresses `src` against a shared context, writing into `dst`.
-///
-/// # Errors
-///
-/// Propagates the shared validation above, then everything
-/// [`compress_to_slice`] can report.
-pub(crate) fn compress_shared_to_slice(
-    level: Level,
-    params: &CompressParams,
-    context: &SharedContextInner,
-    src: &[u8],
-    dst: &mut [u8],
-) -> BrotliResult<usize> {
-    check_shared(params, context)?;
-    compress_to_slice_attached(
-        &mut EncoderCache::default(),
-        level,
-        params,
-        attachment(context),
-        src,
-        dst,
-    )
-}
-
-/// Returns the context a match finder should consult, if there is one.
-///
-/// An empty context is `None` rather than an empty attachment, so a call that
-/// passes one takes byte for byte the path an ordinary call takes.
-fn attachment(context: &SharedContextInner) -> Option<&SharedContextInner> {
-    if context.is_empty() {
-        None
-    } else {
-        Some(context)
-    }
 }
 
 /// Upper bound the reference one-shot API enforces on its own output.
@@ -525,47 +419,13 @@ fn drive_into(
     }
 }
 
-/// Compresses `src` and appends the stream to `out`.
-///
-/// Reproduces the one-shot entry point of the reference, including its empty
-/// input shortcut and its uncompressed fallback for payloads that grew.
-///
-/// # Errors
-///
-/// Propagates [`BrotliCompressError::UnsupportedQuality`] for qualities no
-/// encoder implements.
-pub(crate) fn compress_to_vec(
-    level: Level,
-    params: &CompressParams,
-    src: &[u8],
-    out: &mut Vec<u8>,
-) -> BrotliResult<()> {
-    compress_to_vec_with(&mut EncoderCache::default(), level, params, src, out)
-}
-
-/// Compresses `src` into `out`, reusing whatever `cache` retained.
-///
-/// # Errors
-///
-/// Propagates [`BrotliCompressError::UnsupportedQuality`] for qualities no
-/// encoder implements.
-pub(crate) fn compress_to_vec_with(
-    cache: &mut EncoderCache,
-    level: Level,
-    params: &CompressParams,
-    src: &[u8],
-    out: &mut Vec<u8>,
-) -> BrotliResult<()> {
-    compress_to_vec_attached(cache, level, params, None, src, out)
-}
-
 /// Compresses `src` into `out`, reusing `cache` and consulting `attached`.
 ///
 /// # Errors
 ///
 /// Propagates [`BrotliCompressError::UnsupportedQuality`] for qualities no
 /// encoder implements.
-fn compress_to_vec_attached(
+pub(crate) fn compress_to_vec_attached(
     cache: &mut EncoderCache,
     level: Level,
     params: &CompressParams,
@@ -603,44 +463,13 @@ fn compress_to_vec_attached(
     Ok(())
 }
 
-/// Compresses `src` into `dst`, returning the number of bytes written.
-///
-/// # Errors
-///
-/// Returns [`BrotliCompressError::OutputTooSmall`] when `dst` cannot hold the
-/// whole stream, and propagates quality routing errors.
-pub(crate) fn compress_to_slice(
-    level: Level,
-    params: &CompressParams,
-    src: &[u8],
-    dst: &mut [u8],
-) -> BrotliResult<usize> {
-    compress_to_slice_with(&mut EncoderCache::default(), level, params, src, dst)
-}
-
-/// Compresses `src` into `dst`, reusing whatever `cache` retained.
-///
-/// # Errors
-///
-/// Returns [`BrotliCompressError::OutputTooSmall`] when `dst` cannot hold the
-/// whole stream, and propagates quality routing errors.
-pub(crate) fn compress_to_slice_with(
-    cache: &mut EncoderCache,
-    level: Level,
-    params: &CompressParams,
-    src: &[u8],
-    dst: &mut [u8],
-) -> BrotliResult<usize> {
-    compress_to_slice_attached(cache, level, params, None, src, dst)
-}
-
 /// Compresses `src` into `dst`, reusing `cache` and consulting `attached`.
 ///
 /// # Errors
 ///
 /// Returns [`BrotliCompressError::OutputTooSmall`] when `dst` cannot hold the
 /// whole stream, and propagates quality routing errors.
-fn compress_to_slice_attached(
+pub(crate) fn compress_to_slice_attached(
     cache: &mut EncoderCache,
     level: Level,
     params: &CompressParams,
@@ -699,6 +528,26 @@ fn compress_to_slice_attached(
 mod tests {
     use super::*;
     use crate::compressor::{QualityLevel, WindowBits};
+
+    /// Compresses `src` through a throwaway workspace, as the tests need.
+    fn compress_to_vec(
+        level: Level,
+        params: &CompressParams,
+        src: &[u8],
+        out: &mut Vec<u8>,
+    ) -> BrotliResult<()> {
+        compress_to_vec_attached(&mut EncoderCache::default(), level, params, None, src, out)
+    }
+
+    /// Compresses `src` into `dst` through a throwaway workspace.
+    fn compress_to_slice(
+        level: Level,
+        params: &CompressParams,
+        src: &[u8],
+        dst: &mut [u8],
+    ) -> BrotliResult<usize> {
+        compress_to_slice_attached(&mut EncoderCache::default(), level, params, None, src, dst)
+    }
 
     fn params(quality: QualityLevel, lgwin: u8) -> CompressParams {
         let lgwin = WindowBits::standard(lgwin).unwrap_or(WindowBits::DEFAULT);

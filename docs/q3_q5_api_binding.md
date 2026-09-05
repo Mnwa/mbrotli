@@ -1,5 +1,13 @@
 # Quality 3 / 4 / 5 API binding
 
+> **Written before the pre-release API redesign.** The public names in this
+> document — `Brotli`, `CompressParams`, `CompressWorkspace`, `QualityLevel`,
+> `WindowBits`, `SharedContext` and the `compress_*` method families — no
+> longer exist. The encoders below them did not change.
+> [`pre_release_api_redesign.md`](pre_release_api_redesign.md) maps the old
+> names onto the new ones.
+
+
 Milestone 0 artifact for the greedy port: the mapping between the conceptual
 roles the port specification uses and the symbols in this repository. The
 encoder itself is private; what the caller sees is the API that was already

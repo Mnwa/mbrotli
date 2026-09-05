@@ -1,5 +1,13 @@
 # RFC 9841 API binding
 
+> **Written before the pre-release API redesign.** The public names in this
+> document — `Brotli`, `CompressParams`, `CompressWorkspace`, `QualityLevel`,
+> `WindowBits`, `SharedContext` and the `compress_*` method families — no
+> longer exist. The encoders below them did not change.
+> [`pre_release_api_redesign.md`](pre_release_api_redesign.md) maps the old
+> names onto the new ones.
+
+
 Maps each role [RFC 9841] needs onto the symbol that plays it in this
 repository, so that a reader can tell at a glance what already existed, what was
 extended, and who owns the state. Symbols are the real ones; a role with no

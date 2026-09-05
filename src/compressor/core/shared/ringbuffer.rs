@@ -84,6 +84,11 @@ impl RingBuffer {
         }
     }
 
+    /// Returns the bytes this window keeps allocated.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        self.data.capacity()
+    }
+
     /// Returns whether any input has been written yet.
     pub(crate) const fn is_allocated(&self) -> bool {
         self.cur_size != 0

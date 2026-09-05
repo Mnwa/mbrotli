@@ -1,5 +1,13 @@
 # Every quality, measured against the reference
 
+> **Written before the pre-release API redesign.** The public names in this
+> document — `Brotli`, `CompressParams`, `CompressWorkspace`, `QualityLevel`,
+> `WindowBits`, `SharedContext` and the `compress_*` method families — no
+> longer exist. The encoders below them did not change.
+> [`pre_release_api_redesign.md`](pre_release_api_redesign.md) maps the old
+> names onto the new ones.
+
+
 The first complete sweep. Earlier reports covered qualities 0 and 1
 ([`q0_q1_benchmarks.md`](q0_q1_benchmarks.md)) and 3 to 5
 ([`q3_q5_benchmarks.md`](q3_q5_benchmarks.md)); quality 2 had no encoder and

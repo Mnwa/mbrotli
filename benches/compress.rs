@@ -13,26 +13,49 @@
 //! printed so a speedup can be checked against the compression ratio it
 //! produced.
 //!
-//! Two shapes are measured, as required by the acceptance gate:
+//! The shapes the acceptance gate names are measured separately, because a
+//! stateful encoder makes them genuinely different work:
 //!
-//! * `oneshot` — the full end-to-end API, including output allocation and
-//!   growth on both sides.
-//! * `presized` — the same work into a caller-owned buffer sized by the
-//!   compressed-size bound, so output allocation leaves the timed region.
+//! * `cold` — build the compressor, allocate the output, compress once. This is
+//!   what a caller who compresses one thing pays, and the only shape where
+//!   construction is inside the timed region.
+//! * `first-use` — a preconstructed compressor's first encode, so construction
+//!   is out and the workspace is still cold.
+//! * `reused` — repeated `compress_into` into a destination that is already big
+//!   enough. After warm-up this allocates nothing on either side.
+//! * `presized` — `compress_to_slice` into a caller-owned buffer.
+//! * `writer`, `reader`, `session` — the three streaming shapes, in large
+//!   chunks.
+//! * `tiny` — per-call overhead on payloads where it dominates.
 //!
-//! A separate `tiny` group measures per-call overhead, including the single
-//! runtime SIMD dispatch, on payloads where it dominates.
+//! The C side of every shape does the equivalent work, including creating and
+//! destroying its own encoder state where the Rust side builds a compressor.
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use mbrotli::Brotli;
-use mbrotli::compressor::{CompressParams, CompressWorkspace, QualityLevel, WindowBits};
+use mbrotli::dictionary::DictionaryBuilder;
+use mbrotli::io::FinishError;
+use mbrotli::{
+    Compressor, EncoderConfig, EncoderStatus, InputSize, Operation, Quality, StreamConfig, Window,
+};
 use std::hint::black_box;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
 
 /// Sliding window size used by every benchmark.
-const LGWIN: WindowBits = WindowBits::DEFAULT;
+const LGWIN: Window = Window::DEFAULT;
+
+/// Returns the configuration a benchmark at `quality` runs under.
+fn config(quality: Quality) -> EncoderConfig {
+    EncoderConfig::default()
+        .with_quality(quality)
+        .with_window(LGWIN)
+}
+
+/// Builds a compressor for `quality`.
+fn encoder(quality: Quality) -> Compressor {
+    Compressor::new(config(quality)).expect("a legal configuration")
+}
 
 /// Applies the sampling policy a quality needs to finish in useful time.
 ///
@@ -52,9 +75,9 @@ const LGWIN: WindowBits = WindowBits::DEFAULT;
 /// the meta-block and block-splitting decisions depend on length.
 fn configure<M: criterion::measurement::Measurement>(
     group: &mut criterion::BenchmarkGroup<'_, M>,
-    quality: QualityLevel,
+    quality: Quality,
 ) {
-    if usize::from(quality) >= 10 {
+    if quality >= Quality::Q10 {
         group.sample_size(10);
         group.warm_up_time(Duration::from_secs(1));
         group.measurement_time(Duration::from_secs(3));
@@ -65,19 +88,19 @@ fn configure<M: criterion::measurement::Measurement>(
 ///
 /// Every implemented quality is gated separately, so a gain at one may not be
 /// used to cover a loss at another.
-const QUALITIES: [QualityLevel; 12] = [
-    QualityLevel::Q0,
-    QualityLevel::Q1,
-    QualityLevel::Q2,
-    QualityLevel::Q3,
-    QualityLevel::Q4,
-    QualityLevel::Q5,
-    QualityLevel::Q6,
-    QualityLevel::Q7,
-    QualityLevel::Q8,
-    QualityLevel::Q9,
-    QualityLevel::Q10,
-    QualityLevel::Q11,
+const QUALITIES: [Quality; 12] = [
+    Quality::Q0,
+    Quality::Q1,
+    Quality::Q2,
+    Quality::Q3,
+    Quality::Q4,
+    Quality::Q5,
+    Quality::Q6,
+    Quality::Q7,
+    Quality::Q8,
+    Quality::Q9,
+    Quality::Q10,
+    Quality::Q11,
 ];
 
 /// Safe wrappers over the raw C Brotli bindings.
@@ -157,6 +180,81 @@ mod c_brotli {
         }
 
         Some(decoded)
+    }
+
+    /// Compresses `chunks` one at a time, without flushing between them.
+    ///
+    /// Every chunk but the last is fed with `BROTLI_OPERATION_PROCESS` and the
+    /// last with `BROTLI_OPERATION_FINISH`, which is what a `Write` adapter that
+    /// is never flushed does. `dst` is replaced with the stream.
+    ///
+    /// Returns the compressed length, or `None` when the encoder fails.
+    pub fn compress_streaming(
+        quality: usize,
+        lgwin: usize,
+        chunks: &[&[u8]],
+        dst: &mut Vec<u8>,
+    ) -> Option<usize> {
+        let total: usize = chunks.iter().map(|chunk| chunk.len()).sum();
+        dst.clear();
+        dst.resize(max_compressed_size(total) + 1024, 0);
+        let mut written = 0usize;
+
+        // SAFETY: as `compress_flushing` below; every pointer is derived from a
+        // live slice or from `dst`'s own allocation, `written` stays at or below
+        // `dst.len()` because `available_out` is what the encoder decrements,
+        // and the state never escapes this block.
+        unsafe {
+            let state = ffi::BrotliEncoderCreateInstance(None, None, std::ptr::null_mut());
+            if state.is_null() {
+                return None;
+            }
+            ffi::BrotliEncoderSetParameter(state, ffi::BROTLI_PARAM_QUALITY, quality as u32);
+            ffi::BrotliEncoderSetParameter(state, ffi::BROTLI_PARAM_LGWIN, lgwin as u32);
+            ffi::BrotliEncoderSetParameter(state, ffi::BROTLI_PARAM_SIZE_HINT, total as u32);
+
+            for (index, chunk) in chunks.iter().enumerate() {
+                let operation = if index + 1 == chunks.len() {
+                    ffi::BROTLI_OPERATION_FINISH
+                } else {
+                    ffi::BROTLI_OPERATION_PROCESS
+                };
+                let mut available_in = chunk.len();
+                let mut next_in = chunk.as_ptr();
+                loop {
+                    let mut available_out = dst.len() - written;
+                    let mut next_out = dst.as_mut_ptr().add(written);
+                    let mut total_out = 0usize;
+                    let ok = ffi::BrotliEncoderCompressStream(
+                        state,
+                        operation,
+                        &mut available_in,
+                        &mut next_in,
+                        &mut available_out,
+                        &mut next_out,
+                        &mut total_out,
+                    );
+                    if ok != ffi::BROTLI_TRUE {
+                        ffi::BrotliEncoderDestroyInstance(state);
+                        return None;
+                    }
+                    written = dst.len() - available_out;
+                    if available_in == 0
+                        && ffi::BrotliEncoderHasMoreOutput(state) != ffi::BROTLI_TRUE
+                    {
+                        break;
+                    }
+                }
+            }
+            let finished = ffi::BrotliEncoderIsFinished(state);
+            ffi::BrotliEncoderDestroyInstance(state);
+            if finished != ffi::BROTLI_TRUE {
+                return None;
+            }
+        }
+
+        dst.truncate(written);
+        Some(written)
     }
 
     /// Compresses `chunks` one at a time, flushing between them.
@@ -447,64 +545,60 @@ fn incompressible(len: usize) -> Vec<u8> {
 
 /// Verifies both implementations against the C decoder and reports the
 /// compressed sizes they produced.
-fn validate(params: CompressParams, corpus: &Corpus) {
-    let quality = usize::from(params.quality());
+fn validate(quality: Quality, corpus: &Corpus) {
+    let numeric = usize::from(quality.get());
     let input = corpus.data.as_slice();
 
     let mut c_output = Vec::new();
-    let c_size =
-        c_brotli::compress_into(quality, usize::from(params.lgwin()), input, &mut c_output)
-            .expect("C Brotli failed to compress the corpus");
+    let c_size = c_brotli::compress_into(numeric, usize::from(LGWIN.bits()), input, &mut c_output)
+        .expect("C Brotli failed to compress the corpus");
     assert_eq!(
         c_brotli::decompress(&c_output, input.len()).as_deref(),
         Some(input),
-        "C Brotli output does not round-trip for {} at q{quality}",
+        "C Brotli output does not round-trip for {} at q{numeric}",
         corpus.name,
     );
 
-    let compressor = Brotli::default().compressor();
-    let rust_output = compressor
-        .compress(params, input)
+    let rust_output = encoder(quality)
+        .compress(input)
         .expect("mbrotli failed to compress the corpus");
     assert_eq!(
         c_brotli::decompress(&rust_output, input.len()).as_deref(),
         Some(input),
-        "mbrotli output does not round-trip for {} at q{quality}",
+        "mbrotli output does not round-trip for {} at q{numeric}",
         corpus.name,
     );
     // Parity with the reference is a test-suite guarantee; reasserting it here
     // keeps a benchmark run from reporting a speedup that changed the output.
     assert_eq!(
         rust_output, c_output,
-        "mbrotli and C Brotli disagree for {} at q{quality}",
+        "mbrotli and C Brotli disagree for {} at q{numeric}",
         corpus.name,
     );
     println!(
-        "q{quality} {name:<26} c-brotli {c_size:>9} bytes  mbrotli {rust_size:>9} bytes",
+        "q{numeric} {name:<26} c-brotli {c_size:>9} bytes  mbrotli {rust_size:>9} bytes",
         name = corpus.name,
         rust_size = rust_output.len(),
     );
 }
 
-/// Registers the end-to-end one-shot comparison, allocation included.
-fn bench_oneshot(criterion: &mut Criterion) {
+/// Registers the cold comparison: build the encoder, allocate, compress once.
+///
+/// This is what a caller who compresses one thing pays. Both sides create and
+/// destroy their encoder state inside the timed region, which is what
+/// `BrotliEncoderCompress` does on every call anyway.
+fn bench_cold(criterion: &mut Criterion) {
     let corpora = corpora();
 
-    println!(
-        "corpus validation (lgwin {}, {:?})",
-        usize::from(LGWIN),
-        Brotli::default()
-    );
+    println!("corpus validation (lgwin {})", LGWIN.bits());
 
     for quality in QUALITIES {
-        let params = CompressParams::new(quality, LGWIN);
-        let numeric_quality = usize::from(quality);
-        let mut group = criterion.benchmark_group(format!("oneshot/q{numeric_quality}"));
+        let numeric = usize::from(quality.get());
+        let mut group = criterion.benchmark_group(format!("cold/q{numeric}"));
         configure(&mut group, quality);
-        let compressor = Brotli::default().compressor();
 
         for corpus in &corpora {
-            validate(params, corpus);
+            validate(quality, corpus);
             let data = corpus.data.as_slice();
             group.throughput(Throughput::Bytes(data.len() as u64));
 
@@ -515,8 +609,8 @@ fn bench_oneshot(criterion: &mut Criterion) {
                     bencher.iter(|| {
                         let mut output = Vec::new();
                         c_brotli::compress_into(
-                            numeric_quality,
-                            LGWIN.into(),
+                            numeric,
+                            usize::from(LGWIN.bits()),
                             black_box(data),
                             &mut output,
                         )
@@ -531,8 +625,8 @@ fn bench_oneshot(criterion: &mut Criterion) {
                 &data,
                 |bencher, data| {
                     bencher.iter(|| {
-                        compressor
-                            .compress(params, black_box(data))
+                        encoder(quality)
+                            .compress(black_box(data))
                             .expect("mbrotli failed to compress the corpus")
                     });
                 },
@@ -543,20 +637,18 @@ fn bench_oneshot(criterion: &mut Criterion) {
     }
 }
 
-/// Registers the comparison into a caller-owned, pre-sized output buffer.
+/// Registers the reused comparison: one encoder, one destination, many calls.
 ///
-/// Output allocation and growth leave the timed region on both sides; the
-/// encoder workspaces are still built per call, exactly as the public API of
-/// each implementation does it.
-fn bench_presized(criterion: &mut Criterion) {
+/// The reference's one-shot entry point builds a whole encoder per call and has
+/// no reuse to compare against, so the `c-brotli` arm is the same work it always
+/// does. That difference is the point of the shape.
+fn bench_reused(criterion: &mut Criterion) {
     let corpora = corpora();
 
     for quality in QUALITIES {
-        let params = CompressParams::new(quality, LGWIN);
-        let numeric_quality = usize::from(quality);
-        let mut group = criterion.benchmark_group(format!("presized/q{numeric_quality}"));
+        let numeric = usize::from(quality.get());
+        let mut group = criterion.benchmark_group(format!("reused/q{numeric}"));
         configure(&mut group, quality);
-        let compressor = Brotli::default().compressor();
 
         for corpus in &corpora {
             let data = corpus.data.as_slice();
@@ -569,8 +661,8 @@ fn bench_presized(criterion: &mut Criterion) {
                 |bencher, data| {
                     bencher.iter(|| {
                         c_brotli::compress_into(
-                            numeric_quality,
-                            LGWIN.into(),
+                            numeric,
+                            usize::from(LGWIN.bits()),
                             black_box(data),
                             &mut c_output,
                         )
@@ -579,17 +671,72 @@ fn bench_presized(criterion: &mut Criterion) {
                 },
             );
 
-            let bound = compressor
-                .calculate_bound(&params, data.len())
+            group.bench_with_input(
+                BenchmarkId::new("mbrotli", &corpus.name),
+                &data,
+                |bencher, data| {
+                    let mut compressor = encoder(quality);
+                    let mut output = Vec::new();
+                    // Warm the workspace and the destination, so the measured
+                    // calls allocate nothing at all.
+                    compressor
+                        .compress_into(data, &mut output)
+                        .expect("mbrotli failed to compress the corpus");
+                    bencher.iter(|| {
+                        output.clear();
+                        compressor
+                            .compress_into(black_box(data), &mut output)
+                            .expect("mbrotli failed to compress the corpus")
+                    });
+                },
+            );
+        }
+
+        group.finish();
+    }
+}
+
+/// Registers the comparison into a caller-owned, pre-sized output buffer.
+fn bench_presized(criterion: &mut Criterion) {
+    let corpora = corpora();
+
+    for quality in QUALITIES {
+        let numeric = usize::from(quality.get());
+        let mut group = criterion.benchmark_group(format!("presized/q{numeric}"));
+        configure(&mut group, quality);
+
+        for corpus in &corpora {
+            let data = corpus.data.as_slice();
+            group.throughput(Throughput::Bytes(data.len() as u64));
+
+            let mut c_output = Vec::with_capacity(c_brotli::max_compressed_size(data.len()) + 1024);
+            group.bench_with_input(
+                BenchmarkId::new("c-brotli", &corpus.name),
+                &data,
+                |bencher, data| {
+                    bencher.iter(|| {
+                        c_brotli::compress_into(
+                            numeric,
+                            usize::from(LGWIN.bits()),
+                            black_box(data),
+                            &mut c_output,
+                        )
+                        .expect("C Brotli failed to compress the corpus");
+                    });
+                },
+            );
+
+            let bound = Compressor::max_compressed_size(data.len())
                 .expect("the compressed-size bound overflowed");
             let mut rust_output = vec![0u8; bound];
             group.bench_with_input(
                 BenchmarkId::new("mbrotli", &corpus.name),
                 &data,
                 |bencher, data| {
+                    let mut compressor = encoder(quality);
                     bencher.iter(|| {
                         compressor
-                            .compress_to_slice(params, black_box(data), &mut rust_output)
+                            .compress_to_slice(black_box(data), &mut rust_output)
                             .expect("mbrotli failed to compress the corpus")
                     });
                 },
@@ -605,11 +752,9 @@ fn bench_tiny(criterion: &mut Criterion) {
     let payload = text(*TINY_SIZES.iter().max().unwrap_or(&1024));
 
     for quality in QUALITIES {
-        let params = CompressParams::new(quality, LGWIN);
-        let numeric_quality = usize::from(quality);
-        let mut group = criterion.benchmark_group(format!("tiny/q{numeric_quality}"));
+        let numeric = usize::from(quality.get());
+        let mut group = criterion.benchmark_group(format!("tiny/q{numeric}"));
         configure(&mut group, quality);
-        let compressor = Brotli::default().compressor();
 
         for size in TINY_SIZES {
             let data = &payload[..size];
@@ -622,8 +767,8 @@ fn bench_tiny(criterion: &mut Criterion) {
                     bencher.iter(|| {
                         let mut output = Vec::new();
                         c_brotli::compress_into(
-                            numeric_quality,
-                            LGWIN.into(),
+                            numeric,
+                            usize::from(LGWIN.bits()),
                             black_box(data),
                             &mut output,
                         )
@@ -633,83 +778,96 @@ fn bench_tiny(criterion: &mut Criterion) {
                 },
             );
 
+            // Cold, which is what the reference's own entry point does.
             group.bench_with_input(BenchmarkId::new("mbrotli", size), &data, |bencher, data| {
                 bencher.iter(|| {
-                    compressor
-                        .compress(params, black_box(data))
+                    encoder(quality)
+                        .compress(black_box(data))
                         .expect("mbrotli failed to compress the corpus")
                 });
             });
+
+            // And warm, which is what a server reusing one compressor pays.
+            group.bench_with_input(
+                BenchmarkId::new("mbrotli-reused", size),
+                &data,
+                |bencher, data| {
+                    let mut compressor = encoder(quality);
+                    let mut output = Vec::new();
+                    compressor
+                        .compress_into(data, &mut output)
+                        .expect("mbrotli failed to compress");
+                    bencher.iter(|| {
+                        output.clear();
+                        compressor
+                            .compress_into(black_box(data), &mut output)
+                            .expect("mbrotli failed to compress")
+                    });
+                },
+            );
         }
 
         group.finish();
     }
 }
 
-/// Qualities the workspace, flush and prefix groups are measured at.
+/// Chunk size the streaming groups feed and drain in.
+const STREAM_CHUNK: usize = 64 << 10;
+
+/// Qualities the streaming, flush and dictionary groups are measured at.
 ///
 /// One from each encoder core, plus quality 5 as the cheapest quality that can
-/// consult an attached prefix. Sweeping all twelve would triple a run that
-/// already takes tens of minutes without saying anything the three cores do
-/// not already say.
-const REPRESENTATIVE: [QualityLevel; 5] = [
-    QualityLevel::Q1,
-    QualityLevel::Q2,
-    QualityLevel::Q5,
-    QualityLevel::Q9,
-    QualityLevel::Q11,
+/// consult a dictionary. Sweeping all twelve would triple a run that already
+/// takes tens of minutes without saying anything the three cores do not.
+const REPRESENTATIVE: [Quality; 5] = [
+    Quality::Q1,
+    Quality::Q2,
+    Quality::Q5,
+    Quality::Q9,
+    Quality::Q11,
 ];
 
-/// Payload sizes the workspace group measures.
-///
-/// A retained workspace saves an allocation, not a comparison, so the win is
-/// whatever the allocation was worth relative to the compression: large at a
-/// small payload, negligible at a big one. Both ends are measured.
-const WORKSPACE_SIZES: [usize; 4] = [256, 4 << 10, 64 << 10, 1 << 20];
-
-/// Registers the reuse comparison for [`CompressWorkspace`].
-///
-/// Three arms per case. `c-brotli` and `mbrotli` are the ordinary one-shot
-/// calls, both of which build a whole encoder per call — that is what the
-/// reference's own one-shot entry point does, and it has no reuse to compare
-/// against. `mbrotli-reused` is the same call through a retained workspace.
-/// The size hint is pinned so every payload resolves to the same encoder shape
-/// and the workspace stays on its reuse path.
-fn bench_workspace(criterion: &mut Criterion) {
-    let compressor = Brotli::default().compressor();
+/// Registers the three streaming shapes against the reference's streaming API.
+fn bench_streaming(criterion: &mut Criterion) {
+    let corpora = corpora();
 
     for quality in REPRESENTATIVE {
-        let numeric_quality = usize::from(quality);
-        let params = CompressParams::new(quality, LGWIN).with_size_hint(Some(0));
-        let mut group = criterion.benchmark_group(format!("workspace/q{numeric_quality}"));
+        let numeric = usize::from(quality.get());
+        let mut group = criterion.benchmark_group(format!("streaming/q{numeric}"));
         configure(&mut group, quality);
 
-        for size in WORKSPACE_SIZES {
-            let data = text(size);
-            let data = data.as_slice();
+        for corpus in &corpora {
+            let data = corpus.data.as_slice();
+            if data.len() < STREAM_CHUNK {
+                continue;
+            }
+            let chunks: Vec<&[u8]> = data.chunks(STREAM_CHUNK).collect();
+            let stream = StreamConfig::from(InputSize::Exact(data.len() as u64));
             group.throughput(Throughput::Bytes(data.len() as u64));
 
-            // Reuse must not change a byte; a benchmark that let it would be
-            // measuring two different things.
-            let mut workspace = CompressWorkspace::default();
+            // Every shape has to reach the same bytes before any of them is
+            // timed, or the comparison is between two different jobs.
+            let mut compressor = encoder(quality);
+            let expected = compressor.compress(data).expect("mbrotli failed");
+            let mut theirs = Vec::new();
+            c_brotli::compress_streaming(numeric, usize::from(LGWIN.bits()), &chunks, &mut theirs)
+                .expect("C Brotli failed to compress");
             assert_eq!(
-                compressor
-                    .compress_with(&mut workspace, params, data)
-                    .expect("reused"),
-                compressor.compress(params, data).expect("fresh"),
-                "q{numeric_quality}: a reused workspace changed the stream",
+                expected, theirs,
+                "q{numeric} {}: the streamed reference differs",
+                corpus.name
             );
 
             group.bench_with_input(
-                BenchmarkId::new("c-brotli", size),
-                &data,
-                |bencher, data| {
+                BenchmarkId::new("c-brotli", &corpus.name),
+                &chunks,
+                |bencher, chunks| {
                     bencher.iter(|| {
                         let mut output = Vec::new();
-                        c_brotli::compress_into(
-                            numeric_quality,
-                            LGWIN.into(),
-                            black_box(data),
+                        c_brotli::compress_streaming(
+                            numeric,
+                            usize::from(LGWIN.bits()),
+                            black_box(chunks),
                             &mut output,
                         )
                         .expect("C Brotli failed to compress");
@@ -718,23 +876,66 @@ fn bench_workspace(criterion: &mut Criterion) {
                 },
             );
 
-            group.bench_with_input(BenchmarkId::new("mbrotli", size), &data, |bencher, data| {
-                bencher.iter(|| {
-                    compressor
-                        .compress(params, black_box(data))
-                        .expect("mbrotli failed to compress")
-                });
-            });
+            group.bench_with_input(
+                BenchmarkId::new("mbrotli-writer", &corpus.name),
+                &chunks,
+                |bencher, chunks| {
+                    bencher.iter(|| {
+                        let mut sink = compressor
+                            .writer(Vec::new(), stream)
+                            .expect("a legal stream");
+                        for chunk in black_box(chunks) {
+                            sink.write_all(chunk).expect("write failed");
+                        }
+                        sink.finish()
+                            .map_err(FinishError::into_error)
+                            .expect("finish failed")
+                    });
+                },
+            );
 
             group.bench_with_input(
-                BenchmarkId::new("mbrotli-reused", size),
+                BenchmarkId::new("mbrotli-reader", &corpus.name),
                 &data,
                 |bencher, data| {
-                    let mut workspace = CompressWorkspace::default();
                     bencher.iter(|| {
-                        compressor
-                            .compress_with(&mut workspace, params, black_box(data))
-                            .expect("mbrotli failed to compress")
+                        let mut source = compressor
+                            .reader(black_box(*data), stream)
+                            .expect("a legal stream");
+                        let mut output = Vec::new();
+                        source.read_to_end(&mut output).expect("read failed");
+                        output
+                    });
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new("mbrotli-session", &corpus.name),
+                &data,
+                |bencher, data| {
+                    let mut buffer = vec![0u8; STREAM_CHUNK];
+                    bencher.iter(|| {
+                        let data = black_box(*data);
+                        let mut output = Vec::new();
+                        let mut session = compressor.start(stream).expect("a legal stream");
+                        let mut offset = 0usize;
+                        loop {
+                            let take = (data.len() - offset).min(STREAM_CHUNK);
+                            let operation = if offset + take == data.len() {
+                                Operation::Finish
+                            } else {
+                                Operation::Process
+                            };
+                            let progress = session
+                                .process(&data[offset..offset + take], &mut buffer, operation)
+                                .expect("the session failed");
+                            offset += progress.consumed;
+                            output.extend_from_slice(&buffer[..progress.produced]);
+                            if progress.status == EncoderStatus::Finished {
+                                break;
+                            }
+                        }
+                        output
                     });
                 },
             );
@@ -746,8 +947,8 @@ fn bench_workspace(criterion: &mut Criterion) {
 
 /// Chunk counts the flush group splits its payload into.
 ///
-/// One chunk is the no-flush baseline; the rest flush that many times minus
-/// one, so the cost of a flush and the ratio it gives up are both visible.
+/// One chunk is the no-flush baseline; the rest flush that many times minus one,
+/// so the cost of a flush and the ratio it gives up are both visible.
 const FLUSH_CHUNKS: [usize; 4] = [1, 4, 32, 256];
 
 /// Splits `data` into `count` roughly equal chunks.
@@ -756,37 +957,51 @@ fn chunked(data: &[u8], count: usize) -> Vec<&[u8]> {
     data.chunks(size.max(1)).collect()
 }
 
+/// Writes every chunk through the adapter, flushing after all but the last.
+fn flush_with_writer(compressor: &mut Compressor, chunks: &[&[u8]]) -> Vec<u8> {
+    let mut sink = compressor
+        .writer(Vec::new(), StreamConfig::default())
+        .expect("a legal stream");
+    for (index, chunk) in chunks.iter().enumerate() {
+        sink.write_all(chunk).expect("write failed");
+        if index + 1 != chunks.len() {
+            sink.flush().expect("flush failed");
+        }
+    }
+    sink.finish()
+        .map_err(FinishError::into_error)
+        .expect("finish failed")
+}
+
 /// Registers the flushing-writer comparison.
 ///
 /// Both sides compress the same chunks and flush between them: this crate
-/// through `CompressorWriter::flush`, the reference through
-/// `BROTLI_OPERATION_FLUSH`. The compressed sizes are printed alongside,
-/// because a flush trades ratio for latency and a timing without the size next
-/// to it would hide half the trade.
+/// through `Write::flush`, the reference through `BROTLI_OPERATION_FLUSH`. The
+/// compressed sizes are printed alongside, because a flush trades ratio for
+/// latency and a timing without the size next to it would hide half the trade.
 fn bench_flush(criterion: &mut Criterion) {
-    let compressor = Brotli::default().compressor();
     let payload = text(1 << 18);
 
     for quality in REPRESENTATIVE {
-        let numeric_quality = usize::from(quality);
-        let params = CompressParams::new(quality, LGWIN);
-        let mut group = criterion.benchmark_group(format!("flush/q{numeric_quality}"));
+        let numeric = usize::from(quality.get());
+        let mut group = criterion.benchmark_group(format!("flush/q{numeric}"));
         configure(&mut group, quality);
 
         for count in FLUSH_CHUNKS {
             let chunks = chunked(&payload, count);
             group.throughput(Throughput::Bytes(payload.len() as u64));
 
-            let ours = flush_with_writer(&compressor, params, &chunks);
+            let mut compressor = encoder(quality);
+            let ours = flush_with_writer(&mut compressor, &chunks);
             let mut theirs = Vec::new();
-            c_brotli::compress_flushing(numeric_quality, LGWIN.into(), &chunks, &mut theirs)
+            c_brotli::compress_flushing(numeric, usize::from(LGWIN.bits()), &chunks, &mut theirs)
                 .expect("C Brotli failed to compress");
             assert_eq!(
                 ours, theirs,
-                "q{numeric_quality}: flushing every {count} chunks left the reference",
+                "q{numeric}: flushing every {count} chunks left the reference",
             );
             println!(
-                "q{numeric_quality} flush x{count:<4} {} bytes -> {} bytes",
+                "q{numeric} flush x{count:<4} {} bytes -> {} bytes",
                 payload.len(),
                 ours.len(),
             );
@@ -798,8 +1013,8 @@ fn bench_flush(criterion: &mut Criterion) {
                     bencher.iter(|| {
                         let mut output = Vec::new();
                         c_brotli::compress_flushing(
-                            numeric_quality,
-                            LGWIN.into(),
+                            numeric,
+                            usize::from(LGWIN.bits()),
                             black_box(chunks),
                             &mut output,
                         )
@@ -813,7 +1028,7 @@ fn bench_flush(criterion: &mut Criterion) {
                 BenchmarkId::new("mbrotli", count),
                 &chunks,
                 |bencher, chunks| {
-                    bencher.iter(|| flush_with_writer(&compressor, params, black_box(chunks)));
+                    bencher.iter(|| flush_with_writer(&mut compressor, black_box(chunks)));
                 },
             );
         }
@@ -822,33 +1037,16 @@ fn bench_flush(criterion: &mut Criterion) {
     }
 }
 
-/// Writes every chunk through the adapter, flushing after all but the last.
-fn flush_with_writer(
-    compressor: &mbrotli::compressor::Compressor,
-    params: CompressParams,
-    chunks: &[&[u8]],
-) -> Vec<u8> {
-    let mut sink = compressor.compress_writer(params, Vec::new());
-    for (index, chunk) in chunks.iter().enumerate() {
-        sink.write_all(chunk).expect("write failed");
-        if index + 1 != chunks.len() {
-            sink.flush().expect("flush failed");
-        }
-    }
-    sink.finish().expect("finish failed")
-}
+/// Qualities whose match finders consult an attached dictionary.
+const PREFIX_QUALITIES: [Quality; 3] = [Quality::Q5, Quality::Q9, Quality::Q11];
 
-/// Qualities whose match finders consult an attached prefix.
-const PREFIX_QUALITIES: [QualityLevel; 3] = [QualityLevel::Q5, QualityLevel::Q9, QualityLevel::Q11];
-
-/// Registers the attached-prefix comparison.
+/// Registers the attached-dictionary comparison.
 ///
 /// The dictionary is one half of a real text corpus and the payload the other,
 /// which is the shape a shared dictionary is deployed in. Preparation happens
 /// once, outside the timed region, on both sides: it is a per-connection cost,
 /// not a per-request one, and timing it here would measure the wrong thing.
-fn bench_shared(criterion: &mut Criterion) {
-    let compressor = Brotli::default().compressor();
+fn bench_dictionary(criterion: &mut Criterion) {
     let Some(corpus) = vendor_corpora()
         .into_iter()
         .find(|corpus| corpus.name.ends_with("alice29.txt"))
@@ -858,27 +1056,36 @@ fn bench_shared(criterion: &mut Criterion) {
     let (prefix, payload) = corpus.data.split_at(corpus.data.len() / 2);
 
     for quality in PREFIX_QUALITIES {
-        let numeric_quality = usize::from(quality);
-        let params = CompressParams::new(quality, LGWIN).with_size_hint(Some(0));
-        let mut group = criterion.benchmark_group(format!("shared/q{numeric_quality}"));
+        let numeric = usize::from(quality.get());
+        let mut group = criterion.benchmark_group(format!("dictionary/q{numeric}"));
         configure(&mut group, quality);
         group.throughput(Throughput::Bytes(payload.len() as u64));
 
-        let prepared = c_brotli::Prepared::new(prefix, numeric_quality)
+        let prepared = c_brotli::Prepared::new(prefix, numeric)
             .expect("C Brotli failed to prepare the dictionary");
-        let mut context = compressor
-            .shared_context_builder(quality)
-            .add_prefix_dictionary(prefix)
-            .prepare()
+        let dictionary = DictionaryBuilder::new()
+            .add_prefix(prefix)
+            .build()
             .expect("mbrotli failed to prepare the dictionary");
+        let mut compressor = encoder(quality);
 
-        let ours = compressor
-            .compress_shared(params, &mut context, payload)
-            .expect("mbrotli failed to compress");
+        // Both sides declare a size hint of zero, which is what the reference's
+        // streaming entry point leaves it at; the Rust one-shot path declares
+        // the true length, so the comparison runs through a session.
+        let stream = StreamConfig::default();
+        let ours = {
+            let mut sink = compressor
+                .writer_with_dictionary(&dictionary, Vec::new(), stream)
+                .expect("a legal stream");
+            sink.write_all(payload).expect("write failed");
+            sink.finish()
+                .map_err(FinishError::into_error)
+                .expect("finish failed")
+        };
         let mut theirs = Vec::new();
         c_brotli::compress_with_prefix(
-            numeric_quality,
-            LGWIN.into(),
+            numeric,
+            usize::from(LGWIN.bits()),
             &prepared,
             payload,
             &mut theirs,
@@ -886,13 +1093,11 @@ fn bench_shared(criterion: &mut Criterion) {
         .expect("C Brotli failed to compress");
         assert_eq!(
             ours, theirs,
-            "q{numeric_quality}: an attached prefix left the reference",
+            "q{numeric}: an attached dictionary left the reference",
         );
-        let without = compressor
-            .compress(params, payload)
-            .expect("mbrotli failed to compress");
+        let without = compressor.compress(payload).expect("mbrotli failed");
         println!(
-            "q{numeric_quality} prefix {:>8} bytes  with {:>8} bytes  without {:>8} bytes",
+            "q{numeric} dictionary {:>8} bytes  with {:>8} bytes  without {:>8} bytes",
             payload.len(),
             ours.len(),
             without.len(),
@@ -902,8 +1107,8 @@ fn bench_shared(criterion: &mut Criterion) {
             bencher.iter(|| {
                 let mut output = Vec::new();
                 c_brotli::compress_with_prefix(
-                    numeric_quality,
-                    LGWIN.into(),
+                    numeric,
+                    usize::from(LGWIN.bits()),
                     &prepared,
                     black_box(payload),
                     &mut output,
@@ -915,20 +1120,24 @@ fn bench_shared(criterion: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new("mbrotli", "alice29-half"), |bencher| {
             bencher.iter(|| {
-                compressor
-                    .compress_shared(params, &mut context, black_box(payload))
-                    .expect("mbrotli failed to compress")
+                let mut sink = compressor
+                    .writer_with_dictionary(&dictionary, Vec::new(), stream)
+                    .expect("a legal stream");
+                sink.write_all(black_box(payload)).expect("write failed");
+                sink.finish()
+                    .map_err(FinishError::into_error)
+                    .expect("finish failed")
             });
         });
 
         // The same payload with nothing attached, so the cost of consulting a
         // dictionary is separable from the cost of compressing at all.
         group.bench_function(
-            BenchmarkId::new("mbrotli-no-prefix", "alice29-half"),
+            BenchmarkId::new("mbrotli-no-dictionary", "alice29-half"),
             |bencher| {
                 bencher.iter(|| {
                     compressor
-                        .compress(params, black_box(payload))
+                        .compress(black_box(payload))
                         .expect("mbrotli failed to compress")
                 });
             },
@@ -940,11 +1149,12 @@ fn bench_shared(criterion: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_oneshot,
+    bench_cold,
+    bench_reused,
     bench_presized,
     bench_tiny,
-    bench_workspace,
+    bench_streaming,
     bench_flush,
-    bench_shared
+    bench_dictionary
 );
 criterion_main!(benches);

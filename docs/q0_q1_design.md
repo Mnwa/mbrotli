@@ -1,5 +1,13 @@
 # Quality 0 / quality 1 design
 
+> **Written before the pre-release API redesign.** The public names in this
+> document — `Brotli`, `CompressParams`, `CompressWorkspace`, `QualityLevel`,
+> `WindowBits`, `SharedContext` and the `compress_*` method families — no
+> longer exist. The encoders below them did not change.
+> [`pre_release_api_redesign.md`](pre_release_api_redesign.md) maps the old
+> names onto the new ones.
+
+
 How the two fast Brotli encoders are built in this crate, and why. The
 architecture specifications in `architecture/` describe the same code from the
 module-boundary angle; this document is the port's design record.

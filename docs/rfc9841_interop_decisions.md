@@ -1,5 +1,13 @@
 # RFC 9841 interoperability decisions
 
+> **Written before the pre-release API redesign.** The public names in this
+> document — `Brotli`, `CompressParams`, `CompressWorkspace`, `QualityLevel`,
+> `WindowBits`, `SharedContext` and the `compress_*` method families — no
+> longer exist. The encoders below them did not change.
+> [`pre_release_api_redesign.md`](pre_release_api_redesign.md) maps the old
+> names onto the new ones.
+
+
 Every place where [RFC 9841] is ambiguous, where the pinned reference
 implementation stops short of the format, or where this crate deliberately
 narrows what it emits, is recorded here with the reason and the date it was

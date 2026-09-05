@@ -7,7 +7,7 @@
 #![allow(dead_code, reason = "each integration test uses a different subset")]
 
 use google_brotli_ffi as ffi;
-use mbrotli::compressor::{CompressParams, QualityLevel, WindowBits};
+use mbrotli::{Compressor, EncoderConfig, Quality, Window};
 use std::ffi::c_int;
 
 /// Compresses `input` with the pinned C encoder.
@@ -479,51 +479,59 @@ pub fn c_decompress_large_window(input: &[u8], expected_size: usize) -> Option<V
 }
 
 /// Returns the numeric quality of a level, for the C side.
-pub fn quality_number(quality: QualityLevel) -> c_int {
-    usize::from(quality) as c_int
+pub fn quality_number(quality: Quality) -> c_int {
+    c_int::from(quality.get())
 }
 
-/// Builds parameters for `quality` and a window size of `lgwin` bits.
+/// Builds a configuration for `quality` and a window size of `lgwin` bits.
 ///
 /// # Panics
 ///
 /// Panics when `lgwin` is outside the range the Brotli format allows.
-pub fn params(quality: QualityLevel, lgwin: u8) -> CompressParams {
-    let lgwin = WindowBits::standard(lgwin).expect("window size out of range");
-    CompressParams::new(quality, lgwin)
+pub fn config(quality: Quality, lgwin: u8) -> EncoderConfig {
+    EncoderConfig::default()
+        .with_quality(quality)
+        .with_window(Window::standard(lgwin).expect("window size out of range"))
 }
 
-/// Builds parameters that pin the size hint, so streaming and one-shot agree.
-///
-/// The one-shot entry points substitute the input length for a missing hint,
-/// exactly as the reference one-shot API does, while the streaming adapters
-/// have no length to substitute. Qualities four and five choose their match
-/// finder from the hint, so a comparison between the two has to fix it.
+/// Builds a compressor for `quality` and a window size of `lgwin` bits.
 ///
 /// # Panics
 ///
-/// Panics when `lgwin` is outside the range the Brotli format allows.
-pub fn params_with_hint(quality: QualityLevel, lgwin: u8, size_hint: usize) -> CompressParams {
-    params(quality, lgwin).with_size_hint(Some(size_hint))
+/// Panics when the configuration is one no compressor can be built for.
+pub fn encoder(quality: Quality, lgwin: u8) -> Compressor {
+    Compressor::new(config(quality, lgwin)).expect("a legal configuration")
+}
+
+/// Builds a compressor pinned to `level`, so a backend can be exercised.
+///
+/// # Panics
+///
+/// Panics when the configuration is one no compressor can be built for.
+pub fn encoder_on(level: fearless_simd::Level, quality: Quality, lgwin: u8) -> Compressor {
+    Compressor::builder(config(quality, lgwin))
+        .with_level(level)
+        .build()
+        .expect("a legal configuration")
 }
 
 /// The two qualities the fast encoder implements.
-pub const FAST_QUALITIES: [QualityLevel; 2] = [QualityLevel::Q0, QualityLevel::Q1];
+pub const FAST_QUALITIES: [Quality; 2] = [Quality::Q0, Quality::Q1];
 
 /// The eight qualities the greedy encoder implements.
-pub const GREEDY_QUALITIES: [QualityLevel; 8] = [
-    QualityLevel::Q2,
-    QualityLevel::Q3,
-    QualityLevel::Q4,
-    QualityLevel::Q5,
-    QualityLevel::Q6,
-    QualityLevel::Q7,
-    QualityLevel::Q8,
-    QualityLevel::Q9,
+pub const GREEDY_QUALITIES: [Quality; 8] = [
+    Quality::Q2,
+    Quality::Q3,
+    Quality::Q4,
+    Quality::Q5,
+    Quality::Q6,
+    Quality::Q7,
+    Quality::Q8,
+    Quality::Q9,
 ];
 
 /// The two qualities the high-quality encoder implements.
-pub const HQ_QUALITIES: [QualityLevel; 2] = [QualityLevel::Q10, QualityLevel::Q11];
+pub const HQ_QUALITIES: [Quality; 2] = [Quality::Q10, Quality::Q11];
 
 /// Largest input the high-quality qualities are exercised over by default.
 pub const HQ_INPUT_CAP: usize = 1 << 16;
@@ -541,8 +549,8 @@ pub const HQ_INPUT_CAP: usize = 1 << 16;
 /// coverage to the tests built for it: `vendor_corpus.rs`'s multi-fragment
 /// case, and `streaming.rs`'s chunk-boundary cases, both of which still run
 /// these qualities over inputs spanning several blocks.
-pub fn prefix_for(quality: QualityLevel, data: &[u8]) -> &[u8] {
-    if quality >= QualityLevel::Q10 {
+pub fn prefix_for(quality: Quality, data: &[u8]) -> &[u8] {
+    if quality >= Quality::Q10 {
         &data[..data.len().min(HQ_INPUT_CAP)]
     } else {
         data
@@ -550,19 +558,19 @@ pub fn prefix_for(quality: QualityLevel, data: &[u8]) -> &[u8] {
 }
 
 /// Every quality this crate implements.
-pub const IMPLEMENTED_QUALITIES: [QualityLevel; 12] = [
-    QualityLevel::Q0,
-    QualityLevel::Q1,
-    QualityLevel::Q2,
-    QualityLevel::Q3,
-    QualityLevel::Q4,
-    QualityLevel::Q5,
-    QualityLevel::Q6,
-    QualityLevel::Q7,
-    QualityLevel::Q8,
-    QualityLevel::Q9,
-    QualityLevel::Q10,
-    QualityLevel::Q11,
+pub const IMPLEMENTED_QUALITIES: [Quality; 12] = [
+    Quality::Q0,
+    Quality::Q1,
+    Quality::Q2,
+    Quality::Q3,
+    Quality::Q4,
+    Quality::Q5,
+    Quality::Q6,
+    Quality::Q7,
+    Quality::Q8,
+    Quality::Q9,
+    Quality::Q10,
+    Quality::Q11,
 ];
 
 /// Deterministic xorshift generator, so corpora are reproducible.

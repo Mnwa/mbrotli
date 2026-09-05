@@ -123,6 +123,7 @@ impl GreedyEncoder {
     }
 
     /// Returns whether the final meta-block has already been written.
+    #[cfg(test)]
     pub(crate) const fn is_finished(&self) -> bool {
         self.finished
     }
@@ -189,6 +190,7 @@ impl GreedyEncoder {
     /// Returns [`BrotliCompressError::BufferOverflow`] when the scratch buffer
     /// proved too small, which would indicate a bug in the size bound.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[cfg(test)]
     pub(crate) fn encode_block(&mut self, input: &[u8], is_last: bool) -> BrotliResult<&[u8]> {
         debug_assert!(!self.finished);
         debug_assert!(input.len() <= self.block_size_limit());
@@ -241,12 +243,16 @@ impl GreedyEncoder {
     /// Returns [`BrotliCompressError::BufferOverflow`] when the scratch buffer
     /// proved too small, which would indicate a bug in the size bound.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub(crate) fn flush_block(&mut self, input: &[u8]) -> BrotliResult<&[u8]> {
+    pub(crate) fn flush_block(
+        &mut self,
+        input: &[u8],
+        attached: Option<&SharedContextInner>,
+    ) -> BrotliResult<&[u8]> {
         debug_assert!(!self.finished);
         debug_assert!(input.len() <= self.block_size_limit());
 
         self.copy_input_to_ring_buffer(input);
-        self.encode_data(false, true, None)?;
+        self.encode_data(false, true, attached)?;
 
         // `encode_data` may have returned without touching the scratch buffer
         // — a flush with nothing buffered still has to emit the padding, so
@@ -263,6 +269,14 @@ impl GreedyEncoder {
             Some(output) => Ok(output),
             None => Err(BrotliCompressError::BufferOverflow),
         }
+    }
+
+    /// Returns the bytes this encoder keeps allocated between blocks.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        self.ringbuffer.retained_bytes()
+            + self.matcher.retained_bytes()
+            + self.commands.capacity() * size_of::<Command>()
+            + self.storage.capacity()
     }
 
     /// Appends `input` to the window (`CopyInputToRingBuffer`).

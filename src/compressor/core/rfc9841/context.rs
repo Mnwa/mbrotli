@@ -24,11 +24,12 @@
 //! borrow the compression entry points take is what makes one context back at
 //! most one active session.
 
-use crate::compressor::QualityLevel;
 use crate::compressor::shared::SharedBrotliError;
 
 use super::prefix::{MAX_PREFIX_DICTIONARIES, MAX_PREFIX_SEGMENT_BYTES, PrefixSources};
-use super::prepared::{HASH_INPUT_BYTES, PreparedPrefix};
+#[cfg(any(test, feature = "diagnostics"))]
+use super::prepared::HASH_INPUT_BYTES;
+use super::prepared::PreparedPrefix;
 
 /// The caller's dictionary bytes, in attachment order.
 ///
@@ -92,6 +93,10 @@ impl PreparedDictionaryIndexes {
 }
 
 /// Where an attached dictionary matched, and for how long.
+///
+/// Only the longest-match diagnostic produces one; the match finders read a
+/// `SearchResult` instead.
+#[cfg(any(test, feature = "diagnostics"))]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PrefixMatch {
     /// Logical address of the first matching byte in the concatenated prefix.
@@ -203,6 +208,7 @@ impl SharedContextInner {
     ///
     /// An empty context is not a special case anywhere else: it is what makes
     /// a shared call produce exactly the bytes the ordinary call would.
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.dictionaries.prefix().is_empty()
     }
@@ -226,6 +232,11 @@ impl SharedContextInner {
     /// `None` when nothing matched, or when `input` is shorter than the eight
     /// bytes a bucket key is computed from: the prepared index holds no entry
     /// that could be probed with fewer.
+    ///
+    /// No encoder takes this path — a match finder calls
+    /// [`SharedContextInner::find_match`] instead — so it is compiled only for
+    /// the `diagnostics` feature that exposes it and for this module's tests.
+    #[cfg(any(test, feature = "diagnostics"))]
     pub(crate) fn longest_prefix_match(&self, input: &[u8]) -> Option<PrefixMatch> {
         let head = u64::from_le_bytes(*input.first_chunk::<HASH_INPUT_BYTES>()?);
         let sources = self.dictionaries.prefix();
@@ -282,29 +293,6 @@ fn estimate_allocation(attachments: &[Box<[u8]>]) -> Option<u64> {
         total = total.checked_add(PreparedPrefix::allocation_bound(attachment.len())?)?;
     }
     Some(total)
-}
-
-/// Validates that a context prepared for `prepared` may serve `requested`.
-///
-/// A context prepared for a quality may be used by that quality and every
-/// lower one, because a lower quality needs no index a higher one does not
-/// already have. The reverse is refused rather than silently ignored.
-///
-/// # Errors
-///
-/// Returns [`SharedBrotliError::SharedContextQualityMismatch`] when the call
-/// asks for more than the context was prepared for.
-pub(crate) fn check_quality(
-    requested: QualityLevel,
-    prepared: QualityLevel,
-) -> Result<(), SharedBrotliError> {
-    if requested > prepared {
-        return Err(SharedBrotliError::SharedContextQualityMismatch {
-            requested: usize::from(requested),
-            prepared: usize::from(prepared),
-        });
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -440,20 +428,6 @@ mod tests {
                 context.allocated_size()
             );
         }
-    }
-
-    #[test]
-    fn a_lower_quality_may_use_a_higher_contexts_preparation() {
-        assert!(check_quality(QualityLevel::Q5, QualityLevel::Q11).is_ok());
-        assert!(check_quality(QualityLevel::Q11, QualityLevel::Q11).is_ok());
-        assert!(check_quality(QualityLevel::Q0, QualityLevel::Q0).is_ok());
-        assert!(matches!(
-            check_quality(QualityLevel::Q11, QualityLevel::Q9),
-            Err(SharedBrotliError::SharedContextQualityMismatch {
-                requested: 11,
-                prepared: 9
-            })
-        ));
     }
 
     #[test]

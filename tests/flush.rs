@@ -10,32 +10,36 @@
 
 mod support;
 
-use mbrotli::Brotli;
-use mbrotli::compressor::{CompressParams, QualityLevel};
+use mbrotli::io::FinishError;
+use mbrotli::{Compressor, Quality, StreamConfig};
 use std::io::Write;
 use support::{
-    CParams, IMPLEMENTED_QUALITIES, c_compress_flushing, c_decompress, c_decompress_partial, params,
+    CParams, IMPLEMENTED_QUALITIES, c_compress_flushing, c_decompress, c_decompress_partial,
+    encoder,
 };
 
 /// Window every case in this file uses.
 const LGWIN: u8 = 22;
 
 /// Compresses `chunks` through the writer, flushing after all but the last.
-fn flush_between_chunks(chunks: &[&[u8]], parameters: CompressParams) -> Vec<u8> {
-    let compressor = Brotli::default().compressor();
-    let mut sink = compressor.compress_writer(parameters, Vec::new());
+fn flush_between_chunks(encoder: &mut Compressor, chunks: &[&[u8]]) -> Vec<u8> {
+    let mut sink = encoder
+        .writer(Vec::new(), StreamConfig::default())
+        .expect("a legal stream");
     for (index, chunk) in chunks.iter().enumerate() {
         sink.write_all(chunk).expect("write failed");
         if index + 1 != chunks.len() {
             sink.flush().expect("flush failed");
         }
     }
-    sink.finish().expect("finish failed")
+    sink.finish()
+        .map_err(FinishError::into_error)
+        .expect("finish failed")
 }
 
-/// The C parameters matching [`params`], so the two encoders are comparable.
-fn c_params(quality: QualityLevel) -> CParams {
-    CParams::new(usize::from(quality) as std::ffi::c_int, LGWIN.into())
+/// The C parameters matching the Rust configuration, so the two are comparable.
+fn c_params(quality: Quality) -> CParams {
+    CParams::new(std::ffi::c_int::from(quality.get()), LGWIN.into())
 }
 
 /// Chunk sets that put a flush in every interesting place.
@@ -83,8 +87,10 @@ fn flushed_prefix_decodes_before_the_stream_is_finished() {
             };
             let expected: Vec<u8> = head.concat();
 
-            let compressor = Brotli::default().compressor();
-            let mut sink = compressor.compress_writer(params(quality, LGWIN), Vec::new());
+            let mut encoder = encoder(quality, LGWIN);
+            let mut sink = encoder
+                .writer(Vec::new(), StreamConfig::default())
+                .expect("a legal stream");
             for chunk in head {
                 sink.write_all(chunk).expect("write failed");
             }
@@ -107,7 +113,7 @@ fn flushing_does_not_break_the_finished_stream() {
         for chunks in chunk_sets() {
             let borrowed: Vec<&[u8]> = chunks.iter().map(Vec::as_slice).collect();
             let expected: Vec<u8> = chunks.concat();
-            let compressed = flush_between_chunks(&borrowed, params(quality, LGWIN));
+            let compressed = flush_between_chunks(&mut encoder(quality, LGWIN), &borrowed);
 
             let decoded = c_decompress(&compressed, expected.len().max(1))
                 .expect("the decoder rejected a finished stream that had been flushed");
@@ -124,7 +130,7 @@ fn flushing_matches_the_reference_byte_for_byte() {
     for quality in IMPLEMENTED_QUALITIES {
         for chunks in chunk_sets() {
             let borrowed: Vec<&[u8]> = chunks.iter().map(Vec::as_slice).collect();
-            let ours = flush_between_chunks(&borrowed, params(quality, LGWIN));
+            let ours = flush_between_chunks(&mut encoder(quality, LGWIN), &borrowed);
             let theirs = c_compress_flushing(c_params(quality), &borrowed);
             assert_eq!(
                 ours,
@@ -141,8 +147,10 @@ fn flushing_without_input_still_emits_the_header() {
     // The stream header is bits, not bytes, so a flush before any input has to
     // pad it out; a caller that flushes early must still get something.
     for quality in IMPLEMENTED_QUALITIES {
-        let compressor = Brotli::default().compressor();
-        let mut sink = compressor.compress_writer(params(quality, LGWIN), Vec::new());
+        let mut encoder = encoder(quality, LGWIN);
+        let mut sink = encoder
+            .writer(Vec::new(), StreamConfig::default())
+            .expect("a legal stream");
         sink.flush().expect("flush failed");
         assert!(
             !sink.get_ref().is_empty(),
@@ -150,7 +158,10 @@ fn flushing_without_input_still_emits_the_header() {
         );
 
         let theirs = c_compress_flushing(c_params(quality), &[&[][..], &[][..]]);
-        let finished = sink.finish().expect("finish failed");
+        let finished = sink
+            .finish()
+            .map_err(FinishError::into_error)
+            .expect("finish failed");
         assert_eq!(
             finished, theirs,
             "q{quality:?}: an early flush differed from the reference"
@@ -163,8 +174,10 @@ fn a_flush_with_nothing_pending_is_idempotent() {
     // Two flushes in a row must not emit a second padding block: the stream is
     // already aligned, and the reference injects nothing in that case.
     for quality in IMPLEMENTED_QUALITIES {
-        let compressor = Brotli::default().compressor();
-        let mut sink = compressor.compress_writer(params(quality, LGWIN), Vec::new());
+        let mut encoder = encoder(quality, LGWIN);
+        let mut sink = encoder
+            .writer(Vec::new(), StreamConfig::default())
+            .expect("a legal stream");
         sink.write_all(b"some payload worth compressing")
             .expect("write failed");
         sink.flush().expect("first flush failed");
@@ -184,10 +197,15 @@ fn a_stream_that_is_never_flushed_is_unchanged() {
     // no flush has to give exactly the bytes it always did.
     for quality in IMPLEMENTED_QUALITIES {
         let data = b"the quick brown fox jumps over the lazy dog. ".repeat(200);
-        let compressor = Brotli::default().compressor();
-        let mut sink = compressor.compress_writer(params(quality, LGWIN), Vec::new());
+        let mut encoder = encoder(quality, LGWIN);
+        let mut sink = encoder
+            .writer(Vec::new(), StreamConfig::default())
+            .expect("a legal stream");
         sink.write_all(&data).expect("write failed");
-        let streamed = sink.finish().expect("finish failed");
+        let streamed = sink
+            .finish()
+            .map_err(FinishError::into_error)
+            .expect("finish failed");
 
         let theirs = c_compress_flushing(c_params(quality), &[&data[..]]);
         assert_eq!(

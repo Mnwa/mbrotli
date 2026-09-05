@@ -6,10 +6,9 @@
 
 mod support;
 
-use mbrotli::Brotli;
 use support::{
-    IMPLEMENTED_QUALITIES, Rng, c_compress, c_decompress, host_levels, params, prefix_for,
-    quality_number,
+    IMPLEMENTED_QUALITIES, Rng, c_compress, c_decompress, encoder, encoder_on, host_levels,
+    prefix_for, quality_number,
 };
 
 /// Builds one pseudo-random input from a mixture of shapes.
@@ -69,22 +68,21 @@ fn generate(rng: &mut Rng, max_len: usize) -> Vec<u8> {
 
 #[test]
 fn random_inputs_match_the_c_encoder_and_round_trip() {
-    let compressor = Brotli::default().compressor();
     let mut rng = Rng::new(0xC0FF_EE00_1234_5678);
     for case in 0..400u32 {
         let data = generate(&mut rng, 300_000);
         let lgwin = 10 + (rng.next_u64() % 15) as u8;
         for quality in IMPLEMENTED_QUALITIES {
             let data = prefix_for(quality, &data);
-            let expected = c_compress(quality_number(quality), lgwin as i32, data);
-            let actual = compressor
-                .compress(params(quality, lgwin), data)
+            let expected = c_compress(quality_number(quality), i32::from(lgwin), data);
+            let actual = encoder(quality, lgwin)
+                .compress(data)
                 .expect("compression failed");
             assert_eq!(
                 actual,
                 expected,
                 "case {case}, quality {}, lgwin {lgwin}, {} input bytes",
-                usize::from(quality),
+                quality.get(),
                 data.len()
             );
             let decoded = c_decompress(&actual, data.len())
@@ -105,9 +103,8 @@ fn random_inputs_agree_across_backends() {
             let data = prefix_for(quality, &data);
             let mut reference: Option<Vec<u8>> = None;
             for &(level_name, level) in &levels {
-                let actual = Brotli::from(level)
-                    .compressor()
-                    .compress(params(quality, lgwin), data)
+                let actual = encoder_on(level, quality, lgwin)
+                    .compress(data)
                     .expect("compression failed");
                 match &reference {
                     None => reference = Some(actual),
@@ -123,22 +120,21 @@ fn random_inputs_agree_across_backends() {
 
 #[test]
 fn short_random_inputs_match_the_c_encoder() {
-    let compressor = Brotli::default().compressor();
     let mut rng = Rng::new(0x0F0F_0F0F_0F0F_0F0F);
     for case in 0..3_000u32 {
         let data = generate(&mut rng, 512);
         let lgwin = 10 + (rng.next_u64() % 15) as u8;
         for quality in IMPLEMENTED_QUALITIES {
             let data = prefix_for(quality, &data);
-            let expected = c_compress(quality_number(quality), lgwin as i32, data);
-            let actual = compressor
-                .compress(params(quality, lgwin), data)
+            let expected = c_compress(quality_number(quality), i32::from(lgwin), data);
+            let actual = encoder(quality, lgwin)
+                .compress(data)
                 .expect("compression failed");
             assert_eq!(
                 actual,
                 expected,
                 "case {case}, quality {}, lgwin {lgwin}, {} input bytes",
-                usize::from(quality),
+                quality.get(),
                 data.len()
             );
         }

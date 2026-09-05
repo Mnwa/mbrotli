@@ -203,11 +203,6 @@ impl FastEncoder {
         self.block_size_limit
     }
 
-    /// Returns whether the final meta-block has already been written.
-    pub(crate) const fn is_finished(&self) -> bool {
-        self.finished
-    }
-
     /// Returns whether `params` would build an encoder of exactly this shape.
     ///
     /// A workspace uses this to decide whether resetting is equivalent to
@@ -238,6 +233,11 @@ impl FastEncoder {
         self.core.reset();
         (self.last_bytes, self.last_bytes_bits) = self.header;
         self.finished = false;
+    }
+
+    /// Returns the bytes this encoder keeps allocated between fragments.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        self.table.capacity() * size_of::<i32>() + self.storage.capacity()
     }
 
     /// Returns the scratch capacity one fragment of `input_len` bytes needs.
@@ -475,7 +475,10 @@ mod tests {
             let lgwin_bits = WindowBits::standard(lgwin).unwrap_or(WindowBits::DEFAULT);
             let params = CompressParams::new(QualityLevel::Q0, lgwin_bits);
             let encoder = FastEncoder::new(level, &params)?;
-            assert_eq!(encoder.block_size_limit(), 1 << usize::from(lgwin_bits));
+            assert_eq!(
+                encoder.block_size_limit(),
+                1 << usize::from(lgwin_bits.bits())
+            );
         }
         Ok(())
     }

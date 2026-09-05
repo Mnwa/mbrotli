@@ -1,0 +1,160 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  # The differential and fuzz jobs are slow enough to be worth running on their
+  # own schedule rather than on every push.
+  schedule:
+    - cron: "0 3 * * *"
+
+env:
+  CARGO_TERM_COLOR: always
+  # A differential failure is worth the full backtrace it takes to place.
+  RUST_BACKTRACE: 1
+
+jobs:
+  check:
+    name: fmt, clippy, docs and package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      # `--locked` is deliberately absent: this is a library, so `Cargo.lock`
+      # is not committed and a fresh checkout has none to honour. The
+      # repository's own checks use it because a working tree has one.
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo doc --workspace --all-features --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - run: cargo package --allow-dirty
+
+  test:
+    name: test on ${{ matrix.os }} (${{ matrix.toolchain }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # x86-64 and AArch64 both actually execute here, which is what makes the
+        # backend-identity tests evidence rather than a compile check.
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        toolchain: [stable]
+        include:
+          # The MSRV `Cargo.toml` declares, checked on one target.
+          - os: ubuntu-latest
+            toolchain: "1.88"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - uses: Swatinem/rust-cache@v2
+      # The default feature set is what a dependant gets, and the full one is
+      # what the tests need; both have to build.
+      - run: cargo test --workspace --release
+      - run: cargo test --workspace --all-features --release
+
+  fuzz:
+    name: fuzz targets and their regression corpus
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz/afl
+      - name: install cargo-afl
+        run: cargo install cargo-afl --locked
+      - name: check
+        working-directory: fuzz/afl
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets -- -D warnings
+      # `cargo afl test` rather than `cargo test`: the fuzz binaries link AFL's
+      # runtime, so plain `cargo test` cannot link them. It replays the
+      # committed regression corpus through the target bodies.
+      - name: replay the regression corpus
+        working-directory: fuzz/afl
+        run: cargo afl test
+
+  smoke-fuzz:
+    name: bounded fuzz campaign
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [differential_c, streaming_equivalence, dictionary, compressor_lifecycle]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz/afl
+      - run: cargo install cargo-afl --locked
+      - name: prepare seeds
+        working-directory: fuzz/afl
+        run: ./prepare-seeds.sh
+      - name: build the targets
+        working-directory: fuzz/afl
+        run: cargo afl build --release
+      # `TARGET` comes from this workflow's own literal matrix, but it is passed
+      # through the environment rather than interpolated into the shell, which
+      # is the pattern that stays correct if the list ever grows a value with a
+      # shell metacharacter in it.
+      - name: run for ten minutes
+        working-directory: fuzz/afl
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          cargo afl system-config || true
+          seeds=seeds/params
+          if [ "$TARGET" = dictionary ]; then
+            seeds=seeds/dictionary
+          fi
+          timeout --preserve-status 600 \
+            cargo afl fuzz -i "$seeds" -o findings "target/release/$TARGET" || true
+      - name: fail on any crash
+        working-directory: fuzz/afl
+        run: |
+          crashes=$(find findings -path '*/crashes/id:*' | wc -l)
+          echo "crashes: $crashes"
+          test "$crashes" -eq 0
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: findings-${{ matrix.target }}
+          path: fuzz/afl/findings
+
+  benchmark-smoke:
+    name: benchmarks compile and validate
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Every benchmark validates its corpus against the C encoder and decoder
+      # before timing anything, so a short run is a differential check as well
+      # as a smoke test. The numbers a shared runner produces are not evidence;
+      # the published figures come from a pinned machine.
+      - run: >
+          cargo bench --bench compress --
+          --sample-size 10 --warm-up-time 1 --measurement-time 2

@@ -224,6 +224,11 @@ impl<const BUCKET_BITS: u32, const SWEEP_BITS: u32, const HASH_LEN: u32, const U
     const SWEEP_MASK: usize = (Self::SWEEP - 1) << 3;
 
     /// Creates an empty table.
+    /// Returns the bytes this match finder keeps allocated.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        self.buckets.capacity() * size_of::<u32>()
+    }
+
     pub(crate) fn new() -> Self {
         Self {
             buckets: vec![0u32; Self::BUCKET_SIZE],
@@ -450,6 +455,11 @@ impl<const HASH64: bool, const BUCKET_BITS: u32> BucketMatcher<HASH64, BUCKET_BI
     const BUCKET_SIZE: usize = 1usize << BUCKET_BITS;
 
     /// Creates an empty table of the shape `shape` describes.
+    /// Returns the bytes this match finder keeps allocated.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        self.num.capacity() * size_of::<u16>() + self.buckets.capacity() * size_of::<u32>()
+    }
+
     pub(crate) fn new(shape: BucketShape) -> Self {
         debug_assert_eq!(shape.bucket_bits, BUCKET_BITS);
         let block_size = 1usize << shape.block_bits;
@@ -707,6 +717,15 @@ impl<const NUM_BANKS: usize, const BANK_BITS: u32> ChainMatcher<NUM_BANKS, BANK_
     const BANK_SELECT: usize = NUM_BANKS - 1;
 
     /// Creates an empty chain table of the shape `shape` describes.
+    /// Returns the bytes this match finder keeps allocated.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        self.addr.capacity() * size_of::<u32>()
+            + self.head.capacity() * size_of::<u16>()
+            + self.tiny_hash.capacity()
+            + self.slots.capacity() * size_of::<ChainSlot>()
+            + self.free_slot_idx.capacity() * size_of::<u16>()
+    }
+
     pub(crate) fn new(shape: ChainShape) -> Self {
         debug_assert_eq!(shape.num_banks, NUM_BANKS);
         debug_assert_eq!(shape.bank_bits, BANK_BITS);
@@ -987,6 +1006,11 @@ impl MatchFinder {
     /// [`Matcher::prepare`].
     pub(crate) fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8]) -> bool {
         with_matcher!(self, |matcher| matcher.prepare(one_shot, input_size, data))
+    }
+
+    /// Returns the bytes the chosen match finder keeps allocated.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        with_matcher!(self, |matcher| matcher.retained_bytes())
     }
 
     /// Records the positions spanning the previous block boundary.

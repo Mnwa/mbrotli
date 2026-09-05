@@ -384,7 +384,7 @@ the reference's `limit`; only `extend_last_command` runs on across seams.
 
 ## Known gaps
 
-- **Large-window history stops at 30 bits.** `WindowBits::large` reaches these
+- **Large-window history stops at 30 bits.** `Window::large` reaches these
   qualities and `DistanceParams::for_window` computes the widened RFC 9841
   alphabet and its `alphabet_size_limit`, but retained history is capped at 30
   bits by `ResolvedWindow::encoder_bits`, so the binary tree never indexes a

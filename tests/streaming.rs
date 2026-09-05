@@ -2,25 +2,35 @@
 
 mod support;
 
-use mbrotli::Brotli;
-use mbrotli::compressor::CompressParams;
+use mbrotli::io::FinishError;
+use mbrotli::{Compressor, EncoderStatus, InputSize, Operation, StreamConfig};
 use std::io::{Read, Write};
-use support::{IMPLEMENTED_QUALITIES, c_decompress, params, params_with_hint, structural_corpora};
+use support::{IMPLEMENTED_QUALITIES, c_decompress, encoder, structural_corpora};
 
 /// Compresses `data` through the writer adapter using fixed-size chunks.
-fn compress_with_writer(data: &[u8], chunk: usize, parameters: CompressParams) -> Vec<u8> {
-    let compressor = Brotli::default().compressor();
-    let mut sink = compressor.compress_writer(parameters, Vec::new());
+fn compress_with_writer(
+    encoder: &mut Compressor,
+    data: &[u8],
+    chunk: usize,
+    stream: StreamConfig,
+) -> Vec<u8> {
+    let mut sink = encoder.writer(Vec::new(), stream).expect("a legal stream");
     for piece in data.chunks(chunk.max(1)) {
         sink.write_all(piece).expect("write failed");
     }
-    sink.finish().expect("finish failed")
+    sink.finish()
+        .map_err(FinishError::into_error)
+        .expect("finish failed")
 }
 
 /// Compresses `data` through the reader adapter using fixed-size reads.
-fn compress_with_reader(data: &[u8], chunk: usize, parameters: CompressParams) -> Vec<u8> {
-    let compressor = Brotli::default().compressor();
-    let mut source = compressor.compress_reader(parameters, data);
+fn compress_with_reader(
+    encoder: &mut Compressor,
+    data: &[u8],
+    chunk: usize,
+    stream: StreamConfig,
+) -> Vec<u8> {
+    let mut source = encoder.reader(data, stream).expect("a legal stream");
     let mut output = Vec::new();
     let mut buffer = vec![0u8; chunk.max(1)];
     loop {
@@ -32,15 +42,53 @@ fn compress_with_reader(data: &[u8], chunk: usize, parameters: CompressParams) -
     }
 }
 
+/// Compresses `data` through the low-level session in fixed-size steps.
+fn compress_with_session(
+    encoder: &mut Compressor,
+    data: &[u8],
+    chunk: usize,
+    stream: StreamConfig,
+) -> Vec<u8> {
+    let mut compressed = Vec::new();
+    let mut buffer = vec![0u8; chunk.max(1)];
+    let mut session = encoder.start(stream).expect("a legal stream");
+    let mut offset = 0usize;
+    loop {
+        let take = (data.len() - offset).min(chunk.max(1));
+        // Only the call that carries the last of the input may finish; asking
+        // to finish early would terminate the stream on a prefix.
+        let operation = if offset + take == data.len() {
+            Operation::Finish
+        } else {
+            Operation::Process
+        };
+        let progress = session
+            .process(&data[offset..offset + take], &mut buffer, operation)
+            .expect("the session failed");
+        offset += progress.consumed;
+        compressed.extend_from_slice(&buffer[..progress.produced]);
+        if progress.status == EncoderStatus::Finished {
+            assert!(session.is_finished());
+            return compressed;
+        }
+    }
+}
+
 #[test]
 fn writer_output_is_independent_of_the_chunk_size() {
     let data: Vec<u8> = (0..200_000u32).map(|i| (i % 61) as u8).collect();
     for quality in IMPLEMENTED_QUALITIES {
-        let parameters = params(quality, 16);
-        let reference = compress_with_writer(&data, data.len(), parameters);
+        let mut encoder = encoder(quality, 16);
+        let stream = StreamConfig::default();
+        let reference = compress_with_writer(&mut encoder, &data, data.len(), stream);
         for chunk in [1usize, 3, 1024, 65_536, 65_537, 131_072] {
-            let actual = compress_with_writer(&data, chunk, parameters);
-            assert_eq!(actual, reference, "chunk {chunk}, quality {quality:?}");
+            let actual = compress_with_writer(&mut encoder, &data, chunk, stream);
+            assert_eq!(
+                actual,
+                reference,
+                "chunk {chunk}, quality {}",
+                quality.get()
+            );
         }
     }
 }
@@ -49,30 +97,52 @@ fn writer_output_is_independent_of_the_chunk_size() {
 fn reader_output_is_independent_of_the_read_size() {
     let data: Vec<u8> = (0..200_000u32).map(|i| (i % 61) as u8).collect();
     for quality in IMPLEMENTED_QUALITIES {
-        let parameters = params(quality, 16);
-        let reference = compress_with_reader(&data, 1 << 20, parameters);
+        let mut encoder = encoder(quality, 16);
+        let stream = StreamConfig::default();
+        let reference = compress_with_reader(&mut encoder, &data, 1 << 20, stream);
         for chunk in [1usize, 7, 4096, 65_536] {
-            let actual = compress_with_reader(&data, chunk, parameters);
-            assert_eq!(actual, reference, "chunk {chunk}, quality {quality:?}");
+            let actual = compress_with_reader(&mut encoder, &data, chunk, stream);
+            assert_eq!(
+                actual,
+                reference,
+                "chunk {chunk}, quality {}",
+                quality.get()
+            );
         }
     }
 }
 
 #[test]
-fn writer_and_reader_agree_with_each_other() {
+fn every_streaming_shape_agrees_with_the_others() {
     for corpus in structural_corpora() {
         for quality in IMPLEMENTED_QUALITIES {
-            let parameters = params(quality, 18);
-            let written = compress_with_writer(&corpus.data, 4096, parameters);
-            let read = compress_with_reader(&corpus.data, 4096, parameters);
-            assert_eq!(written, read, "case {}", corpus.name);
+            let mut encoder = encoder(quality, 18);
+            let stream = StreamConfig::default();
+            let written = compress_with_writer(&mut encoder, &corpus.data, 4096, stream);
+            let read = compress_with_reader(&mut encoder, &corpus.data, 4096, stream);
+            let session = compress_with_session(&mut encoder, &corpus.data, 4096, stream);
+            assert_eq!(written, read, "case {}: writer and reader", corpus.name);
+            assert_eq!(written, session, "case {}: writer and session", corpus.name);
         }
     }
 }
 
 #[test]
-fn streaming_matches_one_shot_for_inputs_past_the_fallback() {
-    let compressor = Brotli::default().compressor();
+fn a_one_byte_schedule_reaches_the_same_stream() {
+    // One byte in and one byte out at every step: the state machine has to make
+    // progress without ever having room for a whole meta-block.
+    let data = b"the quick brown fox jumps over the lazy dog. ".repeat(40);
+    for quality in IMPLEMENTED_QUALITIES {
+        let mut encoder = encoder(quality, 16);
+        let stream = StreamConfig::default();
+        let reference = compress_with_session(&mut encoder, &data, 1 << 20, stream);
+        let crawled = compress_with_session(&mut encoder, &data, 1, stream);
+        assert_eq!(crawled, reference, "quality {}", quality.get());
+    }
+}
+
+#[test]
+fn streaming_matches_one_shot_when_the_size_is_declared() {
     for corpus in structural_corpora() {
         // Tiny inputs can take the one-shot uncompressed fallback, which the
         // streaming API deliberately does not apply.
@@ -80,31 +150,43 @@ fn streaming_matches_one_shot_for_inputs_past_the_fallback() {
             continue;
         }
         for quality in IMPLEMENTED_QUALITIES {
-            // The greedy qualities pick their match finder from the size hint,
-            // so both paths have to be given the same one.
-            let parameters = params_with_hint(quality, 18, corpus.data.len());
-            let one_shot = compressor
-                .compress(parameters, &corpus.data)
-                .expect("compression failed");
-            let streamed = compress_with_writer(&corpus.data, 4096, parameters);
-            assert_eq!(
-                streamed, one_shot,
-                "case {}, quality {quality:?}",
-                corpus.name
-            );
+            let mut encoder = encoder(quality, 18);
+            let one_shot = encoder.compress(&corpus.data).expect("compression failed");
+            // Declaring the size is what makes the two agree: qualities four and
+            // five choose their match finder from it.
+            let stream = StreamConfig::from(InputSize::Exact(corpus.data.len() as u64));
+            for streamed in [
+                compress_with_writer(&mut encoder, &corpus.data, 4096, stream),
+                compress_with_reader(&mut encoder, &corpus.data, 4096, stream),
+                compress_with_session(&mut encoder, &corpus.data, 4096, stream),
+            ] {
+                assert_eq!(
+                    streamed,
+                    one_shot,
+                    "case {}, quality {}",
+                    corpus.name,
+                    quality.get()
+                );
+            }
         }
     }
 }
 
 #[test]
-fn streamed_output_round_trips() {
+fn an_undeclared_size_still_round_trips() {
     for corpus in structural_corpora() {
         for quality in IMPLEMENTED_QUALITIES {
+            let mut encoder = encoder(quality, 16);
             for chunk in [1usize, 4096] {
                 if chunk == 1 && corpus.data.len() > 4096 {
                     continue;
                 }
-                let compressed = compress_with_writer(&corpus.data, chunk, params(quality, 16));
+                let compressed = compress_with_writer(
+                    &mut encoder,
+                    &corpus.data,
+                    chunk,
+                    StreamConfig::default(),
+                );
                 let decoded = c_decompress(&compressed, corpus.data.len()).unwrap_or_else(|| {
                     panic!("case {}: the decoder rejected the stream", corpus.name)
                 });
@@ -117,12 +199,99 @@ fn streamed_output_round_trips() {
 #[test]
 fn empty_streams_are_valid() {
     for quality in IMPLEMENTED_QUALITIES {
-        let parameters = params(quality, 22);
-        let written = compress_with_writer(&[], 1, parameters);
+        let mut encoder = encoder(quality, 22);
+        let stream = StreamConfig::default();
+        let written = compress_with_writer(&mut encoder, &[], 1, stream);
         assert!(!written.is_empty());
         assert_eq!(c_decompress(&written, 1), Some(Vec::new()));
 
-        let read = compress_with_reader(&[], 1, parameters);
+        let read = compress_with_reader(&mut encoder, &[], 1, stream);
         assert_eq!(read, written);
+
+        let session = compress_with_session(&mut encoder, &[], 1, stream);
+        assert_eq!(session, written);
+    }
+}
+
+#[test]
+fn a_finished_session_stays_finished() {
+    let mut encoder = encoder(IMPLEMENTED_QUALITIES[1], 22);
+    let mut buffer = [0u8; 512];
+    let mut session = encoder
+        .start(StreamConfig::default())
+        .expect("a legal stream");
+
+    let first = session
+        .process(b"payload payload", &mut buffer, Operation::Finish)
+        .expect("the session failed");
+    assert_eq!(first.status, EncoderStatus::Finished);
+    assert!(first.produced > 0);
+
+    for _ in 0..3 {
+        let again = session
+            .process(b"ignored", &mut buffer, Operation::Finish)
+            .expect("a finished session must stay usable");
+        assert_eq!(again.consumed, 0);
+        assert_eq!(again.produced, 0);
+        assert_eq!(again.status, EncoderStatus::Finished);
+    }
+}
+
+#[test]
+fn a_session_never_reports_progress_it_did_not_make() {
+    // Zero consumed and zero produced is only allowed alongside a status that
+    // explains why, which is what stops a caller from spinning.
+    let mut encoder = encoder(IMPLEMENTED_QUALITIES[5], 22);
+    let mut session = encoder
+        .start(StreamConfig::default())
+        .expect("a legal stream");
+    let mut nothing: [u8; 0] = [];
+
+    let idle = session
+        .process(&[], &mut nothing, Operation::Process)
+        .expect("the session failed");
+    assert_eq!((idle.consumed, idle.produced), (0, 0));
+    assert_eq!(idle.status, EncoderStatus::NeedsInput);
+
+    // With no room at all, finishing has to ask for output rather than claim it.
+    let cramped = session
+        .process(b"payload", &mut nothing, Operation::Finish)
+        .expect("the session failed");
+    assert_eq!(cramped.produced, 0);
+    assert_eq!(cramped.status, EncoderStatus::NeedsOutput);
+}
+
+#[test]
+fn a_reader_yields_nothing_for_a_zero_length_buffer() {
+    let mut encoder = encoder(IMPLEMENTED_QUALITIES[1], 22);
+    let mut source = encoder
+        .reader(&b"payload"[..], StreamConfig::default())
+        .expect("a legal stream");
+    let mut empty: [u8; 0] = [];
+    assert_eq!(source.read(&mut empty).expect("read failed"), 0);
+}
+
+#[test]
+fn a_reader_hands_back_what_it_read_ahead() {
+    let payload = b"a payload long enough to be read ahead of".repeat(50);
+    let mut encoder = encoder(IMPLEMENTED_QUALITIES[5], 22);
+    let mut source = encoder
+        .reader(payload.as_slice(), StreamConfig::default())
+        .expect("a legal stream");
+
+    let mut head = [0u8; 8];
+    let taken = source.read(&mut head).expect("read failed");
+    assert!(taken <= head.len());
+    let parts = source.into_parts();
+
+    // Whatever the source produced but the encoder had not accepted comes back
+    // rather than being dropped on the floor.
+    assert!(parts.buffered_input.len() <= payload.len());
+    if !parts.buffered_input.is_empty() {
+        assert!(
+            payload
+                .windows(parts.buffered_input.len())
+                .any(|window| window == parts.buffered_input.as_slice())
+        );
     }
 }

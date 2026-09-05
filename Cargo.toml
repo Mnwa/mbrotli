@@ -12,6 +12,7 @@ readme = "README.md"
 keywords = ["brotli", "compression", "encoder", "simd", "rfc9841"]
 categories = ["compression", "algorithms"]
 exclude = [
+    ".github/**",
     "architecture/**",
     "brotli-ffi/**",
     "docs/**",
@@ -56,6 +57,12 @@ name = "compress"
 harness = false
 
 [features]
+# Exposes the prepared-dictionary longest-match diagnostic. It answers how well
+# a candidate dictionary covers a corpus, which is worth knowing before
+# shipping one, but the candidate order it breaks ties by is an implementation
+# detail; keeping it behind a feature keeps that out of the default surface.
+diagnostics = []
+
 # `hotpath` turns the measurement anchors on; the two mode features add a
 # sampling mode on top of it, so each implies `hotpath` rather than standing
 # alone with an inert runtime.

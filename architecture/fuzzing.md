@@ -1,9 +1,10 @@
 # Fuzzing subsystem
 
-AFL++ coverage-guided fuzzing for the quality 0 and quality 1 encoders. This
-document describes the `fuzz/afl` package as it exists today: its module
-boundaries, the input model, where each oracle comes from, how a finding
-travels back into the test suite, and which boundaries are still unfuzzed.
+AFL++ coverage-guided fuzzing for every quality the crate implements, the
+streaming state machine, the prepared dictionary and the compressor lifecycle.
+This document describes the `fuzz/afl` package as it exists today: its module
+boundaries, the input model, where each oracle comes from, how a finding travels
+back into the test suite, and which boundaries are still unfuzzed.
 
 ## Ownership boundaries
 
@@ -19,7 +20,7 @@ The package is split so that the AFL dependency stops at the binary layer:
 ```mermaid
 graph TD
     subgraph engine["Engine layer (depends on afl)"]
-        bins["src/bin/ — seventeen afl::fuzz! adapters"]
+        bins["src/bin/ — twenty afl::fuzz! adapters"]
     end
 
     subgraph neutral["Engine-neutral layer (no afl dependency)"]
@@ -55,16 +56,18 @@ Only `src/bin/` names `afl`. Every target body is a plain
 `cargo afl test`, and under a debugger. That is what makes a minimised crash
 reproducible without an instrumented binary.
 
-`Context` is built once per process and carries the prepared state: a
-`Compressor` pinned to the detected level, and the deduplicated list of host
-backends. Nothing in `mbrotli` holds mutable global state — there is no
-`static mut`, `thread_local`, `OnceLock`, `RefCell`, `Mutex` or atomic in
-`src/`, and `Compressor` is `Copy` over a resolved `Level` — so AFL's
-persistent mode needs no reset hook and `fuzz_with_reset!` is not used.
+`Context` is built once per process and carries the prepared state: the detected
+`Level` and the deduplicated list of host backends. A `Compressor` is stateful
+now, so each iteration builds the one its case calls for through
+`Context::encoder`; that construction is itself part of what the targets
+exercise, and it allocates nothing large. Nothing in `mbrotli` holds mutable
+global state — there is no `static mut`, `thread_local`, `OnceLock`, `RefCell`,
+`Mutex` or atomic in `src/` — so AFL's persistent mode still needs no reset hook
+and `fuzz_with_reset!` is not used.
 
 ## Input model
 
-Five input shapes exist. All cap the payload at `MAX_PAYLOAD` (128 KiB) by
+Six input shapes exist. All cap the payload at `MAX_PAYLOAD` (128 KiB) by
 truncation rather than rejection, so an oversized input still contributes the
 structure its prefix carries.
 
@@ -72,18 +75,18 @@ structure its prefix carries.
 flowchart TD
     input["AFL input bytes"] --> shape{"target shape"}
 
-    shape -->|payload only| raw["whole input is the payload<br/>q0, q1, q3, q4, q5 roundtrip"]
+    shape -->|payload only| raw["whole input is the payload<br/>q0 to q11 roundtrip"]
     raw --> capA["cap to MAX_PAYLOAD"]
-    capA --> fixed["params = (fixed quality, WindowBits::DEFAULT)"]
+    capA --> fixed["config = (fixed quality, Window::DEFAULT)"]
 
     shape -->|settings header| hdr["decode_case: 6 header bytes"]
-    hdr --> q["byte 0 — IMPLEMENTED_QUALITIES indexed by b mod 5"]
-    hdr --> w["byte 1 — WindowBits 10 + b mod 15<br/>spans MIN to MAX, always legal"]
+    hdr --> q["byte 0 — IMPLEMENTED_QUALITIES indexed by b mod 12"]
+    hdr --> w["byte 1 — Window 10 + b mod 15<br/>spans the ordinary range, always legal"]
     hdr --> c["byte 2 — chunk = 1 shl (b mod 18), always at least 1"]
     hdr --> f["byte 3 — mode in the low two bits,<br/>literal context modelling in bit 2"]
     hdr --> bl["byte 4 — zero leaves lgblock to the encoder,<br/>otherwise BlockBits 16 + b mod 9"]
     hdr --> dc["byte 5 — postfix bits and direct groups,<br/>falling back to the default pair when unrepresentable"]
-    hdr --> capB["remainder capped to MAX_PAYLOAD,<br/>size hint pinned to its length"]
+    hdr --> capB["remainder capped to MAX_PAYLOAD,<br/>StreamConfig declares InputSize::Exact(len)"]
 
     shape -->|numeric settings| pp["parameter_parsing: 2 header bytes"]
     pp --> qn["byte 0 — quality value b mod 20<br/>reaches 10 and 12 and above, which are illegal"]
@@ -93,28 +96,31 @@ flowchart TD
     lw --> lwn["byte 0 — declared window b mod 70<br/>reaches below 10 and above 62, both illegal"]
     lw --> lwr["remainder — a whole decode_case input,<br/>so quality and distance layout still vary"]
 
-    shape -->|"shared context"| sc["shared_context: 2 bytes, then decode_case"]
+    shape -->|"dictionary"| sc["dictionary: 2 bytes, then decode_case"]
     sc --> scn["byte 0 — attachments b mod 18<br/>reaches 16 and 17, both past the format's limit"]
-    sc --> scs["byte 1 — every fourth value squeezes<br/>SharedContextLimits to an impossible budget"]
+    sc --> scs["byte 1 — every fourth value squeezes<br/>DictionaryLimits to an impossible budget"]
     sc --> scr["remainder — a whole decode_case input;<br/>its payload is cut into the attachments<br/>and then matched against them"]
+
+    shape -->|"lifecycle"| cl["compressor_lifecycle: 8 bytes, then decode_case"]
+    cl --> cln["each byte mod 8 — one command:<br/>compress, append, short destination, trim,<br/>read retained bytes, reconfigure,<br/>abandon a session, leak one and recover"]
+    cl --> clr["remainder — a whole decode_case input"]
 ```
 
 `decode_case` is closed over the legal domain by construction: its window index
-covers exactly `WindowBits::MIN..=MAX`, so the `unwrap_or(DEFAULT)` fallback is
-unreachable, `chunk` is never zero, and an unrepresentable distance layout
-falls back to the default pair. The size hint is pinned to the payload length,
-which is what the one-shot entry points would substitute anyway, so the
-streaming and one-shot targets stay comparable with each other and with the C
-reference. That keeps the equivalence and differential targets focused on
-encoder behaviour. `parameter_parsing` exists
-because of that closure — it is the only target that can reach the validating
-conversions and the large-window refusal path.
+covers exactly the ordinary `10..=24`, so the `unwrap_or(DEFAULT)` fallback is
+unreachable, `chunk` is never zero, and an unrepresentable distance layout falls
+back to `DistanceParams::Auto`. The declared size is the payload's true length,
+which is what the one-shot entry points declare for themselves, so the streaming
+and one-shot targets stay comparable with each other and with the C reference.
+That keeps the equivalence and differential targets focused on encoder
+behaviour. `parameter_parsing` exists because of that closure — it is the only
+target that can reach the validating conversions and the large-window refusal.
 
 ## Targets and oracles
 
 | Target | Input | Oracle |
 | --- | --- | --- |
-| `q0_roundtrip` | payload | no panic, `compressed.len() <= calculate_bound`, C decoder round-trip |
+| `q0_roundtrip` | payload | no panic, `compressed.len() <= Compressor::max_compressed_size`, C decoder round-trip |
 | `q1_roundtrip` | payload | same, at quality 1 |
 | `q3_roundtrip` | payload | same, at quality 3 |
 | `q4_roundtrip` | payload | same, at quality 4 |
@@ -125,14 +131,15 @@ conversions and the large-window refusal path.
 | `q9_roundtrip` | payload | same, at quality 9 |
 | `q10_roundtrip` | payload | same, at quality 10 |
 | `q11_roundtrip` | payload | same, at quality 11 |
-| `params_roundtrip` | header | bound, determinism across two runs, round-trip, over every legal setting |
+| `params_roundtrip` | header | bound, round-trip, and that a reused compressor, a second call on it and a fresh one all agree, over every legal setting |
 | `simd_equivalence` | header | every distinct host backend emits identical bytes |
 | `differential_c` | header | byte identity with Google Brotli v1.2.0 configured with the same quality, window, mode, block size, size hint, distance layout and context setting |
-| `streaming_equivalence` | header | writer output equals reader output at an arbitrary chunk size, and round-trips |
-| `output_capacity` | header | exactly sized `dst` accepted, one byte short reported as `OutputTooSmall` |
-| `parameter_parsing` | numeric | `TryFrom` contracts hold; every legal quality compresses and round-trips; qualities 0 to 2 refuse a large window through all four entry points |
-| `large_window` | large window | `WindowBits::large` contract holds; qualities 0, 1 and 2 refuse rather than dropping the request; bound, determinism, backend identity; C decoder round-trip up to 30 declared bits, and above it the stream differs from the 30-bit stream only in the six header bits |
-| `shared_context` | shared context | preparation is a transaction — a count or limit refusal yields no context; the accessors agree with what was attached; a reported prefix match really matches those bytes and fits inside both sides; the offset-to-distance mapping round-trips and saturates at both ends; the match does not depend on which backend the compressor resolved; an empty context emits exactly what `compress` emits and round-trips; below quality 5 a non-empty one is refused rather than ignored; at quality 5 and above it compresses inside the shared bound, and the slice and vector entry points agree |
+| `streaming_equivalence` | header | writer, reader and low-level session all emit the same stream at an arbitrary chunk size; every `process` call that moved nothing reports why; the stream round-trips; and a declared size reaches the one-shot bytes wherever the reference's one-shot shortcuts do not apply |
+| `output_capacity` | header | exactly sized `dst` accepted, one byte short reported as `OutputTooSmall`, appending preserves the destination's prefix and returns the range it added, and a failed call does not change the next one |
+| `parameter_parsing` | numeric | `TryFrom` and `Window` contracts hold; every legal quality compresses and round-trips; `Compressor::new` refuses a large window at qualities 0 to 2 and accepts it above |
+| `large_window` | large window | `Window::large` contract holds; qualities 0, 1 and 2 refuse when the compressor is built rather than dropping the request; bound, determinism, backend identity; C decoder round-trip up to 30 declared bits, and above it the stream differs from the 30-bit stream only in the six header bits |
+| `dictionary` | dictionary | preparation is a transaction — an empty, count or limit refusal yields no dictionary; the accessors agree with what was attached; the offset-to-distance mapping round-trips and saturates at both ends; below quality 5 every entry point refuses rather than ignoring, and the compressor still works afterwards; at quality 5 and above the three entry points agree, the output fits the bound, and a dictionary call never changes the next ordinary one |
+| `compressor_lifecycle` | lifecycle | whatever sequence of reuse, appending, deliberate failure, trimming, reconfiguration, abandoned and leaked sessions the input asks for, the compressor still emits the bytes a fresh one would for the configuration it ended up with |
 
 The oracles are layered rather than independent: `differential_c` is the
 strongest (byte identity with the reference), `params_roundtrip` and the
@@ -153,8 +160,8 @@ sequenceDiagram
     AFL->>Bin: persistent iteration, input bytes
     Bin->>Body: body(&ctx, data)
     Body->>Body: decode_case / cap
-    Body->>Lib: compress, compress_to_slice,<br/>compress_writer, compress_reader
-    Lib-->>Body: compressed bytes, or BrotliCompressError
+    Body->>Lib: Compressor::new, compress, compress_into,<br/>compress_to_slice, start, writer, reader
+    Lib-->>Body: compressed bytes, or ConfigError / EncodeError
     alt oracle needs the reference
         Body->>C: BrotliEncoderCompress
         C-->>Body: reference bytes
@@ -167,8 +174,9 @@ sequenceDiagram
 ```
 
 A panic is the signal; nothing catches it. Errors that are part of the API
-contract — `UnsupportedLargeWindow`, `OutputTooSmall`, the `TryFrom` rejections —
-are asserted on rather than treated as crashes.
+contract — `LargeWindowUnsupportedForQuality`, `OutputTooSmall`,
+`DictionaryUnsupportedForQuality`, `AbandonedSession`, the `TryFrom`
+rejections — are asserted on rather than treated as crashes.
 
 ## SIMD dispatch point
 
@@ -211,8 +219,8 @@ vendored submodule at `brotli-ffi/vendor/brotli/tests/testdata`, and
 unminimised original alongside as `seeds/*.raw`. `seeds/generic` is the raw
 test data (24 files, minimised to 21); `seeds/params` is the same files behind
 a parameter header (114, minimised to 47 — most headers reach the same code);
-`seeds/shared_context` is each parameter seed behind two more bytes, at four
-attachment counts (0, 1, 15, 16 — the empty-context path, one dictionary, the
+`seeds/dictionary` is each parameter seed behind two more bytes, at four
+attachment counts (0, 1, 15, 16 — the refused-empty path, one dictionary, the
 format's limit and one past it) crossed with a generous and an impossible
 budget.
 
@@ -236,21 +244,23 @@ sets are identical; the corpus takes under two seconds instead of minutes.
 
 - **No decompression target.** There is no decoder in `mbrotli`; round-trip
   oracles use Google's C decoder. A decoder target has to wait for one.
-- **No target drives an attached prefix through a whole compression.**
-  `shared_context` attaches dictionaries and checks the bound, determinism and
-  the two entry points against each other, but it does not round-trip a stream
-  whose distances reached into the prefix — that needs the C decoder with the
-  same dictionaries attached, which the target layer does not wire up yet.
-  `tests/shared_dictionary.rs` covers it deterministically instead.
+- **No fuzz target round-trips a dictionary stream through the decoder.**
+  `dictionary` checks preparation, addressing, the refusals and agreement
+  between the entry points, but it does not decode a stream whose distances
+  reached into the prefix — that needs the C decoder with the same dictionaries
+  attached, which the target layer does not wire up yet.
+  `tests/dictionary.rs` covers it deterministically instead.
 - **Payloads are capped at 128 KiB.** Inputs longer than that are truncated, so
   windows of 2^17 and above never span multiple encoder blocks under the
   fuzzer. `tests/vendor_corpus.rs` covers multi-fragment inputs instead,
   including a 12 MiB case.
 - **No CI fuzzing.** The repository has no CI configuration at all, so neither
   a bounded smoke campaign nor the regression replay runs automatically.
-- **The regression corpora for every quality target above one are seeded, not
-  found.** `q3_roundtrip` through `q11_roundtrip` start from the same boundary
-  cases as `q0_roundtrip`; nothing has crashed yet to replace them.
+- **The regression corpora are seeded, not found.** Every `boundary-*.bin` is
+  hand-written; nothing has crashed yet to replace them.
+- **`prepare-seeds.sh` does not emit a `compressor_lifecycle` corpus.** That
+  target's committed cases are hand-written command sequences; a campaign starts
+  from those rather than from the vendored test data.
 - **The `large_window` regression corpus is seeded, not found.** Its twenty
   inputs are the boundary cases written when the target was added — every edge
   of the `10..=62` range, both refusing qualities, an empty payload, a single

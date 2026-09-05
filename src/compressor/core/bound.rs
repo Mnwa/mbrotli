@@ -75,9 +75,9 @@ const fn fragment_bits(params: &CompressParams) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compressor::{ParseWindowBitsError, QualityLevel, WindowBits};
+    use crate::compressor::{QualityLevel, WindowBits, WindowOutOfRange};
 
-    fn params(lgwin: u8) -> Result<CompressParams, ParseWindowBitsError> {
+    fn params(lgwin: u8) -> Result<CompressParams, WindowOutOfRange> {
         Ok(CompressParams::new(
             QualityLevel::Q0,
             WindowBits::standard(lgwin)?,
@@ -85,13 +85,13 @@ mod tests {
     }
 
     #[test]
-    fn empty_input_still_reserves_one_fragment() -> Result<(), ParseWindowBitsError> {
+    fn empty_input_still_reserves_one_fragment() -> Result<(), WindowOutOfRange> {
         assert!(matches!(bound(&params(22)?, 0), Ok(513)));
         Ok(())
     }
 
     #[test]
-    fn bound_grows_with_the_number_of_fragments() -> Result<(), ParseWindowBitsError> {
+    fn bound_grows_with_the_number_of_fragments() -> Result<(), WindowOutOfRange> {
         let small_window = bound(&params(10)?, 1 << 20).ok();
         let large_window = bound(&params(22)?, 1 << 20).ok();
         assert!(small_window > large_window);
@@ -99,7 +99,7 @@ mod tests {
     }
 
     #[test]
-    fn bound_covers_at_least_the_input() -> Result<(), ParseWindowBitsError> {
+    fn bound_covers_at_least_the_input() -> Result<(), WindowOutOfRange> {
         let params = params(22)?;
         for size in [0usize, 1, 1024, 1 << 20] {
             assert!(bound(&params, size).is_ok_and(|value| value >= size));
@@ -108,7 +108,7 @@ mod tests {
     }
 
     #[test]
-    fn bound_reports_an_overflow_instead_of_wrapping() -> Result<(), ParseWindowBitsError> {
+    fn bound_reports_an_overflow_instead_of_wrapping() -> Result<(), WindowOutOfRange> {
         assert!(matches!(
             bound(&params(22)?, usize::MAX),
             Err(BrotliCompressError::BoundOverflow)

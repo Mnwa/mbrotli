@@ -1,5 +1,13 @@
 # Quality 10 / 11 API binding
 
+> **Written before the pre-release API redesign.** The public names in this
+> document — `Brotli`, `CompressParams`, `CompressWorkspace`, `QualityLevel`,
+> `WindowBits`, `SharedContext` and the `compress_*` method families — no
+> longer exist. The encoders below them did not change.
+> [`pre_release_api_redesign.md`](pre_release_api_redesign.md) maps the old
+> names onto the new ones.
+
+
 Milestone 0 artifact for the q10–q11 port: the mapping between the conceptual
 roles the port specification uses and the symbols in this repository.
 

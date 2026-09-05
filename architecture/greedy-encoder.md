@@ -477,7 +477,7 @@ halves so the "already lapped" property survives the truncation.
 
 ```mermaid
 graph TD
-    A["Brotli::default()"] -->|"Level::try_detect()"| B["Level stored by value"]
+    A["Compressor::new()"] -->|"Level::try_detect()"| B["Level stored in the Compressor"]
     B --> C["GreedyEncoder { level }"]
     C -->|"once per encode_block"| D["dispatch!(level, simd => match matcher)"]
     D --> E["create_backward_references::&lt;S, M&gt;"]
@@ -521,7 +521,9 @@ lookups per match, the encoder stops paying for it.
 ## 9. Error propagation
 
 The greedy tree defines no error type of its own. `GreedyParams::new` reports
-an unimplemented quality as `BrotliCompressError::UnsupportedQuality`, and the
+an unimplemented quality as the private `UnsupportedQuality`, which the public
+`EncodeError` reports as an internal invariant because no validated
+configuration can reach it, and the
 only other failure is `BufferOverflow`, raised when the bit writer runs past
 the scratch buffer — which no correct input can reach, because the buffer is
 sized by the same `2 * bytes + 503` reservation the reference uses.
@@ -540,7 +542,7 @@ sized by the same `2 * bytes + 503` reservation the reference uses.
 
 ## Known gaps
 
-- **The large-window match finders are unreachable.** `WindowBits::large`
+- **The large-window match finders are unreachable.** `Window::large`
   reaches these qualities, so a large window is declared and the widened
   distance alphabet is used, but `ResolvedWindow::encoder_bits` caps retained
   history at 30 bits and every matcher is sized from that. The reference's
@@ -582,6 +584,6 @@ sized by the same `2 * bytes + 503` reservation the reference uses.
   crate builds, and `MatchFinder::prepare` wipes them in full because its
   partial sweep only applies below a threshold those tables rarely reach. On a
   mebibyte of text quality nine runs at 0.791x, in line with the rest; the gap
-  is entirely the floor. A retained `CompressWorkspace` removes it and takes
+  is entirely the floor. Reusing a `Compressor` removes it and takes
   quality nine to 0.892x on a 256-byte payload, a 16.6x speed-up. See
   [`docs/all_qualities_benchmarks.md`](../docs/all_qualities_benchmarks.md).

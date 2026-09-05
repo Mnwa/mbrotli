@@ -7,9 +7,9 @@
 
 mod support;
 
-use mbrotli::Brotli;
 use support::{
-    IMPLEMENTED_QUALITIES, boundary_corpora, host_levels, params, prefix_for, structural_corpora,
+    IMPLEMENTED_QUALITIES, boundary_corpora, encoder_on, host_levels, prefix_for,
+    structural_corpora,
 };
 
 /// Compresses one input on every backend and requires identical output.
@@ -18,26 +18,24 @@ fn assert_backends_agree(name: &str, data: &[u8], lgwin: u8) {
     let (reference_name, reference_level) = levels[0];
     for quality in IMPLEMENTED_QUALITIES {
         let data = prefix_for(quality, data);
-        let reference = Brotli::from(reference_level)
-            .compressor()
-            .compress(params(quality, lgwin), data)
+        let reference = encoder_on(reference_level, quality, lgwin)
+            .compress(data)
             .expect("reference compression failed");
         for &(level_name, level) in &levels[1..] {
-            let actual = Brotli::from(level)
-                .compressor()
-                .compress(params(quality, lgwin), data)
+            let actual = encoder_on(level, quality, lgwin)
+                .compress(data)
                 .expect("compression failed");
             assert_eq!(
                 actual.len(),
                 reference.len(),
                 "case {name}, quality {}, {level_name} vs {reference_name}: output length differs",
-                usize::from(quality)
+                quality.get()
             );
             assert_eq!(
                 actual,
                 reference,
                 "case {name}, quality {}, {level_name} vs {reference_name}",
-                usize::from(quality)
+                quality.get()
             );
         }
     }
