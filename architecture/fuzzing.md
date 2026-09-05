@@ -20,7 +20,7 @@ The package is split so that the AFL dependency stops at the binary layer:
 ```mermaid
 graph TD
     subgraph engine["Engine layer (depends on afl)"]
-        bins["src/bin/ — twenty afl::fuzz! adapters"]
+        bins["src/bin/ — twenty-one afl::fuzz! adapters"]
     end
 
     subgraph neutral["Engine-neutral layer (no afl dependency)"]
@@ -139,6 +139,7 @@ target that can reach the validating conversions and the large-window refusal.
 | `parameter_parsing` | numeric | `TryFrom` and `Window` contracts hold; every legal quality compresses and round-trips; `Compressor::new` refuses a large window at qualities 0 to 2 and accepts it above |
 | `large_window` | large window | `Window::large` contract holds; qualities 0, 1 and 2 refuse when the compressor is built rather than dropping the request; bound, determinism, backend identity; C decoder round-trip up to 30 declared bits, and above it the stream differs from the 30-bit stream only in the six header bits |
 | `dictionary` | dictionary | preparation is a transaction — an empty, count or limit refusal yields no dictionary; the accessors agree with what was attached; the offset-to-distance mapping round-trips and saturates at both ends; below quality 5 every entry point refuses rather than ignoring, and the compressor still works afterwards; at quality 5 and above the three entry points agree, the output fits the bound, and a dictionary call never changes the next ordinary one |
+| `serialized_dictionary` | dictionary stream | parsing arbitrary bytes never panics; this crate and the pinned C parser agree on validity, except for the tail after the structure that the reference ignores and this crate refuses; what parses re-serializes to bytes that parse back equal and serialize identically again; and a prepared dictionary either takes the LZ77 prefix or refuses a custom static one rather than ignoring it |
 | `compressor_lifecycle` | lifecycle | whatever sequence of reuse, appending, deliberate failure, trimming, reconfiguration, abandoned and leaked sessions the input asks for, the compressor still emits the bytes a fresh one would for the configuration it ended up with |
 
 The oracles are layered rather than independent: `differential_c` is the
@@ -223,6 +224,13 @@ a parameter header (114, minimised to 47 — most headers reach the same code);
 attachment counts (0, 1, 15, 16 — the refused-empty path, one dictionary, the
 format's limit and one past it) crossed with a generous and an impossible
 budget.
+
+`seeds/serialized` is the exception: RFC 9841 dictionary streams have no
+counterpart in the upstream test data, so the seeds are copies of the committed
+regression corpus — valid streams of every shape the format allows, plus the
+malformed ones worth starting a campaign from. The target also prefixes the
+magic bytes when an input lacks them, so a mutation spends its effort on the
+fields rather than on the two-byte signature.
 
 `seeds/large_window` is each parameter seed behind one more byte, at four
 declared windows — the floor, the default, the widest the pinned C decoder

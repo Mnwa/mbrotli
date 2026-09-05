@@ -415,3 +415,23 @@ pub fn assert_round_trip(data: &[u8], compressed: &[u8]) {
     assert_eq!(decoded.len(), data.len(), "decoded length differs");
     assert_eq!(decoded, data, "decoded content differs");
 }
+
+/// Returns whether the pinned C parser accepts `bytes` as a shared dictionary.
+///
+/// Wraps `BrotliSharedDictionaryAttach` with the serialized type through this
+/// repository's shim, which is compiled only when the vendored library is built
+/// with `BROTLI_EXPERIMENTAL`.
+pub fn c_parse_shared_dictionary(bytes: &[u8]) -> bool {
+    let mut info = google_brotli_ffi::MbrotliSharedDictInfo::default();
+    // SAFETY: `bytes` is a live slice readable for its own length, and `info`
+    // is a live, correctly typed local the shim fully writes. The shim owns and
+    // frees the dictionary it builds internally.
+    unsafe {
+        google_brotli_ffi::mbrotli_shim_parse_shared_dictionary(
+            bytes.as_ptr(),
+            bytes.len(),
+            &raw mut info,
+        );
+    }
+    info.ok == 1
+}

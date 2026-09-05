@@ -8,11 +8,17 @@ description = "AFL++ fuzz targets for the mbrotli quality 0 to 11 encoders"
 [dependencies]
 afl = "0.18"
 
+# `experimental` is on so the RFC 9841 serialized dictionary parser — a
+# byte-consuming boundary reached straight from caller-supplied bytes — is
+# fuzzed. It also builds the vendored C library with `BROTLI_EXPERIMENTAL`, so
+# the target has the reference parser to compare against.
 [dependencies.mbrotli]
 path = "../.."
+features = ["experimental"]
 
 [dependencies.google-brotli-ffi]
 path = "../../brotli-ffi"
+features = ["experimental"]
 
 # The scalar fallback backend has to be reachable so the SIMD equivalence
 # target can compare against it.

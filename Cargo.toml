@@ -57,6 +57,19 @@ name = "compress"
 harness = false
 
 [features]
+# RFC 9841's shared dictionary and framing formats, which are specified but
+# have no stable reference encoder: the C library compiles its serialized
+# dictionary parser out unless `BROTLI_EXPERIMENTAL` is defined, and it has no
+# framing writer at all. Everything gated here is therefore validated against
+# the RFC and against this crate's own decoder-independent fixtures rather than
+# against byte identity with a pinned C encoder, which is the guarantee the
+# default surface rests on. The API behind this gate may change in a patch
+# release; the default surface may not.
+#
+# Enabling it also builds the vendored C library with `BROTLI_EXPERIMENTAL`, so
+# the differential tests have an oracle for the serialized dictionary format.
+experimental = ["google-brotli-ffi/experimental"]
+
 # Exposes the prepared-dictionary longest-match diagnostic. It answers how well
 # a candidate dictionary covers a corpus, which is worth knowing before
 # shipping one, but the candidate order it breaks ties by is an implementation

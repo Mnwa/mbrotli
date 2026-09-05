@@ -134,10 +134,11 @@ impl SharedContextInner {
         attachments: Vec<Box<[u8]>>,
         limits: &Budget,
     ) -> Result<Self, SharedBrotliError> {
-        if attachments.len() > MAX_PREFIX_DICTIONARIES {
+        let limit = limits.max_attachments.min(MAX_PREFIX_DICTIONARIES);
+        if attachments.len() > limit {
             return Err(SharedBrotliError::TooManyPrefixDictionaries {
                 attached: attachments.len(),
-                limit: MAX_PREFIX_DICTIONARIES,
+                limit,
             });
         }
 
@@ -272,6 +273,8 @@ pub(crate) struct Budget {
     pub(crate) max_prefix_bytes: u64,
     /// Largest peak allocation preparing the context may reach.
     pub(crate) max_allocated_bytes: u64,
+    /// Most attachments the context may hold, never above the format's fifteen.
+    pub(crate) max_attachments: usize,
 }
 
 /// Returns an upper bound on the peak memory preparing this context will use.
@@ -302,6 +305,7 @@ mod tests {
         max_total_source_bytes: u64::MAX,
         max_prefix_bytes: u64::MAX,
         max_allocated_bytes: u64::MAX,
+        max_attachments: MAX_PREFIX_DICTIONARIES,
     };
 
     fn attach(segments: &[&[u8]]) -> Vec<Box<[u8]>> {

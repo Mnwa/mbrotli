@@ -12,6 +12,18 @@ fn c_sources(directory: &str) -> Vec<PathBuf> {
     sources
 }
 
+/// Whether to compile the vendored sources with `BROTLI_EXPERIMENTAL`.
+///
+/// The reference gates its RFC 9841 serialized shared dictionary parser, its
+/// custom static dictionary construction, and one `static_dict.c` search branch
+/// behind that flag. None of the three is reachable from an ordinary
+/// compression, so defining it does not move any output; it is still kept
+/// behind a feature so the default build of this crate is the reference's own
+/// default build, byte for byte.
+fn experimental() -> bool {
+    env::var_os("CARGO_FEATURE_EXPERIMENTAL").is_some()
+}
+
 fn compile_library(name: &str, directory: &str) {
     let sources = c_sources(directory);
     let mut build = cc::Build::new();
@@ -19,9 +31,11 @@ fn compile_library(name: &str, directory: &str) {
         .include("vendor/brotli/c/include")
         .include("vendor/brotli")
         .cargo_metadata(false)
-        .warnings(false)
-        .files(&sources)
-        .compile(name);
+        .warnings(false);
+    if experimental() {
+        build.define("BROTLI_EXPERIMENTAL", None);
+    }
+    build.files(&sources).compile(name);
 
     for source in sources {
         println!("cargo:rerun-if-changed={}", source.display());
@@ -33,12 +47,17 @@ fn compile_library(name: &str, directory: &str) {
 /// It is linked unconditionally: it is a single small translation unit, and a
 /// feature gate would make the test and non-test builds of this crate differ.
 fn compile_shim() {
-    cc::Build::new()
+    let mut build = cc::Build::new();
+    build
         .include("vendor/brotli/c/include")
         .include("vendor/brotli/c")
         .include("vendor/brotli")
         .cargo_metadata(false)
-        .warnings(false)
+        .warnings(false);
+    if experimental() {
+        build.define("BROTLI_EXPERIMENTAL", None);
+    }
+    build
         .file("shim/static_dict_probe.c")
         .compile("mbrotli_shim");
     println!("cargo:rerun-if-changed=shim/static_dict_probe.c");

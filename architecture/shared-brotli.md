@@ -684,19 +684,25 @@ has to prove it.
   carry a prefix match. Where the reference then ignores the dictionary, every
   dictionary entry point refuses with
   `EncodeError::DictionaryUnsupportedForQuality`.
-- **No serialized shared dictionaries.** Custom word lists, custom transform
-  lists and the context map are not implemented, so
-  `DictionaryBuilder::add_serialized` does not exist and the reference's
-  `contextual.dict[dict_id]` selection has no counterpart.
-- **Three of the six specified limits are absent.** `DictionaryLimits` carries
-  the three that something checks today. `max_transformed_word_bytes` and
-  `max_trie_nodes` land with the serialized dictionary;
+- **Serialized dictionaries are described but not compressed against.** Behind
+  the `experimental` feature the whole RFC 9841 section 5 format is parsed,
+  validated, built and written, and `DictionaryBuilder::add_serialized`
+  attaches such a dictionary's LZ77 prefix; see
+  [`serialized-dictionary.md`](serialized-dictionary.md). What is missing is the
+  encoder side: no match finder consults a custom word or transform list, so the
+  reference's `contextual.dict[dict_id]` selection still has no counterpart and
+  `DictionaryBuilder::build` refuses a custom static dictionary with
+  `DictionaryError::CustomStaticDictionaryUnsupported` rather than ignoring it.
+- **Two of the six specified limits are absent.** `DictionaryLimits` carries
+  the four that something checks today, plus six more behind `experimental`.
+  `max_transformed_word_bytes` and `max_trie_nodes` bound structures only the
+  custom static dictionary encoder builds, and land with it;
   `max_reusable_workspace_bytes` would bound the compressor's workspace, which
   `RetentionPolicy::Bounded` now does instead.
 - **No framing container.** No signature, chunks, metadata, references, central
-  directory or final footer. `Compressor::framed_writer` does not exist.
-- **No varint module.** It lands with the serialized dictionary parser, its
-  first consumer.
+  directory or final footer. `Compressor::framed_writer` does not exist. RFC
+  9841 section 8 specifies it in full and the pinned C library implements none
+  of it, so it would be written against the RFC alone.
 - **Large window is refused at qualities 0, 1 and 2.** See decision D4 and §6.
 - **Declared windows above 30 bits are not decoded end to end** by any
   implementation in this repository; the pinned C decoder rejects them and this

@@ -20,6 +20,18 @@ use super::core::rfc9841::context::{Budget, SharedContextInner};
 use super::shared::SharedBrotliError;
 use thiserror::Error;
 
+#[cfg(feature = "experimental")]
+mod serialized;
+
+#[cfg(feature = "experimental")]
+pub use serialized::{
+    CONTEXTS, ContextMap, DictionaryCombination, ListSelector, MAX_LIST_COUNT, MAX_STRINGLETS,
+    MAX_TRANSFORMS, OmitLength, OmitLengthOutOfRange, SerializedDictionary,
+    SerializedDictionaryBuilder, SerializedDictionaryError, TransformList, TransformListBuilder,
+    TransformListError, TransformListView, TransformOperation, UndefinedTransformOperation,
+    WordList, WordListBuilder, WordListError, WordListView,
+};
+
 /// Dictionaries one prepared dictionary may hold, as RFC 9841 fixes it.
 const MAX_ATTACHMENTS: usize = 15;
 
@@ -365,6 +377,26 @@ pub struct DictionaryLimits {
     max_prefix_bytes: u64,
     /// Largest peak allocation preparing the dictionary may reach.
     max_retained_bytes: u64,
+    /// Most prefix dictionaries one prepared dictionary may hold.
+    max_attachments: usize,
+    /// Largest serialized dictionary stream that may be parsed.
+    #[cfg(feature = "experimental")]
+    max_serialized_bytes: u64,
+    /// Largest total of every custom word list's word bytes.
+    #[cfg(feature = "experimental")]
+    max_word_bytes: u64,
+    /// Most custom word lists.
+    #[cfg(feature = "experimental")]
+    max_word_lists: usize,
+    /// Largest total of every custom transform list's wire bytes.
+    #[cfg(feature = "experimental")]
+    max_transform_bytes: u64,
+    /// Most custom transform lists.
+    #[cfg(feature = "experimental")]
+    max_transform_lists: usize,
+    /// Most word-and-transform-list combinations.
+    #[cfg(feature = "experimental")]
+    max_combinations: usize,
 }
 
 impl DictionaryLimits {
@@ -386,6 +418,47 @@ impl DictionaryLimits {
     /// [`DictionaryLimits::DEFAULT_MAX_PREFIX_BYTES`] therefore fits this with
     /// room to spare, and the two defaults do not contradict each other.
     pub const DEFAULT_MAX_RETAINED_BYTES: u64 = 1 << 30;
+
+    /// Default ceiling on the prefix attachment count: fifteen.
+    ///
+    /// Also the format's own ceiling, so this default refuses nothing RFC 9841
+    /// allows; lowering it is how a caller refuses more than they expect.
+    pub const DEFAULT_MAX_ATTACHMENTS: usize = MAX_ATTACHMENTS;
+
+    /// Default ceiling on a serialized dictionary stream: 128 MiB.
+    ///
+    /// Checked before a single byte inside the stream is read, so it bounds the
+    /// whole parse rather than any one field. Comfortably above a maximal
+    /// prefix plus a maximal set of custom lists.
+    #[cfg(feature = "experimental")]
+    pub const DEFAULT_MAX_SERIALIZED_BYTES: u64 = 128 << 20;
+
+    /// Default ceiling on the total custom word bytes: 16 MiB.
+    ///
+    /// A single word list holds at most `31 << 15` bytes, just under a
+    /// megabyte, so this leaves room for sixteen maximal lists. A dictionary
+    /// that wants all sixty-four has to say so.
+    #[cfg(feature = "experimental")]
+    pub const DEFAULT_MAX_WORD_BYTES: u64 = 16 << 20;
+
+    /// Default ceiling on the custom word list count: sixty-four, the format's.
+    #[cfg(feature = "experimental")]
+    pub const DEFAULT_MAX_WORD_LISTS: usize = MAX_LIST_COUNT;
+
+    /// Default ceiling on the total custom transform bytes: 8 MiB.
+    ///
+    /// A single transform list occupies at most about sixty-six kilobytes, so
+    /// this leaves room for every list the format allows.
+    #[cfg(feature = "experimental")]
+    pub const DEFAULT_MAX_TRANSFORM_BYTES: u64 = 8 << 20;
+
+    /// Default ceiling on the custom transform list count: sixty-four.
+    #[cfg(feature = "experimental")]
+    pub const DEFAULT_MAX_TRANSFORM_LISTS: usize = MAX_LIST_COUNT;
+
+    /// Default ceiling on the combination count: sixty-four, the format's.
+    #[cfg(feature = "experimental")]
+    pub const DEFAULT_MAX_COMBINATIONS: usize = MAX_LIST_COUNT;
 
     /// Sets the largest total of attached source bytes.
     ///
@@ -499,6 +572,255 @@ impl DictionaryLimits {
     pub const fn max_retained_bytes(self) -> u64 {
         self.max_retained_bytes
     }
+
+    /// Sets the largest number of prefix dictionaries one dictionary may hold.
+    ///
+    /// Never raises the ceiling past the format's own fifteen; a larger value
+    /// is silently the same as fifteen.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::dictionary::{DictionaryBuilder, DictionaryError, DictionaryLimits};
+    ///
+    /// let outcome = DictionaryBuilder::new()
+    ///     .add_prefix(&b"one"[..])
+    ///     .add_prefix(&b"two"[..])
+    ///     .with_limits(DictionaryLimits::default().with_max_attachments(1))
+    ///     .build();
+    ///
+    /// assert!(matches!(
+    ///     outcome,
+    ///     Err(DictionaryError::TooManyAttachments { attached: 2, limit: 1 })
+    /// ));
+    /// ```
+    #[must_use]
+    pub const fn with_max_attachments(mut self, attachments: usize) -> Self {
+        self.max_attachments = attachments;
+        self
+    }
+
+    /// Returns the largest number of prefix dictionaries one may hold.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::dictionary::DictionaryLimits;
+    ///
+    /// assert_eq!(DictionaryLimits::default().max_attachments(), 15);
+    /// ```
+    #[must_use]
+    pub const fn max_attachments(self) -> usize {
+        self.max_attachments
+    }
+
+    /// Sets the largest serialized dictionary stream that may be parsed.
+    ///
+    /// Checked before any field inside the stream is read.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::dictionary::DictionaryLimits;
+    ///
+    /// let limits = DictionaryLimits::default().with_max_serialized_bytes(4096);
+    ///
+    /// assert_eq!(limits.max_serialized_bytes(), 4096);
+    /// ```
+    #[cfg(feature = "experimental")]
+    #[must_use]
+    pub const fn with_max_serialized_bytes(mut self, bytes: u64) -> Self {
+        self.max_serialized_bytes = bytes;
+        self
+    }
+
+    /// Returns the largest serialized dictionary stream that may be parsed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::dictionary::DictionaryLimits;
+    ///
+    /// assert_eq!(
+    ///     DictionaryLimits::default().max_serialized_bytes(),
+    ///     DictionaryLimits::DEFAULT_MAX_SERIALIZED_BYTES
+    /// );
+    /// ```
+    #[cfg(feature = "experimental")]
+    #[must_use]
+    pub const fn max_serialized_bytes(self) -> u64 {
+        self.max_serialized_bytes
+    }
+
+    /// Sets the largest total of every custom word list's word bytes.
+    ///
+    /// Checked cumulatively as the lists are parsed, so a stream is refused at
+    /// the list that crosses the ceiling rather than after all of them.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::dictionary::DictionaryLimits;
+    ///
+    /// assert_eq!(DictionaryLimits::default().with_max_word_bytes(64).max_word_bytes(), 64);
+    /// ```
+    #[cfg(feature = "experimental")]
+    #[must_use]
+    pub const fn with_max_word_bytes(mut self, bytes: u64) -> Self {
+        self.max_word_bytes = bytes;
+        self
+    }
+
+    /// Returns the largest total of every custom word list's word bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::dictionary::DictionaryLimits;
+    ///
+    /// assert_eq!(
+    ///     DictionaryLimits::default().max_word_bytes(),
+    ///     DictionaryLimits::DEFAULT_MAX_WORD_BYTES
+    /// );
+    /// ```
+    #[cfg(feature = "experimental")]
+    #[must_use]
+    pub const fn max_word_bytes(self) -> u64 {
+        self.max_word_bytes
+    }
+
+    /// Sets the largest number of custom word lists.
+    ///
+    /// Never raises the ceiling past the format's own sixty-four.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::dictionary::DictionaryLimits;
+    ///
+    /// assert_eq!(DictionaryLimits::default().with_max_word_lists(2).max_word_lists(), 2);
+    /// ```
+    #[cfg(feature = "experimental")]
+    #[must_use]
+    pub const fn with_max_word_lists(mut self, lists: usize) -> Self {
+        self.max_word_lists = lists;
+        self
+    }
+
+    /// Returns the largest number of custom word lists.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::dictionary::DictionaryLimits;
+    ///
+    /// assert_eq!(DictionaryLimits::default().max_word_lists(), 64);
+    /// ```
+    #[cfg(feature = "experimental")]
+    #[must_use]
+    pub const fn max_word_lists(self) -> usize {
+        self.max_word_lists
+    }
+
+    /// Sets the largest total of every custom transform list's wire bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::dictionary::DictionaryLimits;
+    ///
+    /// let limits = DictionaryLimits::default().with_max_transform_bytes(1024);
+    ///
+    /// assert_eq!(limits.max_transform_bytes(), 1024);
+    /// ```
+    #[cfg(feature = "experimental")]
+    #[must_use]
+    pub const fn with_max_transform_bytes(mut self, bytes: u64) -> Self {
+        self.max_transform_bytes = bytes;
+        self
+    }
+
+    /// Returns the largest total of every custom transform list's wire bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::dictionary::DictionaryLimits;
+    ///
+    /// assert_eq!(
+    ///     DictionaryLimits::default().max_transform_bytes(),
+    ///     DictionaryLimits::DEFAULT_MAX_TRANSFORM_BYTES
+    /// );
+    /// ```
+    #[cfg(feature = "experimental")]
+    #[must_use]
+    pub const fn max_transform_bytes(self) -> u64 {
+        self.max_transform_bytes
+    }
+
+    /// Sets the largest number of custom transform lists.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::dictionary::DictionaryLimits;
+    ///
+    /// let limits = DictionaryLimits::default().with_max_transform_lists(1);
+    ///
+    /// assert_eq!(limits.max_transform_lists(), 1);
+    /// ```
+    #[cfg(feature = "experimental")]
+    #[must_use]
+    pub const fn with_max_transform_lists(mut self, lists: usize) -> Self {
+        self.max_transform_lists = lists;
+        self
+    }
+
+    /// Returns the largest number of custom transform lists.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::dictionary::DictionaryLimits;
+    ///
+    /// assert_eq!(DictionaryLimits::default().max_transform_lists(), 64);
+    /// ```
+    #[cfg(feature = "experimental")]
+    #[must_use]
+    pub const fn max_transform_lists(self) -> usize {
+        self.max_transform_lists
+    }
+
+    /// Sets the largest number of word-and-transform-list combinations.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::dictionary::DictionaryLimits;
+    ///
+    /// assert_eq!(DictionaryLimits::default().with_max_combinations(4).max_combinations(), 4);
+    /// ```
+    #[cfg(feature = "experimental")]
+    #[must_use]
+    pub const fn with_max_combinations(mut self, combinations: usize) -> Self {
+        self.max_combinations = combinations;
+        self
+    }
+
+    /// Returns the largest number of word-and-transform-list combinations.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::dictionary::DictionaryLimits;
+    ///
+    /// assert_eq!(DictionaryLimits::default().max_combinations(), 64);
+    /// ```
+    #[cfg(feature = "experimental")]
+    #[must_use]
+    pub const fn max_combinations(self) -> usize {
+        self.max_combinations
+    }
 }
 
 impl Default for DictionaryLimits {
@@ -519,6 +841,19 @@ impl Default for DictionaryLimits {
             max_source_bytes: Self::DEFAULT_MAX_SOURCE_BYTES,
             max_prefix_bytes: Self::DEFAULT_MAX_PREFIX_BYTES,
             max_retained_bytes: Self::DEFAULT_MAX_RETAINED_BYTES,
+            max_attachments: Self::DEFAULT_MAX_ATTACHMENTS,
+            #[cfg(feature = "experimental")]
+            max_serialized_bytes: Self::DEFAULT_MAX_SERIALIZED_BYTES,
+            #[cfg(feature = "experimental")]
+            max_word_bytes: Self::DEFAULT_MAX_WORD_BYTES,
+            #[cfg(feature = "experimental")]
+            max_word_lists: Self::DEFAULT_MAX_WORD_LISTS,
+            #[cfg(feature = "experimental")]
+            max_transform_bytes: Self::DEFAULT_MAX_TRANSFORM_BYTES,
+            #[cfg(feature = "experimental")]
+            max_transform_lists: Self::DEFAULT_MAX_TRANSFORM_LISTS,
+            #[cfg(feature = "experimental")]
+            max_combinations: Self::DEFAULT_MAX_COMBINATIONS,
         }
     }
 }
@@ -530,6 +865,7 @@ impl From<DictionaryLimits> for Budget {
             max_total_source_bytes: value.max_source_bytes,
             max_prefix_bytes: value.max_prefix_bytes,
             max_allocated_bytes: value.max_retained_bytes,
+            max_attachments: value.max_attachments,
         }
     }
 }
@@ -569,6 +905,9 @@ pub struct DictionaryBuilder {
     limits: DictionaryLimits,
     /// Owned dictionary bytes, oldest first.
     attachments: Vec<Box<[u8]>>,
+    /// The custom static dictionary, if a serialized one supplied it.
+    #[cfg(feature = "experimental")]
+    custom_static: Option<crate::compressor::core::rfc9841::serialized::SerializedDictionaryData>,
 }
 
 impl DictionaryBuilder {
@@ -613,6 +952,46 @@ impl DictionaryBuilder {
         B: Into<Box<[u8]>>,
     {
         self.attachments.push(bytes.into());
+        self
+    }
+
+    /// Attaches everything an RFC 9841 serialized dictionary describes.
+    ///
+    /// **Experimental**, behind the `experimental` feature.
+    ///
+    /// The dictionary's LZ77 prefix becomes one attachment, in the position it
+    /// is added in, exactly as
+    /// [`DictionaryBuilder::add_prefix`] would place it. Its custom word and
+    /// transform lists replace the RFC 7932 static dictionary for every stream
+    /// compressed against the result.
+    ///
+    /// The description is borrowed and copied out of, so one parsed
+    /// [`SerializedDictionary`] can back any number of prepared dictionaries.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::dictionary::{DictionaryBuilder, SerializedDictionary};
+    ///
+    /// let described = SerializedDictionary::builder()
+    ///     .with_prefix(&b"Content-Type: text/html"[..])
+    ///     .build()?;
+    ///
+    /// let dictionary = DictionaryBuilder::new().add_serialized(&described).build()?;
+    ///
+    /// assert_eq!(dictionary.attachment_count(), 1);
+    /// assert_eq!(dictionary.source_bytes(), 23);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[cfg(feature = "experimental")]
+    #[must_use]
+    pub fn add_serialized(mut self, dictionary: &SerializedDictionary) -> Self {
+        if dictionary.data().has_prefix() {
+            self.attachments.push(Box::from(dictionary.prefix()));
+        }
+        if dictionary.is_custom_static() {
+            self.custom_static = Some(dictionary.data().clone());
+        }
         self
     }
 
@@ -663,12 +1042,16 @@ impl DictionaryBuilder {
     /// # Ok::<(), mbrotli::dictionary::DictionaryError>(())
     /// ```
     pub fn build(self) -> Result<PreparedDictionary, DictionaryError> {
+        #[cfg(feature = "experimental")]
+        if self.custom_static.is_some() {
+            return Err(DictionaryError::CustomStaticDictionaryUnsupported);
+        }
         if self.attachments.iter().all(|bytes| bytes.is_empty()) {
             return Err(DictionaryError::Empty);
         }
         let budget = Budget::from(self.limits);
         let inner = SharedContextInner::new(self.attachments, &budget)
-            .map_err(|error| DictionaryError::from_core(error, MAX_ATTACHMENTS))?;
+            .map_err(DictionaryError::from_core)?;
         Ok(PreparedDictionary { inner })
     }
 }
@@ -713,6 +1096,18 @@ pub enum DictionaryError {
         /// How many it may hold.
         limit: usize,
     },
+    /// The dictionary carries a custom static dictionary, which no encoder reads yet.
+    ///
+    /// **Experimental.** [`SerializedDictionary`] parses, validates and writes
+    /// custom word and transform lists in full, and
+    /// [`DictionaryBuilder::add_serialized`] attaches the LZ77 prefix of such a
+    /// dictionary, but no match finder consults the custom static dictionary
+    /// yet. Refusing to prepare one is what keeps a caller from believing a
+    /// stream used words it did not; a dictionary that carries only a prefix
+    /// prepares normally.
+    #[cfg(feature = "experimental")]
+    #[error("custom static dictionaries are described but not yet used by any encoder")]
+    CustomStaticDictionaryUnsupported,
     /// An attachment, or the whole logical prefix, is larger than allowed.
     #[error("{bytes} dictionary bytes exceed the limit of {limit}")]
     TooLarge {
@@ -736,9 +1131,11 @@ pub enum DictionaryError {
 
 impl DictionaryError {
     /// Lifts the low-level preparation error into the public one.
-    const fn from_core(error: SharedBrotliError, limit: usize) -> Self {
+    const fn from_core(error: SharedBrotliError) -> Self {
         match error {
-            SharedBrotliError::TooManyPrefixDictionaries { attached, .. } => {
+            // The limit the core reports is the effective one: the caller's
+            // ceiling, or the format's fifteen when the caller asked for more.
+            SharedBrotliError::TooManyPrefixDictionaries { attached, limit } => {
                 Self::TooManyAttachments { attached, limit }
             }
             SharedBrotliError::DictionaryTooLarge { bytes, limit } => {
@@ -757,6 +1154,45 @@ impl DictionaryError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_attachment_limit_is_configurable_and_never_above_the_format_one() {
+        let limits = DictionaryLimits::default();
+
+        assert_eq!(limits.max_attachments(), MAX_ATTACHMENTS);
+        assert_eq!(limits.with_max_attachments(2).max_attachments(), 2);
+        assert_eq!(
+            limits.max_source_bytes(),
+            DictionaryLimits::DEFAULT_MAX_SOURCE_BYTES
+        );
+
+        let outcome = DictionaryBuilder::new()
+            .add_prefix(&b"one"[..])
+            .add_prefix(&b"two"[..])
+            .with_limits(limits.with_max_attachments(1))
+            .build();
+
+        assert!(matches!(
+            outcome,
+            Err(DictionaryError::TooManyAttachments {
+                attached: 2,
+                limit: 1
+            })
+        ));
+
+        // Raising it past the format's own ceiling changes nothing.
+        let mut builder = DictionaryBuilder::new().with_limits(limits.with_max_attachments(999));
+        for _ in 0..=MAX_ATTACHMENTS {
+            builder = builder.add_prefix(&b"payload"[..]);
+        }
+        assert!(matches!(
+            builder.build(),
+            Err(DictionaryError::TooManyAttachments {
+                limit: MAX_ATTACHMENTS,
+                ..
+            })
+        ));
+    }
 
     #[test]
     fn a_prepared_dictionary_is_send_and_sync() {

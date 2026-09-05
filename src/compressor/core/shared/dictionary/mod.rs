@@ -30,7 +30,7 @@ pub(crate) const MAX_STATIC_DICTIONARY_MATCH_LEN: usize = 37;
 /// Extracted verbatim from `c/common/dictionary_inc.h` of the pinned
 /// reference; Google distributes it under the MIT licence, see
 /// `brotli-ffi/vendor/brotli/LICENSE`.
-pub(super) static WORDS: &[u8; 122_784] = include_bytes!("words.bin");
+pub(crate) static BUILTIN_WORDS: &[u8; 122_784] = include_bytes!("words.bin");
 
 /// Hash table over four-byte word prefixes (`kStaticDictionaryHashWords`).
 ///
@@ -44,15 +44,15 @@ static HASH_LENGTHS: &[u8; NUM_HASH_BUCKETS] = include_bytes!("hash_lengths.bin"
 /// Number of buckets in the dictionary hash (`BROTLI_ENC_NUM_HASH_BUCKETS`).
 const NUM_HASH_BUCKETS: usize = 32_768;
 
-/// Where the words of each length start inside [`WORDS`].
-pub(super) const OFFSETS_BY_LENGTH: [u32; 32] = [
+/// Where the words of each length start inside [`BUILTIN_WORDS`].
+pub(crate) const BUILTIN_OFFSETS_BY_LENGTH: [u32; 32] = [
     0, 0, 0, 0, 0, 4096, 9216, 21504, 35840, 44032, 53248, 63488, 74752, 87040, 93696, 100_864,
     104_704, 106_752, 108_928, 113_536, 115_968, 118_528, 119_872, 121_280, 122_016, 122_784,
     122_784, 122_784, 122_784, 122_784, 122_784, 122_784,
 ];
 
 /// Base-2 logarithm of how many words of each length the dictionary holds.
-pub(super) const SIZE_BITS_BY_LENGTH: [u8; 32] = [
+pub(crate) const BUILTIN_SIZE_BITS_BY_LENGTH: [u8; 32] = [
     0, 0, 0, 0, 10, 10, 11, 11, 10, 10, 10, 10, 10, 9, 9, 8, 7, 7, 8, 7, 7, 6, 6, 5, 5, 0, 0, 0, 0,
     0, 0, 0,
 ];
@@ -126,14 +126,14 @@ fn test_item(
     if len > max_length {
         return false;
     }
-    let Some(&size_bits) = SIZE_BITS_BY_LENGTH.get(len) else {
+    let Some(&size_bits) = BUILTIN_SIZE_BITS_BY_LENGTH.get(len) else {
         return false;
     };
-    let Some(&offset) = OFFSETS_BY_LENGTH.get(len) else {
+    let Some(&offset) = BUILTIN_OFFSETS_BY_LENGTH.get(len) else {
         return false;
     };
     let offset = offset as usize + len * word_idx;
-    let Some(word) = WORDS.get(offset..offset + len) else {
+    let Some(word) = BUILTIN_WORDS.get(offset..offset + len) else {
         return false;
     };
 
@@ -218,13 +218,13 @@ mod tests {
 
     #[test]
     fn the_word_table_matches_the_reference_layout() {
-        assert_eq!(WORDS.len(), 122_784);
-        assert_eq!(OFFSETS_BY_LENGTH[25], 122_784);
+        assert_eq!(BUILTIN_WORDS.len(), 122_784);
+        assert_eq!(BUILTIN_OFFSETS_BY_LENGTH[25], 122_784);
         for len in MIN_WORD_LENGTH..=24 {
-            let words = 1usize << SIZE_BITS_BY_LENGTH[len];
+            let words = 1usize << BUILTIN_SIZE_BITS_BY_LENGTH[len];
             assert_eq!(
-                OFFSETS_BY_LENGTH[len] as usize + len * words,
-                OFFSETS_BY_LENGTH[len + 1] as usize,
+                BUILTIN_OFFSETS_BY_LENGTH[len] as usize + len * words,
+                BUILTIN_OFFSETS_BY_LENGTH[len + 1] as usize,
                 "length {len} does not tile its region"
             );
         }
@@ -232,8 +232,8 @@ mod tests {
 
     #[test]
     fn the_first_words_are_the_reference_ones() {
-        let start = OFFSETS_BY_LENGTH[4] as usize;
-        assert_eq!(&WORDS[start..start + 8], b"timedown");
+        let start = BUILTIN_OFFSETS_BY_LENGTH[4] as usize;
+        assert_eq!(&BUILTIN_WORDS[start..start + 8], b"timedown");
     }
 
     #[test]
@@ -248,7 +248,7 @@ mod tests {
             assert!((MIN_WORD_LENGTH..=24).contains(&len), "bucket {bucket}");
             let word = u16::from_le_bytes([HASH_WORDS[2 * bucket], HASH_WORDS[2 * bucket + 1]]);
             assert!(
-                usize::from(word) < (1usize << SIZE_BITS_BY_LENGTH[len]),
+                usize::from(word) < (1usize << BUILTIN_SIZE_BITS_BY_LENGTH[len]),
                 "bucket {bucket} points past the words of length {len}"
             );
         }

@@ -62,6 +62,9 @@ jobs:
       # what the tests need; both have to build.
       - run: cargo test --workspace --release
       - run: cargo test --workspace --all-features --release
+      # The experimental surface on its own, so a dependant who enables only it
+      # is covered by the same run.
+      - run: cargo test --workspace --features experimental --release
 
   fuzz:
     name: fuzz targets and their regression corpus
@@ -97,7 +100,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [differential_c, streaming_equivalence, dictionary, compressor_lifecycle]
+        target: [differential_c, streaming_equivalence, dictionary, serialized_dictionary, compressor_lifecycle]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -124,9 +127,10 @@ jobs:
         run: |
           cargo afl system-config || true
           seeds=seeds/params
-          if [ "$TARGET" = dictionary ]; then
-            seeds=seeds/dictionary
-          fi
+          case "$TARGET" in
+            dictionary) seeds=seeds/dictionary ;;
+            serialized_dictionary) seeds=seeds/serialized ;;
+          esac
           timeout --preserve-status 600 \
             cargo afl fuzz -i "$seeds" -o findings "target/release/$TARGET" || true
       - name: fail on any crash

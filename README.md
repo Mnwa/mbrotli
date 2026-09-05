@@ -60,8 +60,40 @@ serialise the compression itself, not merely the access. One immutable
 | RFC 9841 prefix dictionaries (qualities 5–11) | implemented — byte-identical to the reference's compound dictionary |
 | RFC 9841 prefix dictionaries at qualities 0–4 | refused with `DictionaryUnsupportedForQuality`, never ignored — the reference has no search there either |
 | Stream offset | not implemented; a non-zero offset is refused rather than ignored |
-| RFC 9841 serialized dictionaries and framing container | not implemented |
-| Custom static dictionaries | not supported; the built-in static dictionary is used |
+| RFC 9841 serialized dictionary format | implemented behind the `experimental` feature — parsed, validated, built and written, and differential-tested against the reference parser; see below |
+| RFC 9841 framing container | not implemented |
+| Custom static dictionaries | described but not compressed against; the built-in static dictionary is used, and a custom one is refused rather than ignored |
+
+### The `experimental` feature
+
+RFC 9841's serialized shared dictionary format is behind the `experimental`
+Cargo feature, because it has no stable reference encoder: the C library
+compiles its parser out unless `BROTLI_EXPERIMENTAL` is defined, and has never
+exposed it as a supported API. The byte-identity guarantee the rest of this
+crate rests on therefore does not apply to it, and the API may change in a patch
+release.
+
+```toml
+[dependencies]
+mbrotli = { version = "0.1", features = ["experimental"] }
+```
+
+What the feature adds:
+
+- `SerializedDictionary` and its builder, which parse and write the RFC 9841
+  section 5 dictionary stream: LZ77 prefix, custom word lists, custom transform
+  lists, combinations and the sixty-four entry context map;
+- `WordList`, `TransformList` and `TransformOperation`, covering all
+  twenty-three transform operations including the two scalar shifts;
+- `DictionaryBuilder::add_serialized`, which attaches such a dictionary's LZ77
+  prefix;
+- six more `DictionaryLimits` ceilings that bound the parse before it allocates.
+
+What it does not add: no encoder consults a custom word or transform list yet,
+so `DictionaryBuilder::build` refuses a dictionary carrying one with
+`DictionaryError::CustomStaticDictionaryUnsupported` rather than preparing a
+dictionary whose custom words would be silently ignored. See
+[`architecture/serialized-dictionary.md`](architecture/serialized-dictionary.md).
 
 ### Quality guide
 

@@ -18,5 +18,13 @@ include = [
     "vendor/brotli/c/include/**",
 ]
 
+[features]
+# Compiles the vendored library with `BROTLI_EXPERIMENTAL`, which is what the
+# reference gates its RFC 9841 serialized shared dictionary parser behind. The
+# flag adds the parser, custom static dictionary construction, and one search
+# branch that only a dictionary with custom transforms can reach; it changes
+# nothing an ordinary compression does, which the byte-identity suite checks.
+experimental = []
+
 [build-dependencies]
 cc = "1.2"

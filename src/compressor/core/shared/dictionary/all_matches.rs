@@ -20,8 +20,8 @@
 //! output.
 
 use super::{
-    CUTOFF_TRANSFORMS, MAX_STATIC_DICTIONARY_MATCH_LEN, OFFSETS_BY_LENGTH, SIZE_BITS_BY_LENGTH,
-    WORDS, common_prefix_len,
+    BUILTIN_OFFSETS_BY_LENGTH, BUILTIN_SIZE_BITS_BY_LENGTH, BUILTIN_WORDS, CUTOFF_TRANSFORMS,
+    MAX_STATIC_DICTIONARY_MATCH_LEN, common_prefix_len,
 };
 use crate::compressor::core::shared::constants::HASH_MUL32;
 
@@ -102,14 +102,14 @@ fn bucket_head(data: &[u8]) -> Option<usize> {
 /// Returns the bytes of word `idx` among those of length `len`.
 #[inline]
 fn word(len: usize, idx: usize) -> Option<&'static [u8]> {
-    let offset = *OFFSETS_BY_LENGTH.get(len)? as usize + len * idx;
-    WORDS.get(offset..offset.checked_add(len)?)
+    let offset = *BUILTIN_OFFSETS_BY_LENGTH.get(len)? as usize + len * idx;
+    BUILTIN_WORDS.get(offset..offset.checked_add(len)?)
 }
 
 /// Returns how many words of length `len` the dictionary holds.
 #[inline]
 fn words_of_length(len: usize) -> usize {
-    match SIZE_BITS_BY_LENGTH.get(len) {
+    match BUILTIN_SIZE_BITS_BY_LENGTH.get(len) {
         Some(&bits) => 1usize << bits,
         None => 0,
     }

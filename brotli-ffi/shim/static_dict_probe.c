@@ -285,3 +285,126 @@ int mbrotli_shim_prepare_dictionary(const uint8_t* source, size_t source_size,
   DestroyPreparedDictionary(&m, prepared);
   return 1;
 }
+
+#if defined(BROTLI_EXPERIMENTAL)
+
+#include <brotli/shared_dictionary.h>
+
+#include "common/shared_dictionary_internal.h"
+
+/* A window onto the serialized shared dictionary parser, for differential
+ * testing.
+ *
+ * `BrotliSharedDictionaryAttach` reports only success or failure, and the
+ * structure it fills is opaque to a caller. RFC 9841's dictionary format has no
+ * other reference implementation, so a Rust port can only be checked against it
+ * by reading the fields it parsed out. This shim parses one stream and copies
+ * the structural fields into a plain struct.
+ *
+ * Layout is part of the contract with the Rust side, which declares the same
+ * struct field for field.
+ */
+typedef struct MbrotliSharedDictInfo {
+  int ok;
+  uint32_t num_prefix;
+  uint32_t prefix_size[SHARED_BROTLI_MAX_COMPOUND_DICTS];
+  uint8_t num_word_lists;
+  uint8_t num_transform_lists;
+  uint8_t num_dictionaries;
+  uint8_t context_based;
+  uint8_t context_map[SHARED_BROTLI_NUM_DICTIONARY_CONTEXTS];
+  /* Per combination, in declaration order. */
+  uint8_t size_bits[SHARED_BROTLI_NUM_DICTIONARY_CONTEXTS][32];
+  uint32_t words_data_size[SHARED_BROTLI_NUM_DICTIONARY_CONTEXTS];
+  uint32_t num_transforms[SHARED_BROTLI_NUM_DICTIONARY_CONTEXTS];
+  uint32_t prefix_suffix_size[SHARED_BROTLI_NUM_DICTIONARY_CONTEXTS];
+  int32_t cutoff[SHARED_BROTLI_NUM_DICTIONARY_CONTEXTS][10];
+} MbrotliSharedDictInfo;
+
+int mbrotli_shim_parse_shared_dictionary(const uint8_t* data, size_t size,
+                                         MbrotliSharedDictInfo* out) {
+  BrotliSharedDictionary* dict;
+  uint32_t i;
+  int j;
+  memset(out, 0, sizeof(*out));
+  dict = BrotliSharedDictionaryCreateInstance(0, 0, 0);
+  if (!dict) return 0;
+  if (!BrotliSharedDictionaryAttach(dict, BROTLI_SHARED_DICTIONARY_SERIALIZED,
+                                    size, data)) {
+    BrotliSharedDictionaryDestroyInstance(dict);
+    return 0;
+  }
+  out->ok = 1;
+  out->num_prefix = dict->num_prefix;
+  for (i = 0; i < dict->num_prefix; i++) {
+    out->prefix_size[i] = (uint32_t)dict->prefix_size[i];
+  }
+  out->num_word_lists = dict->num_word_lists;
+  out->num_transform_lists = dict->num_transform_lists;
+  out->num_dictionaries = dict->num_dictionaries;
+  out->context_based = (uint8_t)(dict->context_based ? 1 : 0);
+  memcpy(out->context_map, dict->context_map, sizeof(out->context_map));
+  for (i = 0; i < dict->num_dictionaries; i++) {
+    const BrotliDictionary* words = dict->words[i];
+    const BrotliTransforms* transforms = dict->transforms[i];
+    memcpy(out->size_bits[i], words->size_bits_by_length,
+           sizeof(out->size_bits[i]));
+    out->words_data_size[i] = (uint32_t)words->data_size;
+    out->num_transforms[i] = transforms->num_transforms;
+    out->prefix_suffix_size[i] = transforms->prefix_suffix_size;
+    for (j = 0; j < 10; j++) {
+      out->cutoff[i][j] = transforms->cutOffTransforms[j];
+    }
+  }
+  BrotliSharedDictionaryDestroyInstance(dict);
+  return 1;
+}
+
+/* A window onto `BrotliTransformDictionaryWord`, for differential testing.
+ *
+ * Transforms one word of one combination of a serialized shared dictionary and
+ * writes the result into `out`, which must have room for
+ * `256 + 256 + SHARED_BROTLI_MAX_DICTIONARY_WORD_LENGTH` bytes. Returns the
+ * number of bytes written, or -1 when the dictionary does not parse or the
+ * indices are out of range.
+ */
+int mbrotli_shim_transform_dictionary_word(
+    const uint8_t* dictionary, size_t dictionary_size, uint32_t combination,
+    uint32_t length, uint32_t word_index, uint32_t transform, uint8_t* out) {
+  BrotliSharedDictionary* dict;
+  const BrotliDictionary* words;
+  const BrotliTransforms* transforms;
+  const uint8_t* word;
+  size_t num_words;
+  int written;
+
+  dict = BrotliSharedDictionaryCreateInstance(0, 0, 0);
+  if (!dict) return -1;
+  if (!BrotliSharedDictionaryAttach(dict, BROTLI_SHARED_DICTIONARY_SERIALIZED,
+                                    dictionary_size, dictionary)) {
+    BrotliSharedDictionaryDestroyInstance(dict);
+    return -1;
+  }
+  if (combination >= dict->num_dictionaries ||
+      length > SHARED_BROTLI_MAX_DICTIONARY_WORD_LENGTH) {
+    BrotliSharedDictionaryDestroyInstance(dict);
+    return -1;
+  }
+  words = dict->words[combination];
+  transforms = dict->transforms[combination];
+  num_words = words->size_bits_by_length[length]
+                  ? ((size_t)1 << words->size_bits_by_length[length])
+                  : 0;
+  if (word_index >= num_words || transform >= transforms->num_transforms) {
+    BrotliSharedDictionaryDestroyInstance(dict);
+    return -1;
+  }
+  word = &words->data[words->offsets_by_length[length] +
+                      (size_t)length * word_index];
+  written = BrotliTransformDictionaryWord(out, word, (int)length, transforms,
+                                          (int)transform);
+  BrotliSharedDictionaryDestroyInstance(dict);
+  return written;
+}
+
+#endif /* BROTLI_EXPERIMENTAL */

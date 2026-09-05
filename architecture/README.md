@@ -14,7 +14,8 @@ error propagation, with Mermaid diagrams for the mechanics it describes.
 | [greedy-encoder.md](greedy-encoder.md) | Quality 2 to 9 encoder core: parameter resolution and the deterministic hasher plan, greedy and lazy command generation, the quick, bucket and forgetful-chain match finders, static-entropy and split meta-block storage, the attached-prefix search, and the single SIMD dispatch. |
 | [hq-encoder.md](hq-encoder.md) | Quality 10 and 11 encoder core: the binary-tree match finder, the Zopfli dynamic program and its numerical-determinism contract, the high-quality block splitter and histogram clustering, how an attached prefix reaches the dynamic program, and the layer-by-layer differential harness. |
 | [shared-brotli.md](shared-brotli.md) | RFC 9841 subsystem: what of Shared Brotli exists today — Large Window selection, declared window versus retained history, the widened distance alphabet and its per-meta-block retune, the immutable prepared dictionary and its ownership model, transactional preparation, virtual-concatenation addressing, the C-identical prepared index, how a match finder consults an attached prefix, where a large window and a dictionary are refused, and the internal error type — plus the serialized dictionaries and framing that are not written yet. |
-| [fuzzing.md](fuzzing.md) | AFL fuzzing subsystem: package isolation, the engine-neutral target layer, input model and payload cap, the nineteen targets and their oracles, backend deduplication, and the crash-to-regression lifecycle. |
+| [serialized-dictionary.md](serialized-dictionary.md) | RFC 9841 serialized shared dictionaries, behind the `experimental` feature: the module split between the private codec and the public description, the wire format field by field, the parse flow and where each limit is checked, transform application and the reference behaviour it keeps, the canonical encoding and the one noncanonical form the RFC allows, the seven resource ceilings, three deliberate differences from the C reference, and the differential harness that checks the rest against it. |
+| [fuzzing.md](fuzzing.md) | AFL fuzzing subsystem: package isolation, the engine-neutral target layer, input model and payload cap, the twenty targets and their oracles, backend deduplication, and the crash-to-regression lifecycle. |
 
 ## Module map
 
@@ -28,6 +29,7 @@ graph TD
         err["compressor::error<br/>(EncodeError)"]
         io["compressor::io<br/>(EncoderReader, EncoderWriter,<br/>FinishError)"]
         dictapi["compressor::dictionary<br/>(PreparedDictionary, DictionaryBuilder,<br/>DictionaryLimits, DictionaryError)"]
+        serapi["compressor::dictionary::serialized<br/>(SerializedDictionary, WordList,<br/>TransformList, ContextMap, ...)<br/><i>feature: experimental</i>"]
     end
 
     subgraph private["Private implementation"]
@@ -36,7 +38,7 @@ graph TD
         core["compressor::core"]
         bound["core::bound<br/>(compressed-size bound)"]
         driver["core::driver<br/>(quality routing, one-shot entry points)"]
-        rfc["core::rfc9841<br/>(ResolvedWindow: header, declared vs<br/>retained window; SharedContextInner,<br/>PrefixSources, PreparedPrefix,<br/>search: the match finders' view)"]
+        rfc["core::rfc9841<br/>(ResolvedWindow: header, declared vs<br/>retained window; SharedContextInner,<br/>PrefixSources, PreparedPrefix,<br/>search: the match finders' view;<br/>varint, words, transform, serialized:<br/>the dictionary stream codec)"]
         shared["core::shared<br/>(bits, huffman, match_len, fast_log,<br/>command, histogram, ringbuffer, dictionary,<br/>block_split, metablock, bitstream,<br/>distance, format, bit_cost)"]
         fast["core::fast<br/>(FastEncoder, SIMD dispatch)"]
         q0["fast::q0<br/>(one-pass encoder)"]

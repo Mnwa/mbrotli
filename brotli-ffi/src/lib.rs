@@ -277,6 +277,69 @@ pub struct BrotliSharedDictionary {
     _private: [u8; 0],
 }
 
+/// Bytes `mbrotli_shim_transform_dictionary_word` may write
+/// (`kTransformedBufferSize`).
+#[cfg(feature = "experimental")]
+pub const MAX_TRANSFORMED_WORD_BYTES: usize = 256 + 256 + 31;
+
+/// What the reference parser made of one serialized shared dictionary.
+///
+/// Filled by [`mbrotli_shim_parse_shared_dictionary`]. The layout must match
+/// the `MbrotliSharedDictInfo` the shim declares, field for field.
+#[cfg(feature = "experimental")]
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MbrotliSharedDictInfo {
+    /// One when the reference accepted the stream, zero when it rejected it.
+    pub ok: c_int,
+    /// How many LZ77 prefixes the dictionary carries.
+    pub num_prefix: c_uint,
+    /// The length of each prefix, in attachment order.
+    pub prefix_size: [c_uint; SHARED_BROTLI_MAX_COMPOUND_DICTS],
+    /// How many custom word lists the dictionary carries.
+    pub num_word_lists: u8,
+    /// How many custom transform lists the dictionary carries.
+    pub num_transform_lists: u8,
+    /// How many word-and-transform-list combinations it declares.
+    pub num_dictionaries: u8,
+    /// One when a context map is present.
+    pub context_based: u8,
+    /// The context map, all zero when absent.
+    pub context_map: [u8; SHARED_BROTLI_NUM_DICTIONARY_CONTEXTS],
+    /// Each combination's word list size bits, indexed by word length.
+    pub size_bits: [[u8; 32]; SHARED_BROTLI_NUM_DICTIONARY_CONTEXTS],
+    /// Each combination's word list byte count.
+    pub words_data_size: [c_uint; SHARED_BROTLI_NUM_DICTIONARY_CONTEXTS],
+    /// Each combination's transform count.
+    pub num_transforms: [c_uint; SHARED_BROTLI_NUM_DICTIONARY_CONTEXTS],
+    /// Each combination's prefix and suffix block length.
+    pub prefix_suffix_size: [c_uint; SHARED_BROTLI_NUM_DICTIONARY_CONTEXTS],
+    /// Each combination's cutoff transform per cut, or `-1` for none.
+    pub cutoff: [[i32; 10]; SHARED_BROTLI_NUM_DICTIONARY_CONTEXTS],
+}
+
+#[cfg(feature = "experimental")]
+impl Default for MbrotliSharedDictInfo {
+    /// Returns the all-zero value the shim writes on rejection.
+    fn default() -> Self {
+        Self {
+            ok: 0,
+            num_prefix: 0,
+            prefix_size: [0; SHARED_BROTLI_MAX_COMPOUND_DICTS],
+            num_word_lists: 0,
+            num_transform_lists: 0,
+            num_dictionaries: 0,
+            context_based: 0,
+            context_map: [0; SHARED_BROTLI_NUM_DICTIONARY_CONTEXTS],
+            size_bits: [[0; 32]; SHARED_BROTLI_NUM_DICTIONARY_CONTEXTS],
+            words_data_size: [0; SHARED_BROTLI_NUM_DICTIONARY_CONTEXTS],
+            num_transforms: [0; SHARED_BROTLI_NUM_DICTIONARY_CONTEXTS],
+            prefix_suffix_size: [0; SHARED_BROTLI_NUM_DICTIONARY_CONTEXTS],
+            cutoff: [[0; 10]; SHARED_BROTLI_NUM_DICTIONARY_CONTEXTS],
+        }
+    }
+}
+
 unsafe extern "C" {
     /// Reports every static-dictionary word matching at the start of `data`.
     ///
@@ -426,6 +489,51 @@ unsafe extern "C" {
         commands: *mut u8,
         capacity: usize,
     ) -> usize;
+
+    /// Parses a serialized shared dictionary and reports its structure.
+    ///
+    /// Wraps `BrotliSharedDictionaryAttach` with
+    /// [`BROTLI_SHARED_DICTIONARY_SERIALIZED`] through this crate's own shim,
+    /// which reads the fields out of the structure the public API keeps
+    /// opaque. Returns one when the reference accepted the stream and zero when
+    /// it rejected it; `out` is fully written either way, zeroed on rejection.
+    ///
+    /// Only compiled with the `experimental` feature, which is also what builds
+    /// the vendored library with `BROTLI_EXPERIMENTAL`; without it the
+    /// reference has no serialized dictionary parser at all.
+    ///
+    /// # Safety
+    ///
+    /// `data` must be readable for `size` bytes, and `out` must be a writable,
+    /// suitably aligned [`MbrotliSharedDictInfo`].
+    #[cfg(feature = "experimental")]
+    pub fn mbrotli_shim_parse_shared_dictionary(
+        data: *const u8,
+        size: usize,
+        out: *mut MbrotliSharedDictInfo,
+    ) -> c_int;
+
+    /// Transforms one word of one combination of a serialized dictionary.
+    ///
+    /// Wraps `BrotliTransformDictionaryWord`, which has no public header,
+    /// through this crate's own shim. Returns the number of bytes written into
+    /// `out`, or `-1` when the dictionary does not parse or an index is out of
+    /// range.
+    ///
+    /// # Safety
+    ///
+    /// `dictionary` must be readable for `dictionary_size` bytes and `out`
+    /// writable for [`MAX_TRANSFORMED_WORD_BYTES`] bytes.
+    #[cfg(feature = "experimental")]
+    pub fn mbrotli_shim_transform_dictionary_word(
+        dictionary: *const u8,
+        dictionary_size: usize,
+        combination: c_uint,
+        length: c_uint,
+        word_index: c_uint,
+        transform: c_uint,
+        out: *mut u8,
+    ) -> c_int;
 
     pub fn BrotliSharedDictionaryCreateInstance(
         alloc_func: brotli_alloc_func,

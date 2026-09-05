@@ -21,6 +21,9 @@
 #                       the parameter seeds behind two more bytes, the
 #                       attachment count and the limit squeeze the
 #                       dictionary target reads first
+#   seeds/serialized    valid RFC 9841 serialized dictionary streams, which
+#                       have no counterpart in the upstream test data and are
+#                       therefore the committed regression corpus instead
 #
 # Usage: fuzz/afl/prepare-seeds.sh
 
@@ -32,6 +35,7 @@ generic="$here/seeds/generic"
 params="$here/seeds/params"
 large_window="$here/seeds/large_window"
 dictionary="$here/seeds/dictionary"
+serialized="$here/seeds/serialized"
 
 # AFL refuses seeds above its default input cap, and huge seeds slow the
 # fuzzer down far more than they help coverage.
@@ -130,7 +134,18 @@ for path in "$params"/*; do
     done
 done
 
+# The serialized dictionary target reads an RFC 9841 dictionary stream. The
+# upstream test data holds none, and random payloads behind the magic bytes
+# teach the fuzzer little, so the seeds are the committed regression corpus:
+# valid streams of every shape plus the malformed ones worth starting from.
+rm -rf "$serialized"
+mkdir -p "$serialized"
+for path in "$here"/regressions/serialized_dictionary/*.bin; do
+    cp "$path" "$serialized/$(basename "$path" .bin)"
+done
+
 echo "prepared $count generic seeds in $generic"
 echo "prepared $(ls "$params" | wc -l | tr -d ' ') parameter seeds in $params"
 echo "prepared $(ls "$large_window" | wc -l | tr -d ' ') large window seeds in $large_window"
 echo "prepared $(ls "$dictionary" | wc -l | tr -d ' ') dictionary seeds in $dictionary"
+echo "prepared $(ls "$serialized" | wc -l | tr -d ' ') serialized dictionary seeds in $serialized"

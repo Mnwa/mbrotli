@@ -8,9 +8,12 @@
 
 use crate::{
     Context, IMPLEMENTED_QUALITIES, assert_round_trip, c_compress_with, c_decompress_large_window,
-    cap, decode_case,
+    c_parse_shared_dictionary, cap, decode_case,
 };
-use mbrotli::dictionary::{DictionaryBuilder, DictionaryError, DictionaryLimits};
+use mbrotli::dictionary::{
+    DictionaryBuilder, DictionaryError, DictionaryLimits, SerializedDictionary,
+    SerializedDictionaryError,
+};
 use mbrotli::io::FinishError;
 use mbrotli::{
     Compressor, ConfigError, EncodeError, EncoderConfig, EncoderStatus, Operation, Quality,
@@ -46,6 +49,8 @@ pub const TARGETS: &[(&str, TargetFn)] = &[
     ("parameter_parsing", parameter_parsing),
     ("large_window", large_window),
     ("dictionary", dictionary),
+    ("serialized_dictionary", serialized_dictionary),
+    ("serialized_dictionary", serialized_dictionary),
     ("compressor_lifecycle", compressor_lifecycle),
 ];
 
@@ -796,4 +801,106 @@ pub fn compressor_lifecycle(ctx: &Context, input: &[u8]) {
         expected(ctx, config, case.data),
         "the compressor did not survive its lifecycle"
     );
+}
+
+/// An RFC 9841 serialized dictionary must parse the way the reference does.
+///
+/// Three oracles, all on arbitrary bytes:
+///
+/// - parsing never panics, however malformed the input;
+/// - this crate and the pinned C parser agree on whether the stream is valid,
+///   except for a tail after the structure, which the reference ignores and
+///   this crate refuses — so the tail is retried without it;
+/// - what parses re-serializes to bytes that parse to an equal dictionary and
+///   serialize identically again, which is what makes the encoding canonical.
+pub fn serialized_dictionary(_ctx: &Context, input: &[u8]) {
+    let input = cap(input);
+    // Most random bytes fail the two magic bytes immediately, which would make
+    // the campaign learn nothing. Prefixing the magic when it is absent puts
+    // the fuzzer's effort into the fields that follow.
+    let mut owned;
+    let bytes = if input.starts_with(&[0x91, 0x00]) {
+        input
+    } else {
+        owned = Vec::with_capacity(input.len() + 2);
+        owned.extend_from_slice(&[0x91, 0x00]);
+        owned.extend_from_slice(input);
+        &owned
+    };
+
+    let ours = match SerializedDictionary::try_from(bytes) {
+        Err(SerializedDictionaryError::TrailingBytes { extra }) => {
+            let head = bytes.len().saturating_sub(extra);
+            SerializedDictionary::try_from(&bytes[..head])
+        }
+        other => other,
+    };
+    let theirs = c_parse_shared_dictionary(bytes);
+
+    assert_eq!(
+        ours.is_ok(),
+        theirs,
+        "this crate and the reference disagree about {bytes:02X?}"
+    );
+
+    let Ok(dictionary) = ours else {
+        return;
+    };
+
+    let written = dictionary.to_bytes();
+    assert_eq!(
+        written.len(),
+        dictionary.serialized_len(),
+        "the predicted length is wrong"
+    );
+    let reparsed = SerializedDictionary::try_from(&written[..])
+        .expect("what this crate writes must parse back");
+
+    assert_eq!(reparsed.prefix(), dictionary.prefix(), "the prefix moved");
+    assert_eq!(
+        reparsed.word_list_count(),
+        dictionary.word_list_count(),
+        "the word list count moved"
+    );
+    assert_eq!(
+        reparsed.transform_list_count(),
+        dictionary.transform_list_count(),
+        "the transform list count moved"
+    );
+    assert_eq!(
+        reparsed.combinations().collect::<Vec<_>>(),
+        dictionary.combinations().collect::<Vec<_>>(),
+        "the combinations moved"
+    );
+    assert_eq!(
+        reparsed.context_map(),
+        dictionary.context_map(),
+        "the context map moved"
+    );
+    assert_eq!(
+        reparsed.to_bytes(),
+        written,
+        "serializing is not stable across a round trip"
+    );
+    assert!(
+        c_parse_shared_dictionary(&written),
+        "the reference rejected what this crate wrote"
+    );
+
+    // A prepared dictionary may be built from anything that parses, and is
+    // refused rather than silently ignored when it carries custom lists.
+    match DictionaryBuilder::new().add_serialized(&dictionary).build() {
+        Ok(prepared) => {
+            assert!(!dictionary.is_custom_static());
+            assert_eq!(prepared.source_bytes(), dictionary.prefix().len());
+        }
+        Err(DictionaryError::CustomStaticDictionaryUnsupported) => {
+            assert!(dictionary.is_custom_static());
+        }
+        Err(DictionaryError::Empty) => {
+            assert!(dictionary.prefix().is_empty());
+            assert!(!dictionary.is_custom_static());
+        }
+        Err(other) => panic!("unexpected preparation failure: {other}"),
+    }
 }
