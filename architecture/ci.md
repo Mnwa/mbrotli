@@ -9,8 +9,10 @@ flowchart TD
     automatic["Push to master or pull request"] --> fast["ci.yml: CI"]
     fast --> check["Formatting, Clippy, docs and packaging"]
     fast --> tests["Release tests: default, all features and experimental<br/>Linux x86-64, Linux ARM64, macOS and MSRV"]
-    fast --> replay["AFL formatting, Clippy and regression replay"]
-    manual["Independent workflow_dispatch triggers"] --> fuzz["ci-fuzz.yml<br/>Six ten-minute AFL campaigns"]
+    fast --> replaySetup["Restore cache, install cargo-afl<br/>Build runtime for active Rust toolchain"]
+    replaySetup --> replay["AFL formatting, Clippy and regression replay"]
+    manual["Independent workflow_dispatch triggers"] --> fuzzSetup["ci-fuzz.yml: restore cache, install cargo-afl<br/>Build runtime for active Rust toolchain"]
+    fuzzSetup --> fuzz["Seven ten-minute AFL campaigns"]
     manual --> bench["ci-benchmarks.yml<br/>Criterion validation and timing<br/>Linux x86-64 and ARM64"]
     manual --> coverage["ci-coverage.yml<br/>100% function coverage gate"]
     manual --> miri["ci-miri.yml<br/>Miri retained-storage checks"]
@@ -22,6 +24,13 @@ stable Rust on all three operating-system runners and Rust 1.89 on Linux
 x86-64. The separate AFL package keeps its lint checks and committed regression
 replay in this automatic workflow.
 
+Both AFL jobs run `cargo afl config --build --force` after installing the pinned
+`cargo-afl` 0.18.2 and before testing or building targets. The Cargo cache can
+restore the executable without AFL's runtime for the active Rust compiler, and
+`cargo install` skips an already installed version. Explicit configuration
+rebuilds that runtime; `--force` also permits a runtime built by a fresh install.
+Configuration failure stops the job before regression replay or campaigns.
+
 Each heavy workflow runs only when individually dispatched. Select the desired
 workflow in the GitHub Actions tab and use **Run workflow**, or run, for example,
 `gh workflow run ci-benchmarks.yml --ref <branch>`. Dispatching one workflow does
@@ -30,7 +39,7 @@ not start the others.
 | Workflow | Checks |
 | --- | --- |
 | `ci-benchmarks.yml` — CI Benchmarks | Criterion validation and timing on Linux x86-64 and ARM64. |
-| `ci-fuzz.yml` — CI Fuzz | Six bounded AFL campaigns. |
+| `ci-fuzz.yml` — CI Fuzz | Seven bounded AFL campaigns. |
 | `ci-coverage.yml` — CI Coverage | Function coverage and HTML report. |
 | `ci-miri.yml` — CI Miri | Interpreter checks for retained storage. |
 | `ci-sanitizer.yml` — CI AddressSanitizer | AddressSanitizer integration tests. |

@@ -77,6 +77,10 @@ jobs:
           workspaces: fuzz/afl
       - name: install cargo-afl
         run: cargo install cargo-afl --version 0.18.2 --locked
+      # rust-cache can restore cargo-afl without the active compiler's runtime.
+      # --force also makes this succeed when a fresh install built it already.
+      - name: build AFL runtime for the active Rust toolchain
+        run: cargo afl config --build --force
       - name: check
         working-directory: fuzz/afl
         run: |
