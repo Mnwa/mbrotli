@@ -24,7 +24,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: fuzz/afl
-      - run: cargo install cargo-afl --version 0.18.2 --locked
+      # A cached executable may refer to bundled sources absent from this runner.
+      # Reinstall to restore its dependencies and rebuild against local paths.
+      - run: cargo install cargo-afl --version 0.18.2 --locked --force
       # rust-cache can restore cargo-afl without the active compiler's runtime.
       # --force also makes this succeed when a fresh install built it already.
       - name: build AFL runtime for the active Rust toolchain

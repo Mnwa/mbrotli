@@ -20,7 +20,7 @@ and known gaps. For usage examples, start with the [user guide](../docs/README.m
 | [Custom encoding and continuations](rfc9841-encoding.md) | Experimental static indexes, context combinations, and stream offsets. |
 | [Framing](framing.md) | Experimental resources, metadata, references, directory, and footer. |
 | [Fuzzing](fuzzing.md) | Isolated AFL package, input models, target oracles, and regression replay. |
-| [Continuous integration](ci.md) | Automatic checks, public API semver compatibility, and manually dispatched validation workflows. |
+| [Continuous integration](ci.md) | Automatic checks, public API semver compatibility, AFL setup after cache restore, and manually dispatched validation workflows. |
 
 ## Module map
 

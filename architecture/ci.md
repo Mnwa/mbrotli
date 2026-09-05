@@ -9,9 +9,9 @@ flowchart TD
     fast --> check["Formatting, Clippy, docs and packaging"]
     fast --> semver["Default public API semver compatibility<br/>Against the latest crates.io release"]
     fast --> tests["Release tests: default, all features and experimental<br/>Linux x86-64, Linux ARM64, macOS and MSRV"]
-    fast --> replaySetup["Restore cache, install cargo-afl<br/>Build runtime for active Rust toolchain"]
+    fast --> replaySetup["Restore cache, force reinstall cargo-afl<br/>Build runtime for active Rust toolchain"]
     replaySetup --> replay["AFL formatting, Clippy and regression replay"]
-    manual["Independent workflow_dispatch triggers"] --> fuzzSetup["ci-fuzz.yml: restore cache, install cargo-afl<br/>Build runtime for active Rust toolchain"]
+    manual["Independent workflow_dispatch triggers"] --> fuzzSetup["ci-fuzz.yml: restore cache, force reinstall cargo-afl<br/>Build runtime for active Rust toolchain"]
     fuzzSetup --> fuzz["Seven ten-minute AFL campaigns"]
     manual --> bench["ci-benchmarks.yml<br/>Criterion validation and timing<br/>Linux x86-64 and ARM64"]
     manual --> coverage["ci-coverage.yml<br/>100% function coverage gate"]
@@ -32,12 +32,18 @@ releases. The development-only C FFI crate is excluded by selecting `mbrotli`.
 Semver violations fail the job when the package version does not include the
 required bump. The action installs the checker and manages its baseline cache.
 
-Both AFL jobs run `cargo afl config --build --force` after installing the pinned
-`cargo-afl` 0.18.2 and before testing or building targets. The Cargo cache can
-restore the executable without AFL's runtime for the active Rust compiler, and
-`cargo install` skips an already installed version. Explicit configuration
-rebuilds that runtime; `--force` also permits a runtime built by a fresh install.
-Configuration failure stops the job before regression replay or campaigns.
+Both AFL jobs force reinstall the pinned runner with
+`cargo install cargo-afl --version 0.18.2 --locked --force`. The Cargo cache can
+restore the executable without the bundled `cargo-afl-common` AFL++ sources or
+the runtime for the active Rust compiler. An ordinary install skips an already
+installed version, leaving configuration unable to copy the missing sources.
+Forced installation restores the dependencies and rebuilds the executable with
+the current runner's source paths.
+
+The jobs then run `cargo afl config --build --force` before testing or building
+targets. Explicit configuration rebuilds the runtime; `--force` also permits a
+runtime built by a fresh install. Configuration failure stops the job before
+regression replay or campaigns.
 
 Each heavy workflow runs only when individually dispatched. Select the desired
 workflow in the GitHub Actions tab and use **Run workflow**, or run, for example,
