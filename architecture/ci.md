@@ -7,6 +7,7 @@ All workflows check out the vendored submodules recursively.
 flowchart TD
     automatic["Push to master or pull request"] --> fast["ci.yml: CI"]
     fast --> check["Formatting, Clippy, docs and packaging"]
+    fast --> semver["Default public API semver compatibility<br/>Against the latest crates.io release"]
     fast --> tests["Release tests: default, all features and experimental<br/>Linux x86-64, Linux ARM64, macOS and MSRV"]
     fast --> replaySetup["Restore cache, install cargo-afl<br/>Build runtime for active Rust toolchain"]
     replaySetup --> replay["AFL formatting, Clippy and regression replay"]
@@ -22,6 +23,14 @@ flowchart TD
 stable Rust on all three operating-system runners and Rust 1.89 on Linux
 x86-64. The separate AFL package keeps its lint checks and committed regression
 replay in this automatic workflow.
+
+The `semver` job uses `obi1kenobi/cargo-semver-checks-action@v2` to check only
+`mbrotli` against its latest published crates.io release, using stable Rust.
+It selects `default-features` to enforce the default public API's compatibility
+contract without imposing it on experimental APIs, which may change in patch
+releases. The development-only C FFI crate is excluded by selecting `mbrotli`.
+Semver violations fail the job when the package version does not include the
+required bump. The action installs the checker and manages its baseline cache.
 
 Both AFL jobs run `cargo afl config --build --force` after installing the pinned
 `cargo-afl` 0.18.2 and before testing or building targets. The Cargo cache can

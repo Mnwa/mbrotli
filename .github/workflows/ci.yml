@@ -32,6 +32,20 @@ jobs:
           RUSTDOCFLAGS: -D warnings
       - run: cargo package --allow-dirty
 
+  semver:
+    name: public API semver compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          package: mbrotli
+          # Check the stable API against the latest published release.
+          # Experimental APIs may change even in a patch release.
+          feature-group: default-features
+
   test:
     name: test on ${{ matrix.os }} (${{ matrix.toolchain }})
     runs-on: ${{ matrix.os }}
