@@ -9,6 +9,7 @@ error propagation, with Mermaid diagrams for the mechanics it describes.
 
 | Specification | Summary |
 | --- | --- |
+| [ci.md](ci.md) | Automatic tests, lints and checks; manually dispatched coverage, Miri, sanitizer, fuzz campaigns and benchmarks. |
 | [compressor.md](compressor.md) | Compressor subsystem: the five layers of the public API, where each configuration value is validated, how it lowers into the encoders' own parameters, the stateful compressor and its retained workspace, the one-shot paths, the session state machine, the transactional writer and the cursor-based reader, the split error model, SIMD dispatch, verification topology, and current implementation gaps. |
 | [encoder-workspace.md](encoder-workspace.md) | Retained allocation ownership, sparse matcher promotion, pinned backend kernels, session completion and bounded writer backpressure, with Track A verification evidence and open gates. |
 | [universal-encoding.md](universal-encoding.md) | Universal cross-API byte identity, equivalent stream settings, deliberate native C differences, exact slice capacity and canonical differential oracles. |

@@ -257,9 +257,9 @@ sets are identical; the corpus takes under two seconds instead of minutes.
   windows of 2^17 and above never span multiple encoder blocks under the
   fuzzer. `tests/vendor_corpus.rs` covers multi-fragment inputs instead,
   including a 12 MiB case.
-- **CI smoke campaigns are bounded evidence.** `.github/workflows/ci.yml`
-  includes serialized dictionaries and framing; a short campaign is not a
-  substitute for longer scheduled fuzzing.
+- **CI smoke campaigns are bounded evidence.** `.github/workflows/ci-fuzz.yml`
+  runs manual campaigns including serialized dictionaries and framing; a short
+  campaign is not a substitute for longer fuzzing.
 - **Most regression corpora are seeded, not found.** Every `boundary-*.bin` is
   hand-written. The two noncanonical-varint serialized fixtures are minimized
   AFL findings documenting the C helper's narrower integer reader.

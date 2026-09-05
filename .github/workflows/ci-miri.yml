@@ -1,0 +1,25 @@
+name: CI Miri
+
+# Run on demand from the Actions tab or the GitHub CLI.
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  miri:
+    name: interpreter checks for retained storage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - run: cargo miri test --lib compressor::core::shared::ringbuffer::tests
+      - run: cargo miri test --lib prefix_merge_preserves_prior_arena_entries_and_tree_ties
+      - run: cargo miri test --lib a_sparse_bucket_promotes_without_losing_its_recent_positions
+      - run: cargo miri test --lib compressor::core::stream::tests

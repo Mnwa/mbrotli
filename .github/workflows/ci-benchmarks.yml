@@ -1,0 +1,36 @@
+name: CI Benchmarks
+
+# Run on demand from the Actions tab or the GitHub CLI.
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  benchmark-smoke:
+    name: benchmarks compile and validate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Every benchmark validates its corpus against the C encoder and decoder
+      # before timing anything, so a short run is a differential check as well
+      # as a smoke test. The numbers a shared runner produces are not evidence;
+      # the published figures come from a pinned machine.
+      - run: >
+          cargo bench --bench compress --
+          --sample-size 10 --warm-up-time 1 --measurement-time 2
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: criterion-${{ matrix.os }}
+          path: target/criterion

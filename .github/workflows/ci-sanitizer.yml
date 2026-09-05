@@ -1,0 +1,26 @@
+name: CI AddressSanitizer
+
+# Run on demand from the Actions tab or the GitHub CLI.
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  address-sanitizer:
+    name: address sanitizer
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -Zsanitizer=address
+      RUSTDOCFLAGS: -Zsanitizer=address
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: >
+          cargo test --release --target x86_64-unknown-linux-gnu
+          --features experimental --test reuse --test writer_faults
+          --test streaming --test simd_backends --test dictionary

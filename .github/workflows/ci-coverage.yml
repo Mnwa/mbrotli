@@ -1,0 +1,31 @@
+name: CI Coverage
+
+# Run on demand from the Actions tab or the GitHub CLI.
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  coverage:
+    name: function coverage
+    runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_TEST_OPT_LEVEL: 1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-llvm-cov --version 0.9.0 --locked
+      - run: cargo llvm-cov --workspace --all-features --html --fail-under-functions 100
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: function-coverage
+          path: target/llvm-cov/html
