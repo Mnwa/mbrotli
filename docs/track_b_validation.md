@@ -4,6 +4,129 @@ Date: 2026-09-05. Host: Apple M5 Pro, `aarch64-apple-darwin`, Rust 1.98.1
 (`48a229cea`). Baseline: `a1ff445bc657c53599a72efa7a81bca1ad776f3d`.
 The externally authored files under `specifications/` are unchanged.
 
+## Follow-up compression gap fixes (2026-09-05)
+
+The follow-up audit reproduced three regressions before their fixes: the
+directory excluded type-8 headers; a 655,897-byte preparation budget accepted
+a 721,708-byte observed heap peak; and a prefix/suffix-only custom dictionary
+was not searched at q5..9. Those regressions now pass. Preparation accounts for
+the live owned description and temporary indexes, and a dedicated system-allocator
+test checks both rejection under the old insufficient ceiling and an accepted
+build staying below a sufficient ceiling.
+
+Greedy qualities retain the reference shallow search, then search the remaining
+transforms through the immutable flat index. Tests cover all transform operations
+at q5..9 on scalar and every host SIMD level, verify actual dictionary use, and
+decode the streams with C. Long transformed commands are checked at greedy and
+HQ qualities. Existing identity-only C fixtures remain unchanged.
+
+`metadata_with_options` adds independent uncompressed/Brotli/Shared Brotli
+encoding for original and repeated metadata. `repeat_metadata_fields` chooses
+a globally consistent subset before metadata starts. Repeats are pre-encoded,
+bounded by retained capacities, and do not retain dictionary borrows. Their
+Shared Brotli references must be external IDs; original metadata can use earlier
+internal chunks/resources. The directory includes every type 1–8 header.
+Fault injection now covers 400 offsets per fault mode with compressed metadata
+and repeats. Metadata keep-decoder chains and repeat-to-repeat internal references
+are not emitted; every compressed metadata chunk is independently decodable.
+
+Checks and local artifacts for this follow-up:
+
+```sh
+cargo fmt --all
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --all-features --locked
+CARGO_PROFILE_TEST_OPT_LEVEL=1 CARGO_TARGET_DIR=target/track-b-optimized-tests \
+  cargo test --workspace --all-features --locked
+cargo check --workspace --all-targets --no-default-features --locked
+cargo llvm-cov --workspace --all-features --locked --json \
+  --output-path target/track-b-gap-final-coverage.json --lib \
+  --test serialized_dictionary --test framing --test dictionary_memory \
+  --test dictionary --test public_api --test stream_offset --test reuse
+```
+
+Function coverage was inspected, including the new description-budget function,
+extended greedy probe, metadata adapter and metadata core. This remains a
+changed-function claim, not whole-project or branch-completeness certification.
+
+The final workspace run passed **938 tests including doctests**, using the
+optimized test profile above. Formatting, workspace Clippy with warnings denied,
+and the no-default-features check pass. The duplicate unoptimized full run was
+stopped after more than twenty minutes while its writer chunk-size test continued
+using a CPU core; it is not recorded as a completed pass. The final targeted
+debug/coverage runs pass, including the allocator-backed regression and the
+original error-limit contract. The initial final-coverage attempt caught an
+internal-budget value escaping into that diagnostic; it was fixed without
+weakening the existing assertion, then the report was regenerated successfully.
+
+The final report covers 29/29 static-index functions, 63/63 public dictionary
+module functions, 25/25 container-core functions, 3/3 metadata-core functions,
+and 22/22 framing-adapter functions. The new serialized-description allocation
+bound and its closures all have nonzero execution counts.
+
+From `fuzz/afl`, formatting, Clippy, `cargo afl test`, and release builds of
+`framing`/`serialized_dictionary` pass. The framing target now checks directory
+completeness and independently decodes compressed metadata in addition to
+schedule equivalence; a compressed/selected-repeat seed is committed.
+
+```sh
+cargo afl fuzz -i regressions/framing \
+  -o /tmp/mbrotli-gap-framing-afl-20260905 -V 60 -c - -- target/release/framing
+cargo afl fuzz -i regressions/serialized_dictionary \
+  -o /tmp/mbrotli-gap-dictionary-afl-20260905 -V 60 -t 1000 -c - \
+  -- target/release/serialized_dictionary
+```
+
+The 60-second campaigns completed 137,364 and 140,246 executions respectively,
+with zero crashes/hangs and stability 99.94%/99.97%. AFL required approved
+unsandboxed execution for shared-memory attachment; no host tuning was performed.
+These are bounded smoke runs, not exhaustive proofs.
+
+After the final budget-diagnostic correction, both targets were rebuilt and
+smoked again with the same commands, `-V 30`, and fresh output directories
+`/tmp/mbrotli-gap-framing-final-afl-20260905` and
+`/tmp/mbrotli-gap-dictionary-final-afl-20260905`. The final runs completed
+84,516/146,756 executions, zero crashes/hangs, and 99.94%/99.97% stability.
+
+Criterion commands:
+
+```sh
+cargo bench --bench track_b --features experimental --locked -- \
+  --sample-size 10 --warm-up-time 1 --measurement-time 2
+cargo bench --bench track_b --features experimental --locked -- \
+  track-b/metadata --sample-size 10 --warm-up-time 1 --measurement-time 2
+```
+
+The metadata benchmark verifies identical complete framing bytes against C
+one-shot compression plus an independently constructed RFC envelope, then C
+decoding before timing. Rust includes field serialization, container creation
+and finalization; C receives pre-serialized identical fields and constructs the
+same envelope. Neither side times corpus generation or validation. Means below
+are microseconds, from Criterion's `new/estimates.json` on the host above:
+
+| Metadata corpus / quality | Rust | C with envelope | Compressed bytes |
+| --- | ---: | ---: | ---: |
+| Small / q5 | 4.56 | 4.55 | 26 |
+| Small / q9 | 4.60 | 4.59 | 26 |
+| Small / q11 | 95.31 | 80.28 | 17 |
+| Repetitive text / q5 | 8.04 | 7.64 | 51 |
+| Repetitive text / q9 | 8.43 | 7.53 | 51 |
+| Repetitive text / q11 | 434.50 | 367.08 | 59 |
+| Deterministic binary / q5 | 73.28 | 77.90 | 16,393 |
+| Deterministic binary / q9 | 97.89 | 98.57 | 16,393 |
+| Deterministic binary / q11 | 20,276.53 | 19,638.06 | 16,393 |
+
+Serialized input sizes are 22, 16,805 and 16,389 bytes. The binary corpus is a
+fixed xorshift sequence, not ambient randomness. These short measurements
+overlapped test work. They document the new functionality, not a claim that all
+performance targets are met. The existing quality minima, physical-history
+ceiling, independent decoding above 30 bits, cross-architecture evidence, and
+full release performance gates remain as described below and in architecture.
+
+Rust and AFL skill guidance informed the allocation-backed regression,
+deterministic candidate ordering, and strengthened framing fuzz oracle.
+
 ## Delivered behavior
 
 - Existing strict serialized parsing and canonical serialization now feed the

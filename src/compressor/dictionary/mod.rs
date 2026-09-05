@@ -1152,8 +1152,34 @@ impl DictionaryBuilder {
             }
         }
         let budget = Budget::from(self.limits);
-        let inner = SharedContextInner::new(self.attachments, &budget)
-            .map_err(DictionaryError::from_core)?;
+        #[cfg(feature = "experimental")]
+        let description_bytes = self
+            .custom_static
+            .as_ref()
+            .map_or(0, |d| d.allocation_bound()) as u64;
+        #[cfg(feature = "experimental")]
+        let construction_bytes = description_bytes
+            .saturating_add((self.attachments.capacity() * size_of::<Box<[u8]>>()) as u64);
+        #[cfg(feature = "experimental")]
+        let budget = Budget {
+            max_allocated_bytes: budget
+                .max_allocated_bytes
+                .saturating_sub(construction_bytes),
+            ..budget
+        };
+        let inner = SharedContextInner::new(self.attachments, &budget).map_err(|error| {
+            #[cfg(feature = "experimental")]
+            let error = match error {
+                SharedBrotliError::SharedContextTooLarge { bytes, .. } => {
+                    SharedBrotliError::SharedContextTooLarge {
+                        bytes: bytes.saturating_add(construction_bytes),
+                        limit: self.limits.max_retained_bytes,
+                    }
+                }
+                other => other,
+            };
+            DictionaryError::from_core(error)
+        })?;
         #[cfg(feature = "experimental")]
         let inner = {
             let mut inner = inner;
@@ -1163,7 +1189,8 @@ impl DictionaryBuilder {
                         &data,
                         self.limits
                             .max_retained_bytes
-                            .saturating_sub(inner.allocated_size() as u64),
+                            .saturating_sub(inner.allocated_size() as u64)
+                            .saturating_sub(description_bytes),
                         self.limits.max_transformed_word_bytes,
                         self.limits.max_static_entries,
                     )

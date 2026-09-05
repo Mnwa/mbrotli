@@ -15,8 +15,8 @@ error propagation, with Mermaid diagrams for the mechanics it describes.
 | [hq-encoder.md](hq-encoder.md) | Quality 10 and 11 encoder core: the binary-tree match finder, the Zopfli dynamic program and its numerical-determinism contract, the high-quality block splitter and histogram clustering, how an attached prefix reaches the dynamic program, and the layer-by-layer differential harness. |
 | [shared-brotli.md](shared-brotli.md) | RFC 9841 base subsystem: Large Window selection, declared versus retained history, distance retuning, immutable prefix dictionaries, transactional preparation and virtual-concatenation addressing. |
 | [serialized-dictionary.md](serialized-dictionary.md) | RFC 9841 serialized shared dictionaries, behind the `experimental` feature: the module split between the private codec and the public description, the wire format field by field, the parse flow and where each limit is checked, transform application and the reference behaviour it keeps, the canonical encoding and the one noncanonical form the RFC allows, the seven resource ceilings, three deliberate differences from the C reference, and the differential harness that checks the rest against it. |
-| [rfc9841-encoding.md](rfc9841-encoding.md) | Experimental custom static indexes, transformed candidates and context combinations, compact long-word commands, checked headerless continuations and interoperability boundaries. |
-| [framing.md](framing.md) | Experimental non-seekable container writer: resource lifecycle, chunk types 0–10, dictionary references, transactional delivery, bounded storage, directory and fixed-point footer. |
+| [rfc9841-encoding.md](rfc9841-encoding.md) | Experimental custom static indexes with peak preparation budgets, greedy/HQ transformed candidates, context combinations, compact long-word commands and checked headerless continuations. |
+| [framing.md](framing.md) | Experimental non-seekable container writer: resource lifecycle, chunk types 0–10, compressed and field-selected metadata, dictionary references, transactional delivery, bounded storage, complete directory and fixed-point footer. |
 | [fuzzing.md](fuzzing.md) | AFL fuzzing subsystem: package isolation, engine-neutral targets including serialized dictionaries and framing, backend deduplication and regression replay. |
 
 ## Module map
@@ -40,6 +40,7 @@ graph TD
         sharederr["compressor::shared<br/>(SharedBrotliError)"]
         core["compressor::core"]
         framecore["framing::core<br/>(Container, Resource, durable chunks,<br/>directory and footer)"]
+        framemeta["framing::core::metadata<br/>(bounded serialization, independent<br/>original/repeated metadata streams)"]
         staticindex["core::rfc9841::static_index<br/>(immutable custom combinations)"]
         bound["core::bound<br/>(compressed-size bound)"]
         driver["core::driver<br/>(quality routing, one-shot entry points)"]
@@ -69,6 +70,8 @@ graph TD
     lib --> dictapi
     lib --> framing
     framing --> framecore
+    framecore --> framemeta
+    framemeta --> comp
     framecore --> sess
     framecore --> dictapi
     rfc --> staticindex

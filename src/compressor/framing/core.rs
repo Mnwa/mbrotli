@@ -1,8 +1,13 @@
 //! Container ordering, checked wire sizes, and durable output cursors.
 
 use std::io::{self, Write};
+mod metadata;
 mod resource;
-use super::{DictionaryReference, FramingConfig, FramingError, MetadataField, MetadataKind};
+use super::{
+    DictionaryReference, FramingConfig, FramingError, MetadataEncoding, MetadataField,
+    MetadataKind, MetadataOptions,
+};
+use crate::compressor::Compressor;
 use crate::compressor::core::rfc9841::varint;
 pub(super) use resource::Resource;
 
@@ -16,6 +21,7 @@ struct Record {
     kind: u8,
     header: Vec<u8>,
     metadata: Vec<u8>,
+    repeat_header: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -39,6 +45,7 @@ pub(super) struct Container<W> {
     directory_offset: u64,
     directory_done: bool,
     finished: bool,
+    repeat_fields: Option<Box<[[u8; 2]]>>,
 }
 
 impl<W: Write> Container<W> {
@@ -84,6 +91,7 @@ impl<W: Write> Container<W> {
             directory_offset: 0,
             directory_done: false,
             finished: false,
+            repeat_fields: None,
         })
     }
 
@@ -164,7 +172,6 @@ impl<W: Write> Container<W> {
             .filter(|v| *v <= varint::MAX_VARINT)
             .ok_or(FramingError::Overflow)?;
         let kind = header[0];
-        let metadata = self.config.repeat_metadata && matches!(kind, 1 | 6);
         let record_capacity = if record && self.records.len() == self.records.capacity() {
             self.records.capacity().saturating_mul(2).max(4)
         } else {
@@ -174,7 +181,6 @@ impl<W: Write> Container<W> {
             (record_capacity - self.records.capacity()).saturating_mul(size_of::<Record>())
                 + header.len()
                 + 9
-                + if metadata { content.len() } else { 0 }
         } else {
             0
         };
@@ -200,11 +206,8 @@ impl<W: Write> Container<W> {
                 offset: self.offset,
                 kind,
                 header: complete_header,
-                metadata: if metadata {
-                    content.to_vec()
-                } else {
-                    Vec::new()
-                },
+                metadata: Vec::new(),
+                repeat_header: Vec::new(),
             });
             self.retained += record_bytes;
         }
@@ -264,10 +267,64 @@ impl<W: Write> Container<W> {
         Ok(bytes)
     }
 
+    pub(super) fn repeat_metadata_fields(&mut self, codes: &[[u8; 2]]) -> Result<(), FramingError> {
+        self.idle()?;
+        if !self.config.repeat_metadata || self.records.iter().any(|r| matches!(r.kind, 1 | 6 | 7))
+        {
+            return Err(FramingError::Invalid(
+                "select repeated fields before any metadata with repetition enabled",
+            ));
+        }
+        if codes.len() > 678 {
+            return Err(FramingError::Limit("repeated field codes"));
+        }
+        for (i, code) in codes.iter().enumerate() {
+            if !(code.iter().all(u8::is_ascii_uppercase) || matches!(code, b"id" | b"mt"))
+                || codes[..i].contains(code)
+            {
+                return Err(FramingError::Invalid(
+                    "invalid or duplicate repeated field code",
+                ));
+            }
+        }
+        let bytes = size_of_val(codes);
+        self.check_buffer(bytes)?;
+        self.retained -= self.repeat_fields.as_ref().map_or(0, |v| size_of_val(&**v));
+        self.repeat_fields = Some(codes.into());
+        self.retained += bytes;
+        Ok(())
+    }
+
+    fn metadata_references(
+        &self,
+        encoding: MetadataEncoding<'_>,
+        repeated: bool,
+    ) -> Result<Vec<u8>, FramingError> {
+        if let MetadataEncoding::Shared { references, .. } = encoding {
+            if repeated
+                && references.iter().any(|r| {
+                    !matches!(
+                        r,
+                        DictionaryReference::PrefixId(_) | DictionaryReference::SerializedId(_)
+                    )
+                })
+            {
+                return Err(FramingError::Invalid(
+                    "pre-encoded repeated metadata requires external dictionary references",
+                ));
+            }
+            self.references(references)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
     pub(super) fn metadata(
         &mut self,
+        compressor: &mut Compressor,
         kind: MetadataKind,
         fields: &[MetadataField<'_>],
+        options: MetadataOptions<'_>,
     ) -> Result<(), FramingError> {
         self.idle()?;
         if !self.config.container {
@@ -312,20 +369,61 @@ impl<W: Write> Container<W> {
         if total > self.config.max_metadata_bytes {
             return Err(FramingError::Limit("metadata bytes"));
         }
-        self.check_buffer(length.saturating_mul(4).saturating_add(8192))?;
-        self.drain()?;
-        let mut content = Vec::with_capacity(length);
-        for field in fields {
-            content.extend_from_slice(&field.code);
-            number(field.value.len() as u64, &mut content)?;
-            content.extend_from_slice(field.value);
+        let bound = Compressor::max_compressed_size(length).map_err(|_| FramingError::Overflow)?;
+        // Original and repeated inputs/outputs, pending storage and queue copies
+        // coexist. Include output capacities, not merely compressed lengths.
+        self.check_buffer(
+            bound
+                .saturating_mul(8)
+                .saturating_add(length.saturating_mul(4))
+                .saturating_add(self.pending.capacity())
+                .saturating_add(8192),
+        )?;
+        if self.chunks >= self.config.max_chunks {
+            return Err(FramingError::Limit("chunk count"));
         }
+        let repeat = self.config.repeat_metadata && kind != MetadataKind::Global;
+        let references = self.metadata_references(options.encoding, false)?;
+        let repeat_references = if repeat {
+            self.metadata_references(options.repeated_encoding, true)?
+        } else {
+            Vec::new()
+        };
+        self.drain()?;
+        let content = metadata::serialize(fields, None, length)?;
         let code = match kind {
             MetadataKind::Resource => 1,
             MetadataKind::Footer => 6,
             MetadataKind::Global => 7,
         };
-        self.queue(vec![code, 0], &content, true)?;
+        let (header, content) =
+            metadata::encode(compressor, code, content, options.encoding, references)?;
+        let (repeat_header, repeated) = if repeat {
+            let selected = metadata::serialize(fields, self.repeat_fields.as_deref(), length)?;
+            let (mut header, content) = metadata::encode(
+                compressor,
+                8,
+                selected,
+                options.repeated_encoding,
+                repeat_references,
+            )?;
+            header.push(code);
+            (header, content)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let repeat_bytes = repeat_header.capacity().saturating_add(repeated.capacity());
+        self.check_buffer(
+            repeat_bytes
+                .saturating_add(content.capacity())
+                .saturating_add(8192),
+        )?;
+        self.queue(header, &content, true)?;
+        if let Some(record) = self.records.last_mut() {
+            record.metadata = repeated;
+            record.repeat_header = repeat_header;
+        }
+        self.retained += repeat_bytes;
         self.metadata_bytes = total;
         self.metadata_pending = kind == MetadataKind::Resource;
         self.after_resource = false;
@@ -358,12 +456,17 @@ impl<W: Write> Container<W> {
                     let record = &self.records[self.repeat_cursor];
                     if matches!(record.kind, 1 | 6) {
                         self.check_buffer(
-                            record.metadata.len().saturating_mul(3).saturating_add(8192),
+                            record
+                                .metadata
+                                .len()
+                                .saturating_mul(3)
+                                .saturating_add(record.repeat_header.len())
+                                .saturating_add(8192),
                         )?;
-                        let header = vec![8, 0, record.kind];
+                        let header = record.repeat_header.clone();
                         let content = record.metadata.clone();
                         let offset = self.offset;
-                        self.queue(header, &content, false)?;
+                        self.queue(header, &content, true)?;
                         if self.repeat_offset == 0 {
                             self.repeat_offset = offset;
                         }

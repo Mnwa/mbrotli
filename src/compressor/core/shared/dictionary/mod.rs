@@ -134,6 +134,9 @@ pub(crate) fn search_custom(
             stats.matches += 1;
         }
     }
+    if dictionary.probe_extended(data, max_length, base, max_distance, out) {
+        stats.matches += 1;
+    }
 }
 
 /// Tests one hash bucket entry against the data at the current position.

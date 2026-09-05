@@ -31,7 +31,12 @@ include its custom source bytes and retained index storage.
 applies transforms into stack scratch, checks transformed byte count, entry
 count and the aggregate retained estimate, and records exact capacities. Only
 then does the second pass allocate flat entry/byte arrays and shallow hash
-tables. No transformed word or candidate allocates during compression.
+tables. The budget includes the owned serialized description that remains alive
+during preparation, attachment-vector staging during prefix preparation, and the
+built-in transform list's temporary stringlet index. It bounds the preparation
+peak, not only the final index. `tests/dictionary_memory.rs` checks this with an
+allocation-counting system allocator. No transformed word or candidate allocates
+during compression.
 
 Each combination owns its word list, transform list, a 32,768-slot shallow hash
 table, and entries sorted by `(first four bytes, output length, address, base
@@ -61,10 +66,12 @@ flowchart TD
     utf8 --> selected[64-entry map selects first combination]
     hqmode --> selected
     selected --> shallow[Greedy: C-compatible shallow identity / cutoff probe]
+    selected --> extended[Greedy: flat-index search for other transforms]
     selected --> full[HQ: exact flat-index search across combinations]
     full --> address[Selected combination first, remaining combinations in wire order]
     address --> merge[Merge deterministic per-length candidates with history and prefixes]
     shallow --> score[Existing dictionary score and probe statistics]
+    extended --> score
     merge --> zopfli[Existing Zopfli cost model]
 ```
 
@@ -73,8 +80,13 @@ prefix. Each preceding combination adds its base-length word count multiplied
 by its transform count. HQ retains the smallest `(distance, base length)` for
 each output length. A custom index suppresses the implicit built-in search;
 the built-in dictionary participates only where the serialized description
-names it. Greedy retains the reference's restricted shallow search and cutoff
-ordering rather than consulting every HQ transform.
+names it. Greedy retains the reference's shallow search and cutoff ordering for
+representable transforms, then scores all other matching transforms in its
+selected combination using the flat index. Prefix/suffix, omit-first, uppercase,
+shift, long outputs, and cutoff layouts the C table cannot represent therefore
+participate at q5..9 as well. The extended probe replaces a candidate only for
+a strictly better score; sorted entry order resolves equal extended candidates
+deterministically. Identity-only fixtures retain their C byte identity.
 
 The existing top-level encoder SIMD dispatch is unchanged. Index preparation
 and lookup are scalar; history comparisons continue to receive the selected
@@ -129,6 +141,10 @@ partial chunks share one encoder session instead.
   dictionaries on every host SIMD level, context combinations, split input,
   preparation limits, all transform operations and the long-transform packed
   length regression.
+- Every transform operation is exercised without an identity fallback at q5..9
+  on scalar and all available host SIMD levels. These tests assert actual
+  dictionary use in addition to successful decoding. Long transformed-word
+  commands are checked at greedy and HQ qualities.
 - `tests/stream_offset.rs` checks C byte identity, decoding after a flushed
   prefix, empty/one/two-byte restarts, one-byte writes, tiny output buffers,
   backend identity, overflow and fresh-stream recovery.

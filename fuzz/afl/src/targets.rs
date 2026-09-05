@@ -939,7 +939,10 @@ pub fn serialized_dictionary(ctx: &Context, input: &[u8]) {
 
 /// Resource chunking and metadata sequences remain deterministic across caller writes.
 pub fn framing(ctx: &Context, input: &[u8]) {
-    use mbrotli::framing::{FramingConfig, MetadataField, MetadataKind, ResourceOptions};
+    use mbrotli::framing::{
+        FramingConfig, MetadataEncoding, MetadataField, MetadataKind, MetadataOptions,
+        ResourceOptions,
+    };
     let input = &input[..input.len().min(2048)];
     let selector = input.first().copied().unwrap_or(0);
     let config = FramingConfig {
@@ -954,14 +957,31 @@ pub fn framing(ctx: &Context, input: &[u8]) {
         let mut container = compressor
             .framed_writer(Vec::new(), config)
             .expect("valid profile");
+        if config.repeat_metadata && selector & 4 != 0 {
+            container
+                .repeat_metadata_fields(&[*b"id"])
+                .expect("repeated fields");
+        }
         for (index, payload) in input.chunks(512).enumerate() {
             let code = if index & 1 == 0 { *b"id" } else { *b"AB" };
-            let _ = container.metadata(
+            let _ = container.metadata_with_options(
                 MetadataKind::Resource,
                 &[MetadataField {
                     code,
                     value: payload,
                 }],
+                MetadataOptions {
+                    encoding: if selector & 8 != 0 {
+                        MetadataEncoding::Brotli
+                    } else {
+                        MetadataEncoding::Uncompressed
+                    },
+                    repeated_encoding: if selector & 16 != 0 {
+                        MetadataEncoding::Brotli
+                    } else {
+                        MetadataEncoding::Uncompressed
+                    },
+                },
             );
             let mut resource = container
                 .resource(ResourceOptions::default(), Default::default())
@@ -972,10 +992,60 @@ pub fn framing(ctx: &Context, input: &[u8]) {
             resource.try_finish().expect("finish resource");
         }
         let encoded = container.finish().expect("finish container");
+        validate_framing_directory(&encoded);
         if let Some(expected) = &expected {
             assert_eq!(&encoded, expected);
         } else {
             expected = Some(encoded);
         }
     }
+}
+
+fn framing_number(bytes: &[u8], cursor: &mut usize) -> usize {
+    let mut value = 0usize;
+    for shift in (0..63).step_by(7) {
+        let byte = bytes[*cursor];
+        *cursor += 1;
+        value |= usize::from(byte & 127) << shift;
+        if byte < 128 {
+            return value;
+        }
+    }
+    panic!("overlong framing varint");
+}
+
+fn validate_framing_directory(bytes: &[u8]) {
+    let mut cursor = 5;
+    let mut content_offsets = Vec::new();
+    while cursor < bytes.len() {
+        let offset = cursor;
+        let size = framing_number(bytes, &mut cursor);
+        let chunk = &bytes[cursor..cursor + size];
+        if matches!(chunk[0], 1..=8) {
+            content_offsets.push(offset);
+        }
+        if chunk[0] == 9 {
+            let mut p = 1;
+            let _repeat = framing_number(chunk, &mut p);
+            let mut listed = Vec::new();
+            while p < chunk.len() {
+                let pointed = framing_number(chunk, &mut p);
+                let length = framing_number(chunk, &mut p);
+                assert_eq!(&chunk[p..p + length], &bytes[pointed..pointed + length]);
+                p += length;
+                listed.push(pointed);
+            }
+            assert_eq!(listed, content_offsets);
+        }
+        if matches!(chunk[0], 1 | 6 | 7 | 8) && chunk[1] == 2 {
+            let mut p = 2;
+            let plain_size = framing_number(chunk, &mut p);
+            if chunk[0] == 8 {
+                p += 1;
+            }
+            assert!(crate::c_decompress(&chunk[p..], plain_size).is_some());
+        }
+        cursor += size;
+    }
+    assert_eq!(cursor, bytes.len());
 }

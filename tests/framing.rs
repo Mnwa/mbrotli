@@ -2,7 +2,10 @@
 #![cfg(feature = "experimental")]
 mod support;
 
-use mbrotli::framing::{FramingConfig, FramingError, MetadataField, MetadataKind, ResourceOptions};
+use mbrotli::framing::{
+    FramingConfig, FramingError, MetadataEncoding, MetadataField, MetadataKind, MetadataOptions,
+    ResourceOptions,
+};
 use mbrotli::{Compressor, EncoderConfig, Quality};
 use std::io::{self, Write};
 
@@ -145,7 +148,7 @@ fn all_chunk_types_have_rfc_headers_and_the_compressed_resource_interoperates() 
     }
     assert_eq!(
         entries,
-        parsed.iter().filter(|(_, c)| matches!(c[0], 1..=7)).count()
+        parsed.iter().filter(|(_, c)| matches!(c[0], 1..=8)).count()
     );
     let footer = parsed.last().expect("footer").1;
     let reversed: Vec<_> = footer[1..].iter().rev().copied().collect();
@@ -193,7 +196,7 @@ impl Write for FaultSink {
 fn every_partial_sink_failure_can_be_retried_without_losing_or_duplicating_bytes() {
     let payload = b"writer fault schedule contents".repeat(4);
     let mut expected = None;
-    for fail_at in 0..150 {
+    for fail_at in 0..400 {
         for zero in [false, true] {
             let mut compressor =
                 Compressor::new(EncoderConfig::default().with_quality(Quality::Q5))
@@ -208,6 +211,26 @@ fn every_partial_sink_failure_can_be_retried_without_losing_or_duplicating_bytes
             if container.flush().is_err() {
                 container.get_mut().budget = usize::MAX;
                 container.flush().expect("retry header");
+            }
+            container
+                .repeat_metadata_fields(&[*b"id"])
+                .expect("selection");
+            container
+                .metadata_with_options(
+                    MetadataKind::Resource,
+                    &[MetadataField {
+                        code: *b"id",
+                        value: b"fault-tested resource",
+                    }],
+                    MetadataOptions {
+                        encoding: MetadataEncoding::Brotli,
+                        repeated_encoding: MetadataEncoding::Brotli,
+                    },
+                )
+                .expect("metadata");
+            if container.flush().is_err() {
+                container.get_mut().budget = usize::MAX;
+                container.flush().expect("retry metadata");
             }
             {
                 let mut resource = container
@@ -269,6 +292,299 @@ fn single_resource_empty_wire_fixture_is_canonical() {
     assert_eq!(
         writer.finish().expect("finish"),
         [0x91, 10, 66, 82, 0, 3, 2, 0, 0]
+    );
+}
+
+#[test]
+fn compressed_metadata_and_selected_repeats_decode_independently() {
+    let mut compressor = Compressor::new(Default::default()).expect("config");
+    let mut writer = compressor
+        .framed_writer(Vec::new(), config())
+        .expect("writer");
+    writer.repeat_metadata_fields(&[*b"id"]).expect("selection");
+    let options = MetadataOptions {
+        encoding: MetadataEncoding::Brotli,
+        repeated_encoding: MetadataEncoding::Brotli,
+    };
+    for name in [b"first".as_slice(), b"second"] {
+        writer
+            .metadata_with_options(
+                MetadataKind::Resource,
+                &[
+                    MetadataField {
+                        code: *b"id",
+                        value: name,
+                    },
+                    MetadataField {
+                        code: *b"AB",
+                        value: b"omitted from repeated metadata",
+                    },
+                ],
+                options,
+            )
+            .expect("metadata");
+        assert!(writer.repeat_metadata_fields(&[]).is_err());
+        writer
+            .uncompressed_resource(Default::default())
+            .expect("resource")
+            .try_finish()
+            .expect("finish");
+        writer
+            .metadata_with_options(
+                MetadataKind::Footer,
+                &[MetadataField {
+                    code: *b"AB",
+                    value: b"footer",
+                }],
+                options,
+            )
+            .expect("footer");
+    }
+    writer
+        .metadata_with_options(
+            MetadataKind::Global,
+            &[MetadataField {
+                code: *b"AB",
+                value: b"global",
+            }],
+            options,
+        )
+        .expect("global");
+    let bytes = writer.finish().expect("finish");
+    let mut repeated = Vec::new();
+    let mut originals = 0;
+    for (_, chunk) in chunks(&bytes) {
+        if !matches!(chunk[0], 1 | 6 | 7 | 8) {
+            continue;
+        }
+        assert_eq!(chunk[1], 2);
+        let mut cursor = 2;
+        let length = number(chunk, &mut cursor) as usize;
+        if chunk[0] == 8 {
+            cursor += 1;
+        } // repeated chunk type
+        let decoded = support::c_decompress(&chunk[cursor..], length).expect("decode metadata");
+        if chunk[0] == 8 {
+            repeated.push(decoded);
+        } else {
+            originals += 1;
+        }
+    }
+    assert_eq!(originals, 5);
+    assert_eq!(
+        repeated,
+        [
+            b"id\x05first".to_vec(),
+            Vec::new(),
+            b"id\x06second".to_vec(),
+            Vec::new()
+        ]
+    );
+}
+
+#[test]
+fn shared_metadata_uses_explicit_references_and_repeats_without_resource_dependencies() {
+    use mbrotli::dictionary::DictionaryBuilder;
+    use mbrotli::framing::{DictionaryId, DictionaryReference};
+    let prefix = b"abcdefghijklmnopqrstuvwxyz0123456789 a useful metadata dictionary";
+    let dictionary = DictionaryBuilder::default()
+        .add_prefix(&prefix[..])
+        .build()
+        .expect("dictionary");
+    let mut compressor =
+        Compressor::new(EncoderConfig::default().with_quality(Quality::Q5)).expect("config");
+    let mut writer = compressor
+        .framed_writer(Vec::new(), config())
+        .expect("writer");
+    let pointer = writer.next_chunk_offset();
+    {
+        let mut resource = writer
+            .uncompressed_resource(Default::default())
+            .expect("resource");
+        resource.write_all(prefix).expect("prefix");
+        resource.try_finish().expect("finish");
+    }
+    let external = [DictionaryReference::PrefixId(DictionaryId([3; 32]))];
+    let internal = [DictionaryReference::PrefixResource(pointer)];
+    let encoding = MetadataEncoding::Shared {
+        dictionary: &dictionary,
+        references: &internal,
+    };
+    let fields = [MetadataField {
+        code: *b"AB",
+        value: prefix,
+    }];
+    assert!(
+        writer
+            .metadata_with_options(
+                MetadataKind::Resource,
+                &fields,
+                MetadataOptions {
+                    encoding,
+                    repeated_encoding: encoding
+                }
+            )
+            .is_err()
+    );
+    writer
+        .metadata_with_options(
+            MetadataKind::Resource,
+            &fields,
+            MetadataOptions {
+                encoding,
+                repeated_encoding: MetadataEncoding::Shared {
+                    dictionary: &dictionary,
+                    references: &external,
+                },
+            },
+        )
+        .expect("shared metadata");
+    writer
+        .uncompressed_resource(Default::default())
+        .expect("resource")
+        .try_finish()
+        .expect("finish");
+    let bytes = writer.finish().expect("finish");
+    let mut count = 0;
+    for (_, chunk) in chunks(&bytes) {
+        if !matches!(chunk[0], 1 | 8) {
+            continue;
+        }
+        assert_eq!(chunk[1], 3);
+        let mut cursor = 2;
+        let length = number(chunk, &mut cursor) as usize;
+        assert_eq!(chunk[cursor], 1);
+        cursor += 1;
+        if chunk[0] == 8 {
+            assert_eq!(chunk[cursor], 2);
+            cursor += 34; // flags, hash type, 32-byte ID
+            assert_eq!(chunk[cursor], 1);
+            cursor += 1;
+        } else {
+            assert_eq!(chunk[cursor], 0);
+            cursor += 1;
+            assert_eq!(number(chunk, &mut cursor), pointer);
+        }
+        let decoded =
+            support::c_decompress_with_prefixes(&[prefix.as_slice()], &chunk[cursor..], length)
+                .expect("decode");
+        assert_eq!(&decoded[3..], prefix);
+        count += 1;
+    }
+    assert_eq!(count, 2);
+}
+
+#[test]
+fn repeated_field_selection_validates_codes_and_empty_selection() {
+    let mut compressor = Compressor::new(Default::default()).expect("config");
+    let mut writer = compressor
+        .framed_writer(Vec::new(), config())
+        .expect("writer");
+    for codes in [&[*b"aa"][..], &[*b"id", *b"id"], &[[0, 0]]] {
+        assert!(writer.repeat_metadata_fields(codes).is_err());
+    }
+    assert!(writer.repeat_metadata_fields(&[*b"AB"; 679]).is_err());
+    writer
+        .repeat_metadata_fields(&[*b"id", *b"mt", *b"AB"])
+        .expect("valid codes");
+    writer
+        .repeat_metadata_fields(&[])
+        .expect("replace with empty selection");
+    writer
+        .metadata(
+            MetadataKind::Resource,
+            &[MetadataField {
+                code: *b"id",
+                value: b"name",
+            }],
+        )
+        .expect("metadata");
+    writer
+        .uncompressed_resource(Default::default())
+        .expect("resource")
+        .try_finish()
+        .expect("finish");
+    let bytes = writer.finish().expect("finish");
+    assert_eq!(
+        chunks(&bytes)
+            .iter()
+            .find(|(_, c)| c[0] == 8)
+            .expect("repeat")
+            .1,
+        &[8, 0, 1]
+    );
+}
+
+#[test]
+fn failed_metadata_compression_does_not_accept_the_metadata() {
+    use mbrotli::dictionary::DictionaryBuilder;
+    use mbrotli::framing::{DictionaryId, DictionaryReference};
+    let dictionary = DictionaryBuilder::default()
+        .add_prefix(&b"a dictionary prefix"[..])
+        .build()
+        .expect("dictionary");
+    let mut compressor =
+        Compressor::new(EncoderConfig::default().with_quality(Quality::Q4)).expect("config");
+    let mut writer = compressor
+        .framed_writer(Vec::new(), config())
+        .expect("writer");
+    let result = writer.metadata_with_options(
+        MetadataKind::Resource,
+        &[],
+        MetadataOptions {
+            encoding: MetadataEncoding::Shared {
+                dictionary: &dictionary,
+                references: &[DictionaryReference::PrefixId(DictionaryId([0; 32]))],
+            },
+            ..Default::default()
+        },
+    );
+    // Empty fields still call the checked dictionary entry point.
+    assert!(matches!(result, Err(FramingError::Encode(_))));
+    assert_eq!(writer.next_chunk_offset(), 5);
+    writer
+        .metadata(MetadataKind::Resource, &[])
+        .expect("retry uncompressed");
+    writer
+        .uncompressed_resource(Default::default())
+        .expect("resource")
+        .try_finish()
+        .expect("finish");
+    assert!(writer.finish().is_ok());
+}
+
+#[test]
+fn large_window_metadata_is_self_contained_shared_brotli() {
+    use mbrotli::Window;
+    let mut compressor = Compressor::new(
+        EncoderConfig::default()
+            .with_quality(Quality::Q5)
+            .with_window(Window::large(22).expect("window")),
+    )
+    .expect("config");
+    let mut writer = compressor
+        .framed_writer(Vec::new(), config())
+        .expect("writer");
+    writer
+        .metadata_with_options(
+            MetadataKind::Global,
+            &[MetadataField {
+                code: *b"AB",
+                value: b"value",
+            }],
+            MetadataOptions {
+                encoding: MetadataEncoding::Brotli,
+                ..Default::default()
+            },
+        )
+        .expect("metadata");
+    let bytes = writer.finish().expect("finish");
+    let parsed = chunks(&bytes);
+    let chunk = parsed.iter().find(|(_, c)| c[0] == 7).expect("global").1;
+    assert_eq!(&chunk[..4], &[7, 3, 8, 0]);
+    assert_eq!(
+        support::c_decompress_large_window(&chunk[4..], 8).expect("decode"),
+        b"AB\x05value"
     );
 }
 

@@ -210,5 +210,143 @@ fn dictionaries(c: &mut Criterion) {
         group.finish();
     }
 }
-criterion_group!(benches, dictionaries);
+fn metadata_envelope(encoded: &[u8], plain_size: usize, output: &mut Vec<u8>) {
+    output.clear();
+    output.extend_from_slice(&[0x91, 10, 66, 82, 4]);
+    let mut header = vec![7, 2];
+    number(plain_size, &mut header);
+    number(header.len() + encoded.len(), output);
+    output.extend_from_slice(&header);
+    output.extend_from_slice(encoded);
+    let mut footer = Vec::with_capacity(10);
+    let mut size = output.len();
+    loop {
+        footer.clear();
+        number(size, &mut footer);
+        footer.reverse();
+        footer.push(0); // no central directory
+        let next = output.len() + footer.len() + 2;
+        if next == size {
+            break;
+        }
+        size = next;
+    }
+    output.push((footer.len() + 1) as u8);
+    output.push(10);
+    output.extend_from_slice(&footer);
+}
+
+fn metadata(c: &mut Criterion) {
+    use mbrotli::framing::{MetadataEncoding, MetadataField, MetadataKind, MetadataOptions};
+    let mut random = 7u64;
+    let binary: Vec<u8> = (0..16384)
+        .map(|_| {
+            random ^= random << 13;
+            random ^= random >> 7;
+            random ^= random << 17;
+            random as u8
+        })
+        .collect();
+    for (name, value) in [
+        ("small", b"a short description".to_vec()),
+        (
+            "text",
+            b"application metadata with repeating words ".repeat(400),
+        ),
+        ("binary", binary),
+    ] {
+        let mut plain = b"AB".to_vec();
+        number(value.len(), &mut plain);
+        plain.extend_from_slice(&value);
+        for quality in [Quality::Q5, Quality::Q9, Quality::Q11] {
+            let mut c_output =
+                vec![0; Compressor::max_compressed_size(plain.len()).expect("bound")];
+            let c_encode = |output: &mut [u8]| {
+                let mut size = output.len();
+                // SAFETY: plain/output remain live with exactly these lengths;
+                // the one-shot C API does not retain either pointer.
+                let ok = unsafe {
+                    ffi::BrotliEncoderCompress(
+                        i32::from(quality.get()),
+                        22,
+                        ffi::BROTLI_DEFAULT_MODE,
+                        plain.len(),
+                        plain.as_ptr(),
+                        &raw mut size,
+                        output.as_mut_ptr(),
+                    )
+                };
+                assert_eq!(ok, ffi::BROTLI_TRUE);
+                size
+            };
+            let size = c_encode(&mut c_output);
+            let mut compressor =
+                Compressor::new(EncoderConfig::default().with_quality(quality)).expect("config");
+            let mut output = Vec::with_capacity(c_output.len() + 128);
+            let mut rust_encode = |output: &mut Vec<u8>| {
+                output.clear();
+                let mut writer = compressor
+                    .framed_writer(
+                        output,
+                        FramingConfig {
+                            central_directory: false,
+                            ..Default::default()
+                        },
+                    )
+                    .expect("writer");
+                writer
+                    .metadata_with_options(
+                        MetadataKind::Global,
+                        &[MetadataField {
+                            code: *b"AB",
+                            value: black_box(&value),
+                        }],
+                        MetadataOptions {
+                            encoding: MetadataEncoding::Brotli,
+                            ..Default::default()
+                        },
+                    )
+                    .expect("metadata");
+                writer.try_finish().expect("finish");
+            };
+            rust_encode(&mut output);
+            let mut reference = Vec::with_capacity(output.capacity());
+            metadata_envelope(&c_output[..size], plain.len(), &mut reference);
+            assert_eq!(output, reference);
+            let mut decoded = vec![0; plain.len()];
+            let mut decoded_size = decoded.len();
+            // SAFETY: both slices have the declared lengths and out-size is writable.
+            let result = unsafe {
+                ffi::BrotliDecoderDecompress(
+                    size,
+                    c_output.as_ptr(),
+                    &raw mut decoded_size,
+                    decoded.as_mut_ptr(),
+                )
+            };
+            assert_eq!(result, ffi::BROTLI_DECODER_RESULT_SUCCESS);
+            assert_eq!(decoded, plain);
+            eprintln!(
+                "metadata {name} q{} plain={} compressed={} container={}",
+                quality.get(),
+                plain.len(),
+                size,
+                output.len()
+            );
+            let mut group =
+                c.benchmark_group(format!("track-b/metadata/{name}/q{}", quality.get()));
+            group.throughput(Throughput::Bytes(value.len() as u64));
+            group.bench_function("mbrotli", |b| b.iter(|| rust_encode(&mut output)));
+            group.bench_function("c-brotli-with-rfc-envelope", |b| {
+                b.iter(|| {
+                    let size = c_encode(&mut c_output);
+                    metadata_envelope(&c_output[..size], plain.len(), &mut reference);
+                })
+            });
+            group.finish();
+        }
+    }
+}
+
+criterion_group!(benches, dictionaries, metadata);
 criterion_main!(benches);

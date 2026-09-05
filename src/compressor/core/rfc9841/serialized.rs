@@ -266,6 +266,27 @@ pub(crate) struct SerializedDictionaryData {
 }
 
 impl SerializedDictionaryData {
+    /// Conservative heap bound while this description and prepared indexes coexist.
+    pub(crate) fn allocation_bound(&self) -> usize {
+        self.prefix()
+            .len()
+            .saturating_add(self.word_lists.capacity() * size_of::<WordList>())
+            .saturating_add(self.transform_lists.capacity() * size_of::<TransformList>())
+            .saturating_add(self.combinations.capacity() * size_of::<Combination>())
+            .saturating_add(
+                self.word_lists
+                    .iter()
+                    .map(|w| w.data().len())
+                    .sum::<usize>(),
+            )
+            .saturating_add(
+                self.transform_lists
+                    .iter()
+                    .map(|t| t.wire_len() + t.stringlet_count() * size_of::<u16>())
+                    .sum::<usize>(),
+            )
+    }
+
     /// Returns the LZ77 prefix, or an empty slice when there is none.
     pub(crate) fn prefix(&self) -> &[u8] {
         self.prefix.as_deref().unwrap_or_default()

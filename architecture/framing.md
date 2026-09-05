@@ -14,7 +14,9 @@ graph TD
     mechanics --> session[EncoderSession: borrows compressor and optional PreparedDictionary]
     mechanics --> container
     container --> queue[Bounded pending chunk and durable write cursor]
-    container --> directory[Offsets and exact original content headers]
+    container --> directory[Offsets and exact headers for types 1 through 8]
+    writer --> metadata[private core::metadata: bounded field serialization and compression]
+    metadata --> compressor
     queue --> sink[Non-seekable Write]
 ```
 
@@ -28,6 +30,14 @@ queue chunks. `flush` drains them. Container `try_finish` is retryable; consumin
 `finish` returns the sink or a boxed `FramingFinishError` retaining the entire
 writer. `into_inner` aborts without I/O and intentionally discards pending data.
 No destructor writes or implicitly finishes a resource.
+
+`metadata_with_options` accepts independent `MetadataEncoding` values for the
+original chunk and its repeated copy: uncompressed, Brotli, or Shared Brotli
+with a borrowed prepared dictionary and explicit references. `metadata` remains
+the uncompressed convenience call. `repeat_metadata_fields` selects field codes
+globally before the first metadata chunk; this guarantees that a selected field
+is repeated everywhere it occurs. An empty selection still emits one empty
+repeat per original resource/footer metadata chunk.
 
 `ResourceOptions` carries visibility and an optional caller-provided 256-bit
 checksum. `DictionaryReference` distinguishes prefix/serialized external IDs,
@@ -63,16 +73,42 @@ retained verbatim for the central directory.
 | 3 / 4 / 5 | First / middle / last partial resource |
 | 6 | Footer metadata after a resource |
 | 7 | Global metadata |
-| 8 | Complete uncompressed copies of resource/footer metadata in original order |
-| 9 | Central directory: repeated-metadata offset and original content headers |
+| 8 | Complete or field-selected copies of resource/footer metadata in original order, with independent compression |
+| 9 | Central directory: repeated-metadata offset and all type 1–8 content headers, including repeated metadata |
 | 10 | Final footer: reversed varints for total file size and directory offset |
 
-Metadata is emitted uncompressed. Uppercase field codes are application data;
+Metadata defaults to uncompressed. Uppercase field codes are application data;
 resource-only `id` must be UTF-8 and `mt` exactly eight bytes. Duplicate reserved
 fields and misplaced metadata are rejected. Padding does not break metadata
 adjacency. Repeated metadata requires a central directory. The single-resource
 profile forbids the directory, repetition and all metadata, and requires exactly
 one resource.
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Container
+    participant Metadata as core::metadata
+    participant Compressor
+    Caller->>Container: metadata_with_options(fields, encodings)
+    Container->>Container: validate order, fields, references and peak staging budget
+    Container->>Metadata: serialize original and globally selected repeated fields
+    Metadata->>Compressor: bounded one-shot compression where requested
+    Compressor-->>Metadata: independent streams
+    Metadata-->>Container: original and repeat headers/payloads
+    Container->>Container: queue original; retain encoded repeat with its full capacity
+    Caller->>Container: try_finish
+    Container->>Container: queue each repeat once and record its header
+    Container->>Container: emit directory over original AND repeat records
+```
+
+Repeated chunks are pre-encoded while queuing their originals, so dictionaries
+are borrowed only for that call. Shared repeated metadata accepts external IDs
+only: it cannot accidentally depend on resource chunks unavailable to a reader
+of the terminal metadata series. Original metadata may use earlier internal
+resources or chunks. Each compressed metadata chunk starts a new decoder;
+Large Window without an attached dictionary uses Shared Brotli with zero
+references. Resource partial chunks continue to use keep-decoder semantics.
 
 ## Streaming and transactional emission
 
@@ -118,7 +154,8 @@ Defaults are 64 KiB input per chunk, 1 MiB aggregate metadata, 8 MiB framing
 storage, 10,000 resources and 1,000,000 chunks (generated terminal chunks count).
 Chunk sizes must be 1..=16 MiB and fit the conservative staging budget. Checks
 precede chunk/metadata allocations and account for retained header records,
-record-vector capacity, repeated metadata and temporary buffers. Resource data
+record-vector capacity, repeated field selection, encoded repeat capacities and
+temporary compression buffers (using the compressor's output bound). Resource data
 is streamed, while the bounded directory grows with chunk count. These limits
 do not include the sink's storage, compressor workspace or separately prepared
 dictionaries; their owners control those budgets.
@@ -134,12 +171,15 @@ misleading successful footer.
 `tests/framing.rs` independently parses wire fixtures for all eleven chunk
 types, all reference forms, directories and reversed footer fields. Compressed
 resource bytes decode with C. Fault injection covers short writes, interruption,
-zero and `WouldBlock` at 150 offsets each, retryable finalization and abandoned
+zero and `WouldBlock` at 400 offsets each, including compressed originals and
+repeats, retryable finalization and abandoned
 resources. AFL generates resource/metadata sequences and compares output across
 caller write schedules; its committed corpus is replayed by `cargo afl test`.
 
 The pinned C library has no RFC 9841 container implementation. Whole-container
 verification is therefore structural RFC fixture testing, not a C framing
-oracle. Compressed metadata and partial repeated-metadata subsets are not exposed;
-the writer emits the valid uncompressed, complete-repeat forms. No decompressor
-or automatic dictionary checksum policy is implemented.
+oracle. Metadata streams and selected repeats are independently decoded with C;
+directory tests require every type 1–8 header. Metadata emits independent streams,
+not cross-chunk keep-decoder streams, and pre-encoded repeated metadata does not
+use internal repeat-to-repeat dictionaries. No decompressor or automatic
+dictionary checksum policy is implemented.

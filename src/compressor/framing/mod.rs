@@ -16,7 +16,7 @@ use thiserror::Error;
 pub struct FramingConfig {
     /// Include a final footer and permit multiple resources and metadata.
     pub container: bool,
-    /// Emit a central directory containing every original content header.
+    /// Emit a central directory containing every data and metadata header.
     pub central_directory: bool,
     /// Repeat all resource metadata before the central directory.
     pub repeat_metadata: bool,
@@ -94,6 +94,36 @@ pub struct MetadataField<'a> {
     pub code: [u8; 2],
     /// Raw field content. `id` is UTF-8; `mt` is an eight-byte signed timestamp.
     pub value: &'a [u8],
+}
+
+/// Compression for a self-contained metadata chunk.
+///
+/// `Brotli` uses the borrowed compressor's configuration (including Large
+/// Window). Shared references must match the supplied dictionary and attachment
+/// order. Repeated metadata permits only external references through this API.
+#[derive(Debug, Default, Clone, Copy)]
+pub enum MetadataEncoding<'a> {
+    /// Store the serialized fields without compression.
+    #[default]
+    Uncompressed,
+    /// Start a fresh Brotli stream without an attached dictionary.
+    Brotli,
+    /// Start a fresh Shared Brotli stream with explicit dictionary references.
+    Shared {
+        /// Immutable dictionary borrowed only while this metadata is queued.
+        dictionary: &'a PreparedDictionary,
+        /// Caller-supplied references in decoder attachment order.
+        references: &'a [DictionaryReference],
+    },
+}
+
+/// Independent encodings for original and repeated metadata.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MetadataOptions<'a> {
+    /// Encoding of the metadata adjacent to its resource, or global metadata.
+    pub encoding: MetadataEncoding<'a>,
+    /// Encoding of its repeated copy, when repetition is enabled.
+    pub repeated_encoding: MetadataEncoding<'a>,
 }
 
 /// Failure to validate, encode, or deliver a container.
@@ -265,7 +295,64 @@ impl<W: Write> FramedWriter<'_, W> {
         kind: MetadataKind,
         fields: &[MetadataField<'_>],
     ) -> Result<(), FramingError> {
-        self.core.metadata(kind, fields)
+        self.metadata_with_options(kind, fields, MetadataOptions::default())
+    }
+
+    /// Queues metadata with explicit, independent compression of its repeated copy.
+    ///
+    /// All fields, references and staging limits are checked before compression.
+    /// A sink error leaves any earlier pending chunk retryable; once accepted,
+    /// this chunk is drained through [`Self::flush`] or [`Self::try_finish`].
+    ///
+    /// # Errors
+    /// Rejects malformed fields, invalid references, ordering and limits, and
+    /// propagates compression or pending sink errors without accepting metadata.
+    ///
+    /// # Examples
+    /// ```
+    /// use mbrotli::{Compressor, framing::*};
+    /// let mut compressor = Compressor::new(Default::default())?;
+    /// let mut writer = compressor.framed_writer(Vec::new(), FramingConfig::default())?;
+    /// writer.metadata_with_options(MetadataKind::Global,
+    ///     &[MetadataField { code: *b"AB", value: b"application metadata" }],
+    ///     MetadataOptions { encoding: MetadataEncoding::Brotli, ..Default::default() })?;
+    /// let bytes = writer.finish().map_err(|e| e.error)?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn metadata_with_options(
+        &mut self,
+        kind: MetadataKind,
+        fields: &[MetadataField<'_>],
+        options: MetadataOptions<'_>,
+    ) -> Result<(), FramingError> {
+        self.core.metadata(self.compressor, kind, fields, options)
+    }
+
+    /// Selects the field codes copied into every repeated metadata chunk.
+    ///
+    /// Call before emitting any metadata. By default every field is repeated;
+    /// an empty selection emits one empty repeated chunk per original. The
+    /// selection applies globally, preserving RFC field-presence consistency.
+    ///
+    /// # Errors
+    /// Rejects invalid/duplicate codes, disabled repetition, late changes,
+    /// and exhausted retained-buffer limits. This performs no sink I/O.
+    ///
+    /// # Examples
+    /// ```
+    /// use mbrotli::{Compressor, framing::*};
+    /// let mut compressor = Compressor::new(Default::default())?;
+    /// let config = FramingConfig { repeat_metadata: true, ..Default::default() };
+    /// let mut writer = compressor.framed_writer(Vec::new(), config)?;
+    /// writer.repeat_metadata_fields(&[*b"id"])?;
+    /// writer.metadata(MetadataKind::Resource,
+    ///     &[MetadataField { code: *b"id", value: b"example.txt" }])?;
+    /// writer.uncompressed_resource(Default::default())?.try_finish()?;
+    /// let bytes = writer.finish().map_err(|e| e.error)?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn repeat_metadata_fields(&mut self, codes: &[[u8; 2]]) -> Result<(), FramingError> {
+        self.core.repeat_metadata_fields(codes)
     }
 
     /// Queues a single padding chunk with `bytes` zero content bytes.

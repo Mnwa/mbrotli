@@ -644,6 +644,141 @@ fn custom_words_and_transforms_interoperate_at_every_dictionary_quality() {
 }
 
 #[test]
+fn preparation_budget_includes_the_description_alive_during_indexing() {
+    let mut words = WordList::builder();
+    for _ in 0..16384 {
+        words = words.add_word(b"abcd");
+    }
+    let described = SerializedDictionary::builder()
+        .add_word_list(words.build().expect("words"))
+        .add_transform_list(
+            TransformList::builder()
+                .add_transform(b"", TransformOperation::Identity, b"")
+                .build()
+                .expect("transforms"),
+        )
+        .build()
+        .expect("description");
+    let retained = DictionaryBuilder::default()
+        .add_serialized(&described)
+        .build()
+        .expect("prepare")
+        .retained_bytes();
+    let result = DictionaryBuilder::default()
+        .add_serialized(&described)
+        .with_limits(DictionaryLimits::default().with_max_retained_bytes(retained as u64))
+        .build();
+    assert!(matches!(
+        result,
+        Err(DictionaryError::PreparationTooLarge { .. })
+    ));
+}
+
+#[test]
+fn greedy_uses_a_dictionary_containing_only_an_extended_transform() {
+    use mbrotli::{Compressor, EncoderConfig, Quality};
+    let described = SerializedDictionary::builder()
+        .add_word_list(
+            WordList::builder()
+                .add_word(b"abcdefghijklmnopqrstuvwxyzABCDE")
+                .build()
+                .expect("words"),
+        )
+        .add_transform_list(
+            TransformList::builder()
+                .add_transform(b"<<", TransformOperation::Identity, b">>")
+                .build()
+                .expect("transforms"),
+        )
+        .build()
+        .expect("description");
+    let prepared = DictionaryBuilder::default()
+        .add_serialized(&described)
+        .build()
+        .expect("prepare");
+    let input = b"<<abcdefghijklmnopqrstuvwxyzABCDE>> trailing text for dictionary probing";
+    for quality in [
+        Quality::Q5,
+        Quality::Q6,
+        Quality::Q7,
+        Quality::Q8,
+        Quality::Q9,
+    ] {
+        let mut compressor =
+            Compressor::new(EncoderConfig::default().with_quality(quality)).expect("config");
+        let output = compressor
+            .compress_with_dictionary(&prepared, input)
+            .expect("encode");
+        decode_custom(&described.to_bytes(), &output, input);
+        assert!(
+            output.len() < 55,
+            "{quality:?}: dictionary was not used ({} bytes)",
+            output.len()
+        );
+    }
+}
+
+#[test]
+fn every_custom_transform_is_searched_on_every_host_backend_at_greedy_qualities() {
+    use mbrotli::Quality;
+    let operations = [
+        TransformOperation::Identity,
+        TransformOperation::FermentFirst,
+        TransformOperation::FermentAll,
+        TransformOperation::ShiftFirst(1),
+        TransformOperation::ShiftAll(3),
+    ];
+    let omits = (1..=9u8).map(|n| OmitLength::try_from(n).expect("omit"));
+    for operation in operations
+        .into_iter()
+        .chain(omits.clone().map(TransformOperation::OmitFirst))
+        .chain(omits.map(TransformOperation::OmitLast))
+    {
+        let word = b"abcdefghijklmnopqrstuvwxyzABCDE";
+        let transforms = TransformList::builder()
+            .add_transform(b"<", operation, b">")
+            .build()
+            .expect("transforms");
+        let mut input = transforms.apply(0, word);
+        input.extend_from_slice(b" trailing literals");
+        let described = SerializedDictionary::builder()
+            .add_word_list(WordList::builder().add_word(word).build().expect("words"))
+            .add_transform_list(transforms)
+            .build()
+            .expect("description");
+        let prepared = DictionaryBuilder::default()
+            .add_serialized(&described)
+            .build()
+            .expect("prepare");
+        for quality in [
+            Quality::Q5,
+            Quality::Q6,
+            Quality::Q7,
+            Quality::Q8,
+            Quality::Q9,
+        ] {
+            let mut expected = None;
+            for (name, level) in support::host_levels() {
+                let mut compressor = support::encoder_on(level, quality, 22);
+                let output = compressor
+                    .compress_with_dictionary(&prepared, &input)
+                    .expect("encode");
+                decode_custom(&described.to_bytes(), &output, &input);
+                assert!(
+                    output.len() + 8 < input.len(),
+                    "{operation:?} {quality:?} {name}: dictionary was not used"
+                );
+                if let Some(expected) = &expected {
+                    assert_eq!(&output, expected);
+                } else {
+                    expected = Some(output);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn long_transformed_words_keep_their_base_length_in_hq_commands() {
     use mbrotli::{Compressor, EncoderConfig, Quality};
     let prefix = vec![b'X'; 200];
@@ -671,7 +806,7 @@ fn long_transformed_words_keep_their_base_length_in_hq_commands() {
     input.extend_from_slice(b"word");
     input.extend_from_slice(&suffix);
     input.extend_from_slice(b" a trailing literal");
-    for quality in [Quality::Q10, Quality::Q11] {
+    for quality in [Quality::Q5, Quality::Q9, Quality::Q10, Quality::Q11] {
         let mut compressor =
             Compressor::new(EncoderConfig::default().with_quality(quality)).expect("config");
         let encoded = compressor

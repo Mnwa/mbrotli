@@ -15,6 +15,7 @@ struct Entry {
     length: u16,
     code: u8,
     address: u32,
+    extended: bool,
 }
 
 /// One word/transform pairing, including both reference search shapes.
@@ -68,9 +69,11 @@ impl StaticIndex {
         // Vec allocations cannot exceed isize::MAX, even when callers raise
         // the u64 budget. This also bounds every per-entry counting addition.
         let limit = limit.min(isize::MAX as u64);
+        check(TransformList::BUILTIN_HEAP_BYTES, limit)?;
         let builtin_words = WordList::builtin();
         let builtin_transforms = TransformList::builtin();
-        let mut total = data.combinations().len() * size_of::<StaticCombination>();
+        let mut total = data.combinations().len() * size_of::<StaticCombination>()
+            + TransformList::BUILTIN_HEAP_BYTES;
         let mut counts = [(0usize, 0usize); 64];
         let mut transformed_bytes = 0usize;
         let mut entries_count = 0usize;
@@ -142,6 +145,14 @@ impl StaticIndex {
                             length: output.len() as u16,
                             code: length as u8,
                             address: (index + (transform << words.size_bits(length))) as u32,
+                            extended: !(0..=9).any(|cut| {
+                                transforms.cutoff(cut) == Some(transform)
+                                    && (0..=cut).all(|n| {
+                                        transforms
+                                            .cutoff(n)
+                                            .is_some_and(|id| id >= n * 4 && id < n * 4 + 64)
+                                    })
+                            }),
                         });
                         bytes.extend_from_slice(output);
                     }
@@ -260,6 +271,46 @@ impl StaticIndex {
 }
 
 impl StaticCombination {
+    /// Searches transforms not representable by the reference's shallow cutoff table.
+    pub(crate) fn probe_extended(
+        &self,
+        input: &[u8],
+        max_length: usize,
+        base: usize,
+        max_distance: usize,
+        out: &mut SearchResult,
+    ) -> bool {
+        let key = head(input);
+        let start = self.entries.partition_point(|e| e.head < key);
+        let mut found = false;
+        for entry in self.entries[start..].iter().take_while(|e| e.head == key) {
+            let length = usize::from(entry.length);
+            if !entry.extended
+                || length > max_length
+                || !input.starts_with(&self.bytes[entry.start..entry.start + length])
+            {
+                continue;
+            }
+            let Some(distance) = base.checked_add(1 + entry.address as usize) else {
+                continue;
+            };
+            if distance > max_distance {
+                continue;
+            }
+            let score = backward_reference_score(length, distance);
+            if score > out.score {
+                *out = SearchResult {
+                    len: length,
+                    distance,
+                    score,
+                    len_code_delta: i32::from(entry.code) - length as i32,
+                };
+                found = true;
+            }
+        }
+        found
+    }
+
     /// The pinned greedy encoder probes only identity/omit-last transforms.
     pub(crate) fn probe(
         &self,

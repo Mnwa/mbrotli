@@ -262,6 +262,13 @@ suite passing unchanged with it defined is what shows no ordinary output moved.
 
 ## Known gaps
 
+Preparation uses `SerializedDictionaryData::allocation_bound` to account for the
+owned description while prefix and static indexes are constructed. Word and
+transform bytes, stringlet indexes, list/combination vector capacities and the
+embedded prefix remain part of that peak until the description is dropped.
+The preparation flow and allocator-backed regression are described in
+[rfc9841-encoding.md](rfc9841-encoding.md).
+
 - Custom static compression is now implemented by the immutable
   `core::rfc9841::static_index` described in
   [rfc9841-encoding.md](rfc9841-encoding.md). Its expansion limits are

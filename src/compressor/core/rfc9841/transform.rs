@@ -239,6 +239,9 @@ pub(crate) struct TransformList {
 }
 
 impl TransformList {
+    /// Heap scratch used when constructing the borrowed built-in transform list.
+    pub(crate) const BUILTIN_HEAP_BYTES: usize = size_of_val(&BUILTIN_STRINGLETS);
+
     /// Returns the RFC 7932 transform list every ordinary stream uses.
     ///
     /// Borrows its tables from static storage, so this allocates only the
