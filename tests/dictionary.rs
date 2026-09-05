@@ -356,17 +356,20 @@ fn a_dictionary_backs_many_compressors_at_once() {
 }
 
 #[test]
-fn an_empty_input_keeps_the_one_shot_shortcut() {
-    // A stream with no bytes in it cannot reference a dictionary, so the
-    // shortcut the ordinary one-shot entry point takes is still the right
-    // answer — and still the byte `BrotliEncoderCompress` produces.
+fn an_empty_input_with_a_dictionary_matches_the_streaming_shape() {
     let prepared = dictionary(&[b"a dictionary".as_slice()]);
     for quality in PREFIX_QUALITIES {
+        let mut compressor = encoder(quality, LGWIN);
+        let expected = compressor
+            .writer_with_dictionary(&prepared, Vec::new(), StreamConfig::default())
+            .expect("writer")
+            .finish()
+            .expect("finish");
         assert_eq!(
-            encoder(quality, LGWIN)
+            compressor
                 .compress_with_dictionary(&prepared, b"")
                 .expect("compression failed"),
-            vec![6],
+            expected,
             "q{}",
             quality.get()
         );

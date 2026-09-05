@@ -1,9 +1,8 @@
 //! Quality 0 and quality 1 encoders and their runtime SIMD dispatch.
 //!
-//! This module owns the only dispatch point of the fast path: a
-//! [`FastEncoder`] resolves the instruction set once per block and threads the
-//! resulting token down into the match scan. Nothing below re-detects features,
-//! and every backend produces byte-identical output.
+//! A [`FastEncoder`] retains a kernel selected once by `core::dispatch`.
+//! Block calls pass its concrete token down into the match scan. Nothing below
+//! re-detects features, and every backend produces byte-identical output.
 //!
 //! The block loop reproduces `BrotliEncoderCompressStreamFast` from
 //! `c/enc/encode.c` of the pinned reference (`google/brotli` v1.2.0, commit
@@ -21,7 +20,8 @@ pub(crate) mod workspace;
 
 pub(crate) use crate::compressor::core::shared::{bits, huffman, match_len};
 
-use fearless_simd::{Level, Simd, dispatch};
+use super::dispatch::{self, Kernels};
+use fearless_simd::{Level, Simd};
 
 use self::bits::{BYTE_PADDING_SLACK, BitWriter, inject_byte_padding};
 use self::constants::{OUTPUT_RESERVE_CONST, OUTPUT_SLACK, WINDOW_BITS_FAST};
@@ -59,7 +59,7 @@ impl TryFrom<QualityLevel> for FastQuality {
 }
 
 /// Quality-specific scratch state.
-enum FastCore {
+pub(crate) enum FastCore {
     /// Quality 0 state.
     OnePass { arena: Box<OnePassArena> },
     /// Quality 1 state, including the pass-one command and literal buffers.
@@ -67,6 +67,23 @@ enum FastCore {
 }
 
 impl FastCore {
+    /// Counts boxed state and every allocation owned by that state.
+    fn retained_bytes(&self) -> usize {
+        match self {
+            Self::OnePass { arena } => {
+                size_of::<OnePassArena>()
+                    + arena.tree.capacity() * size_of::<huffman::HuffmanNode>()
+            }
+            Self::TwoPass { state } => {
+                size_of::<TwoPassState>()
+                    + size_of::<workspace::TwoPassArena>()
+                    + state.arena.tmp_tree.capacity() * size_of::<huffman::HuffmanNode>()
+                    + state.commands.capacity() * size_of::<u32>()
+                    + state.literals.capacity()
+            }
+        }
+    }
+
     /// Creates the state for `quality`.
     fn new(quality: FastQuality) -> Self {
         match quality {
@@ -95,7 +112,7 @@ impl FastCore {
     /// scratch that the next fragment would have overwritten regardless.
     fn reset(&mut self) {
         match self {
-            Self::OnePass { arena } => **arena = OnePassArena::default(),
+            Self::OnePass { arena } => arena.reset(),
             Self::TwoPass { state } => state.reset(),
         }
     }
@@ -114,7 +131,7 @@ impl FastCore {
 /// This is the only place the fast path branches on the instruction set; the
 /// token is passed by value into every leaf that uses it.
 #[inline(always)]
-fn encode_fragment<S: Simd>(
+pub(crate) fn encode_fragment<S: Simd>(
     simd: S,
     core: &mut FastCore,
     input: &[u8],
@@ -150,7 +167,7 @@ fn encode_fragment<S: Simd>(
 /// blocks, so after construction no allocation happens in the match scan or the
 /// command replay.
 pub(crate) struct FastEncoder {
-    level: Level,
+    kernels: Box<dyn Kernels>,
     core: FastCore,
     block_size_limit: usize,
     /// The stream header, kept so a reused encoder can start over from it.
@@ -186,7 +203,7 @@ impl FastEncoder {
         // bits, while still cutting the input at the requested window size.
         let (last_bytes, last_bytes_bits) = window.at_least(WINDOW_BITS_FAST).header();
         Ok(Self {
-            level,
+            kernels: dispatch::select(level),
             core: FastCore::new(quality),
             block_size_limit: 1usize << lgwin,
             header: (last_bytes, last_bytes_bits),
@@ -237,7 +254,10 @@ impl FastEncoder {
 
     /// Returns the bytes this encoder keeps allocated between fragments.
     pub(crate) fn retained_bytes(&self) -> usize {
-        self.table.capacity() * size_of::<i32>() + self.storage.capacity()
+        self.core.retained_bytes()
+            + size_of_val(&*self.kernels)
+            + self.table.capacity() * size_of::<i32>()
+            + self.storage.capacity()
     }
 
     /// Returns the scratch capacity one fragment of `input_len` bytes needs.
@@ -292,7 +312,7 @@ impl FastEncoder {
         storage[1] = (self.last_bytes >> 8) as u8;
 
         let Self {
-            level,
+            kernels,
             core,
             table,
             last_bytes_bits,
@@ -300,7 +320,7 @@ impl FastEncoder {
         } = self;
         let mut w = BitWriter::new(storage, *last_bytes_bits as usize);
         let table = &mut table[..entries];
-        dispatch!(*level, simd => encode_fragment(simd, core, input, is_last, table, &mut w));
+        kernels.fast(core, input, is_last, table, &mut w);
 
         if w.overflowed() {
             return Err(BrotliCompressError::BufferOverflow);

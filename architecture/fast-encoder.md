@@ -71,7 +71,7 @@ command replay.
 ```mermaid
 classDiagram
     class FastEncoder {
-        -Level level
+        -Box~dyn Kernels~ kernels
         -FastCore core
         -usize block_size_limit
         -u16 last_bytes
@@ -138,7 +138,7 @@ stateDiagram-v2
     [*] --> Sized: reserve 2 * len + 503 + 8 bytes
     Sized --> Seeded: storage[0..2] = last_bytes
     Seeded --> Tabled: clear the active hash table range
-    Tabled --> Dispatched: dispatch!(level, simd => ...)
+    Tabled --> Dispatched: retained kernel, S::vectorize
     Dispatched --> Encoded: q0 or q1 writes meta-blocks
     Encoded --> Checked: writer overflow?
     Checked --> Failed: yes
@@ -273,7 +273,9 @@ Meta-block layout for a compressed fast-path block:
 
 ```mermaid
 graph TD
-    A["FastEncoder::encode_block"] -->|"dispatch! once"| B["encode_fragment&lt;S: Simd&gt;"]
+    select["core::dispatch::select(level), once on construction"] --> kernel["retained Selected&lt;S&gt;"]
+    A["FastEncoder::encode_block"] --> kernel
+    kernel -->|"S::vectorize, no re-selection"| B["encode_fragment&lt;S: Simd&gt;"]
     B --> C["q0::compress_fragment&lt;S&gt;"]
     B --> D["q1::compress_fragment&lt;S&gt;"]
     C --> E["find_match_length&lt;S&gt;"]

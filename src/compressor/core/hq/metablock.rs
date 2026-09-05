@@ -253,6 +253,15 @@ pub(crate) struct MetaBlockBuilder {
 }
 
 impl MetaBlockBuilder {
+    /// Counts splitter, histogram and cluster allocations, excluding inline state.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        self.splitter.retained_bytes()
+            + self.literal_histograms.capacity() * size_of::<HistogramLiteral>()
+            + self.distance_histograms.capacity() * size_of::<HistogramDistance>()
+            + self.literal_cluster.retained_bytes()
+            + self.distance_cluster.retained_bytes()
+    }
+
     /// Builds one meta-block, re-tuning `dist` for it (`BrotliBuildMetaBlock`).
     ///
     /// `commands` is rewritten in place when the distance alphabet changes, and

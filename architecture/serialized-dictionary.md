@@ -4,9 +4,10 @@
 Cargo feature. It is separated from the default surface because RFC 9841's
 dictionary stream has no stable reference encoder: the C library compiles its
 parser out unless `BROTLI_EXPERIMENTAL` is defined, and has never exposed it as
-a supported API. The guarantee the default surface rests on — byte identity
-with a pinned C encoder — therefore does not apply here, and the API may change
-in a patch release.
+a supported API. The default surface's equivalent-C-streaming byte oracle
+therefore does not cover full custom static search here, and the API may change
+in a patch release. Rust API/backend identity and decoder compatibility remain
+required.
 
 This file describes what exists today. Anything specified but unwritten is in
 "Known gaps" rather than described as if it worked.
@@ -250,7 +251,7 @@ S2 is the only difference a differential test has to account for, and
 | `core::rfc9841::transform` | the built-in list is the reference's 121 transforms with the cutoff table the packed constant already encodes; every operation; the casing model on a two-byte rune; sign-extended and wrapping shifts; a rune truncated at the word end; eight malformed-list refusals; the longest possible output fitting the scratch |
 | `core::rfc9841::serialized` | round trips for prefix, word list, transform list and context map dictionaries; every truncation; ten field-level refusals; the noncanonical varint; limit refusals before allocation |
 | `tests/serialized_dictionary.rs` | **differential against the C parser**: every truncation and every single-byte mutation of a rich dictionary, ten hand-written malformed streams, and the structure the reference recovered field for field; **differential against `BrotliTransformDictionaryWord`**: every operation over ASCII, two-byte, three-byte and truncated-rune words, for the custom list and for the built-in one; canonical fixture bytes; each resource limit |
-| `tests/differential_c.rs`, `tests/dictionary.rs`, and the rest | unchanged and still byte-identical, which is the evidence that nothing in the default surface moved |
+| `tests/differential_c.rs`, `tests/dictionary.rs`, and the rest | default encoding matches equivalent C streaming settings and all Rust API shapes; native C one-shot differences are specified in [universal-encoding.md](universal-encoding.md) |
 
 The C oracle exists because `brotli-ffi`'s own `experimental` feature compiles
 the vendored library with `BROTLI_EXPERIMENTAL` and adds two shim entry points:

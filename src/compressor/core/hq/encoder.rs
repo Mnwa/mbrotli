@@ -4,22 +4,19 @@
 //! `WriteMetaBlockInternal` from `c/enc/encode.c` of the pinned reference
 //! (`google/brotli` v1.2.0, commit `028fb5a`).
 //!
-//! This is the only place in the high-quality path that branches on the
-//! instruction set: one [`dispatch!`] per public call hands a SIMD token to the
+//! A retained kernel selected by `core::dispatch` hands a SIMD token to the
 //! match search, and everything below it is monomorphised on that token. Which
 //! quality runs, how deep it searches, how many times the splitter refines —
 //! all of it was resolved before the encoder was built, so nothing about the
 //! machine can reach a decision that shows up in the output.
 
-use fearless_simd::{Level, dispatch};
+use crate::compressor::core::dispatch::{self, HqInput, Kernels};
+use fearless_simd::Level;
 
 use super::h10::BinaryTreeMatcher;
 use super::metablock::MetaBlockBuilder;
-use super::params::{HqParams, HqQuality};
-use super::zopfli::{
-    ZopfliState, ZopfliWorkspace, create_hq_zopfli_backward_references,
-    create_zopfli_backward_references,
-};
+use super::params::HqParams;
+use super::zopfli::{ZopfliState, ZopfliWorkspace};
 use crate::compressor::core::rfc9841::context::SharedContextInner;
 use crate::compressor::core::shared::bits::{BYTE_PADDING_SLACK, BitWriter, inject_byte_padding};
 use crate::compressor::core::shared::bitstream::{MetaBlockWriter, store_uncompressed_meta_block};
@@ -29,7 +26,7 @@ use crate::compressor::core::shared::distance::DistanceParams;
 use crate::compressor::core::shared::format::ContextMode;
 use crate::compressor::core::shared::histogram::{HistogramLiteral, bits_entropy};
 use crate::compressor::core::shared::metablock::{MetaBlockSplit, optimize_histograms};
-use crate::compressor::core::shared::ringbuffer::{BlockSpan, RingBuffer, wrap_position};
+use crate::compressor::core::shared::ringbuffer::{BlockSpan, RingBuffer, Window, wrap_position};
 use crate::compressor::{BrotliCompressError, BrotliResult, CompressParams};
 
 /// Stride the compressibility check samples literals at (`kSampleRate`).
@@ -43,7 +40,7 @@ const LITERAL_FRACTION: f64 = 0.99;
 
 /// Streaming encoder for qualities ten and eleven.
 pub(crate) struct HqEncoder {
-    level: Level,
+    kernels: Box<dyn Kernels>,
     params: HqParams,
     ringbuffer: RingBuffer,
     matcher: BinaryTreeMatcher,
@@ -55,6 +52,7 @@ pub(crate) struct HqEncoder {
     references: ZopfliState,
     workspace: ZopfliWorkspace,
     builder: MetaBlockBuilder,
+    metablock: MetaBlockSplit,
     saved_dist_cache: [i32; 4],
     prev_byte: u8,
     prev_byte2: u8,
@@ -96,7 +94,7 @@ impl HqEncoder {
             references
         };
         Ok(Self {
-            level,
+            kernels: dispatch::select(level),
             params: resolved,
             ringbuffer: RingBuffer::new(resolved.rb_bits(), resolved.lgblock),
             matcher: BinaryTreeMatcher::new(resolved.lgwin),
@@ -110,6 +108,7 @@ impl HqEncoder {
                 resolved.dist.alphabet_size_limit as usize,
             ),
             builder: MetaBlockBuilder::default(),
+            metablock: MetaBlockSplit::default(),
             saved_dist_cache: references.dist_cache,
             references,
             prev_byte: 0,
@@ -271,10 +270,14 @@ impl HqEncoder {
     /// Returns the bytes this encoder keeps allocated between blocks.
     pub(crate) fn retained_bytes(&self) -> usize {
         self.ringbuffer.retained_bytes()
+            + size_of_val(&*self.kernels)
             + self.matcher.retained_bytes()
             + self.workspace.retained_bytes()
             + self.commands.capacity() * size_of::<Command>()
             + self.storage.capacity()
+            + self.writer.retained_bytes()
+            + self.builder.retained_bytes()
+            + self.metablock.retained_bytes()
     }
 
     /// Appends `input` to the window (`CopyInputToRingBuffer`).
@@ -331,13 +334,10 @@ impl HqEncoder {
 
     /// Runs the Zopfli search over the unprocessed input.
     ///
-    /// This is the encoder's only SIMD dispatch: the token is resolved here and
-    /// passed by value into the monomorphised search.
+    /// The retained kernel passes its already-selected token into the search.
     fn create_references(&mut self, span: BlockSpan, attached: Option<&SharedContextInner>) {
-        let position = span.position as usize;
-        let num_bytes = span.bytes as usize;
         let Self {
-            level,
+            kernels,
             params,
             ringbuffer,
             matcher,
@@ -348,16 +348,16 @@ impl HqEncoder {
         } = self;
         let data = ringbuffer.buffer();
         let mask = ringbuffer.mask();
-        match params.quality {
-            HqQuality::Q10 => dispatch!(*level, simd => create_zopfli_backward_references(
-                simd, num_bytes, position, data, mask, params, attached, matcher, workspace,
-                references, commands,
-            )),
-            HqQuality::Q11 => dispatch!(*level, simd => create_hq_zopfli_backward_references(
-                simd, num_bytes, position, data, mask, params, attached, matcher, workspace,
-                references, commands,
-            )),
-        }
+        kernels.hq(HqInput {
+            matcher,
+            params,
+            window: Window { data, mask },
+            span,
+            attached,
+            references,
+            workspace,
+            commands,
+        });
     }
 
     /// Processes the accumulated input, emitting a meta-block if one is due.
@@ -529,7 +529,7 @@ impl HqEncoder {
     /// Mirrors `InitOrStitchToPreviousBlock`.
     fn prepare_matcher(&mut self, position: usize, input_size: usize) {
         let Self {
-            level,
+            kernels,
             ringbuffer,
             matcher,
             is_prepared,
@@ -541,9 +541,7 @@ impl HqEncoder {
             matcher.prepare();
             *is_prepared = true;
         }
-        dispatch!(*level, simd => matcher.stitch_to_previous_block(
-            simd, input_size, position, data, mask
-        ));
+        kernels.stitch(matcher, input_size, position, Window { data, mask });
     }
 
     /// Writes one meta-block, returning the bit position after it.
@@ -616,7 +614,8 @@ impl HqEncoder {
         // rewrites the commands' prefixes to match, so the writer has to be
         // handed the alphabet it settled on rather than the encoder's.
         let mut block_dist: DistanceParams = params.dist;
-        let mut mb = MetaBlockSplit::default();
+        let mb = &mut self.metablock;
+        mb.clear();
         builder.build(
             data,
             wrapped_last_flush_pos,
@@ -627,9 +626,9 @@ impl HqEncoder {
             commands,
             context_mode,
             &mut block_dist,
-            &mut mb,
+            mb,
         );
-        optimize_histograms(block_dist.alphabet_size_limit as usize, &mut mb);
+        optimize_histograms(block_dist.alphabet_size_limit as usize, mb);
         writer.store_meta_block(
             data,
             wrapped_last_flush_pos,
@@ -641,7 +640,7 @@ impl HqEncoder {
             context_mode,
             &block_dist,
             commands,
-            &mb,
+            mb,
             &mut w,
         );
 

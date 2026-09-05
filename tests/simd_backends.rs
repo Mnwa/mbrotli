@@ -72,8 +72,14 @@ fn the_scalar_fallback_is_actually_exercised() {
         levels.iter().any(|&(name, _)| name == "fallback"),
         "the scalar fallback backend must be part of the matrix"
     );
-    assert!(
-        levels.len() >= 3,
-        "expected more than one backend: {levels:?}"
-    );
+    for (index, (_, backend)) in levels.iter().enumerate() {
+        assert!(
+            levels[..index]
+                .iter()
+                .all(|(_, earlier)| earlier != backend)
+        );
+    }
+    if mbrotli::Backend::default() != mbrotli::Backend::SCALAR {
+        assert!(levels.len() >= 2, "the detected SIMD backend must also run");
+    }
 }

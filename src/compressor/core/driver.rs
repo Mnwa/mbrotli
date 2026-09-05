@@ -1,14 +1,13 @@
 //! Quality routing and the one-shot compression entry points.
 //!
-//! Ports `BrotliEncoderCompress`, `BrotliEncoderMaxCompressedSize` and
-//! `MakeUncompressedStream` from `c/enc/encode.c` of the pinned reference
+//! Uses the shared streaming scheduler and the pinned reference encoder kernels
 //! (`google/brotli` v1.2.0, commit `028fb5a`).
 //!
 //! Three encoder families live below this module: the fast one for qualities
-//! zero and one, the greedy one for qualities three to nine, and the
-//! high-quality one for qualities ten and eleven. Everything they share — the
-//! empty-input shortcut, the final fallback to an uncompressed stream —
-//! belongs here rather than in any of them.
+//! zero and one, the greedy one for qualities two to nine, and the
+//! high-quality one for qualities ten and eleven. Empty inputs and incompressible
+//! streams follow the same scheduler as incremental calls; there are no outer
+//! one-shot bitstream rewrites.
 
 use fearless_simd::Level;
 
@@ -18,6 +17,7 @@ use super::greedy::params::GreedyParams;
 use super::hq::encoder::HqEncoder;
 use super::hq::params::HqParams;
 use super::rfc9841::context::SharedContextInner;
+use super::stream::{Destination, finish};
 use crate::compressor::shared::SharedBrotliError;
 use crate::compressor::{BrotliCompressError, BrotliResult, CompressParams, QualityLevel};
 
@@ -25,7 +25,7 @@ use crate::compressor::{BrotliCompressError, BrotliResult, CompressParams, Quali
 pub(crate) enum Encoder {
     /// Quality 0 and 1: one fragment at a time, static or per-fragment codes.
     Fast(FastEncoder),
-    /// Qualities 3 to 9: greedy references over a sliding window.
+    /// Qualities 2 to 9: greedy references over a sliding window.
     Greedy(Box<GreedyEncoder>),
     /// Qualities 10 and 11: Zopfli references and high-quality meta-blocks.
     Hq(Box<HqEncoder>),
@@ -161,21 +161,20 @@ impl Encoder {
 
     /// Returns the bytes this encoder keeps allocated between blocks.
     ///
-    /// Counts the buffers that dominate an encoder's footprint — the window,
-    /// the match finder, the command and output buffers — so a caller can see
-    /// what reusing a compressor is holding on to.
+    /// Counts every owned heap allocation, including boxed state and retained
+    /// entropy scratch. Stack fields and borrowed dictionaries are excluded.
     pub(crate) fn retained_bytes(&self) -> usize {
         match self {
             Self::Fast(encoder) => encoder.retained_bytes(),
-            Self::Greedy(encoder) => encoder.retained_bytes(),
-            Self::Hq(encoder) => encoder.retained_bytes(),
+            Self::Greedy(encoder) => size_of::<GreedyEncoder>() + encoder.retained_bytes(),
+            Self::Hq(encoder) => size_of::<HqEncoder>() + encoder.retained_bytes(),
         }
     }
 }
 
 /// A retained encoder, reused when the next call resolves to the same shape.
 ///
-/// This is what backs the public `CompressWorkspace`. It holds one encoder and
+/// This backs the public `Compressor`. It holds one encoder and
 /// the SIMD level it was built for; a call whose parameters resolve to that
 /// same shape resets it instead of building a new one, and a call that does
 /// not replaces it.
@@ -207,6 +206,7 @@ impl EncoderCache {
     ///
     /// Propagates whatever [`Encoder::new`] reports when a new encoder has to
     /// be built.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) fn acquire(
         &mut self,
         level: Level,
@@ -255,11 +255,7 @@ impl EncoderCache {
 
 /// Rejects a large window at a quality that cannot carry one.
 ///
-/// Runs before the empty-input shortcut, so an explicit RFC 9841 request is
-/// never quietly dropped on the way to a one-byte stream. It only inspects the
-/// field this extension added, which is why no previously constructible
-/// parameter set changes behaviour: without a large window the check is a
-/// predictable branch that returns immediately.
+/// Applies equally to empty and non-empty input before selecting an encoder.
 const fn check_large_window(params: &CompressParams) -> BrotliResult<()> {
     if !params.lgwin().is_large() {
         return Ok(());
@@ -306,119 +302,6 @@ pub(crate) const fn quality_reads_a_prefix(quality: QualityLevel) -> bool {
     )
 }
 
-/// Upper bound the reference one-shot API enforces on its own output.
-///
-/// Mirrors `BrotliEncoderMaxCompressedSize`; `None` marks the overflow the
-/// reference reports as a zero bound, which disables the check entirely.
-const fn max_compressed_size(input_size: usize) -> Option<usize> {
-    if input_size == 0 {
-        return Some(2);
-    }
-    let large_blocks = input_size >> 14;
-    let overhead = 2 + 4 * large_blocks + 3 + 1;
-    input_size.checked_add(overhead)
-}
-
-/// Wraps `src` in a stream of uncompressed meta-blocks with a minimal window.
-///
-/// Mirrors `MakeUncompressedStream`; the reference falls back to this whenever
-/// compressing produced more bytes than [`max_compressed_size`] allows.
-fn make_uncompressed_stream(src: &[u8], out: &mut Vec<u8>) {
-    if src.is_empty() {
-        out.push(6);
-        return;
-    }
-    out.push(0x21); // window bits = 10, is_last = false
-    out.push(0x03); // empty metadata, padding
-    let mut offset = 0usize;
-    while offset < src.len() {
-        let chunk = (src.len() - offset).min(1 << 24);
-        let nibbles: u32 = if chunk > 1 << 20 {
-            2
-        } else if chunk > 1 << 16 {
-            1
-        } else {
-            0
-        };
-        let bits = (nibbles << 1) | (((chunk - 1) as u32) << 3) | (1u32 << (19 + 4 * nibbles));
-        out.extend_from_slice(&bits.to_le_bytes()[..if nibbles == 2 { 4 } else { 3 }]);
-        out.extend_from_slice(&src[offset..offset + chunk]);
-        offset += chunk;
-    }
-    out.push(3);
-}
-
-/// Drives a whole input through a fresh encoder, appending to `out`.
-///
-/// Returns the number of bytes appended.
-fn drive_appending(
-    encoder: &mut Encoder,
-    attached: Option<&SharedContextInner>,
-    src: &[u8],
-    out: &mut Vec<u8>,
-) -> BrotliResult<usize> {
-    let limit = encoder.block_size_limit();
-    let mut offset = 0usize;
-    let mut written = 0usize;
-    loop {
-        let block = (src.len() - offset).min(limit);
-        let is_last = offset + block == src.len();
-        let bytes = encoder.encode_block_with(&src[offset..offset + block], is_last, attached)?;
-        out.extend_from_slice(bytes);
-        written += bytes.len();
-        offset += block;
-        if is_last {
-            return Ok(written);
-        }
-    }
-}
-
-/// Drives a whole input through a fresh encoder, writing straight into `dst`.
-///
-/// Returns the number of bytes written. A fast-path fragment is encoded in
-/// place when `dst` still has room for its reservation, which removes a full
-/// copy of the output; otherwise the encoder's own scratch buffer is used and
-/// the result is copied, so a caller-sized buffer still works when it is
-/// merely tight.
-fn drive_into(
-    encoder: &mut Encoder,
-    attached: Option<&SharedContextInner>,
-    src: &[u8],
-    dst: &mut [u8],
-) -> BrotliResult<usize> {
-    let limit = encoder.block_size_limit();
-    let mut offset = 0usize;
-    let mut written = 0usize;
-    loop {
-        let block = (src.len() - offset).min(limit);
-        let is_last = offset + block == src.len();
-        let input = &src[offset..offset + block];
-
-        let tail = dst
-            .get_mut(written..)
-            .ok_or(BrotliCompressError::OutputTooSmall)?;
-        let complete = match &mut *encoder {
-            Encoder::Fast(fast) if tail.len() >= FastEncoder::fragment_reserve(block)? => {
-                fast.encode_block_into(input, is_last, tail)?
-            }
-            other => {
-                let bytes = other.encode_block_with(input, is_last, attached)?;
-                let target = tail
-                    .get_mut(..bytes.len())
-                    .ok_or(BrotliCompressError::OutputTooSmall)?;
-                target.copy_from_slice(bytes);
-                bytes.len()
-            }
-        };
-
-        written += complete;
-        offset += block;
-        if is_last {
-            return Ok(written);
-        }
-    }
-}
-
 /// Compresses `src` into `out`, reusing `cache` and consulting `attached`.
 ///
 /// # Errors
@@ -434,10 +317,6 @@ pub(crate) fn compress_to_vec_attached(
     out: &mut Vec<u8>,
 ) -> BrotliResult<()> {
     check_large_window(params)?;
-    if src.is_empty() {
-        out.push(6);
-        return Ok(());
-    }
     let start = out.len();
     let encoder = match cache.acquire(level, params, src.len()) {
         Ok(encoder) => encoder,
@@ -446,21 +325,15 @@ pub(crate) fn compress_to_vec_attached(
             return Err(error);
         }
     };
-    let written = match drive_appending(encoder, attached, src, out) {
-        Ok(written) => written,
+    match finish(encoder, attached, src, Destination::Append(out)) {
+        Ok(_) => Ok(()),
         Err(error) => {
             // Leave the caller's vector exactly as it was found.
             out.truncate(start);
             cache.invalidate();
-            return Err(error);
+            Err(error)
         }
-    };
-
-    if max_compressed_size(src.len()).is_some_and(|max| written > max) {
-        out.truncate(start);
-        make_uncompressed_stream(src, out);
     }
-    Ok(())
 }
 
 /// Compresses `src` into `dst`, reusing `cache` and consulting `attached`.
@@ -478,11 +351,6 @@ pub(crate) fn compress_to_slice_attached(
     dst: &mut [u8],
 ) -> BrotliResult<usize> {
     check_large_window(params)?;
-    if src.is_empty() {
-        let target = dst.first_mut().ok_or(BrotliCompressError::OutputTooSmall)?;
-        *target = 6;
-        return Ok(1);
-    }
 
     let encoder = match cache.acquire(level, params, src.len()) {
         Ok(encoder) => encoder,
@@ -491,37 +359,13 @@ pub(crate) fn compress_to_slice_attached(
             return Err(error);
         }
     };
-    // The uncompressed fallback can still shrink a stream that did not fit, so
-    // a short buffer is only reported once the fallback has been ruled out.
-    let outcome = drive_into(encoder, attached, src, dst);
-    let written = match outcome {
-        Ok(written) => written,
-        Err(BrotliCompressError::OutputTooSmall) => {
-            // The stream was abandoned part-written, so the retained encoder
-            // is dropped rather than reset: the fallback below may still
-            // succeed, and the next call must not inherit anything from here.
-            cache.invalidate();
-            usize::MAX
-        }
+    match finish(encoder, attached, src, Destination::Slice(dst)) {
+        Ok(written) => Ok(written),
         Err(error) => {
             cache.invalidate();
-            return Err(error);
+            Err(error)
         }
-    };
-
-    if max_compressed_size(src.len()).is_some_and(|max| written > max) {
-        let mut fallback = Vec::new();
-        make_uncompressed_stream(src, &mut fallback);
-        let target = dst
-            .get_mut(..fallback.len())
-            .ok_or(BrotliCompressError::OutputTooSmall)?;
-        target.copy_from_slice(&fallback);
-        return Ok(fallback.len());
     }
-    if written == usize::MAX {
-        return Err(BrotliCompressError::OutputTooSmall);
-    }
-    Ok(written)
 }
 
 #[cfg(test)]
@@ -599,8 +443,8 @@ mod tests {
         let level = Level::new();
         for quality in IMPLEMENTED {
             let mut out = Vec::new();
-            compress_to_vec(level, &params(quality, 22), b"data data data", &mut out)
-                .unwrap_or_else(|error| panic!("quality {quality:?} failed: {error}"));
+            let outcome = compress_to_vec(level, &params(quality, 22), b"data data data", &mut out);
+            assert!(outcome.is_ok(), "quality {quality:?} failed: {outcome:?}");
             assert!(!out.is_empty(), "quality {quality:?} produced nothing");
         }
     }
@@ -639,47 +483,20 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_input_is_one_byte() {
+    fn an_empty_input_preserves_the_configured_stream_header() {
         let level = Level::new();
         for quality in IMPLEMENTED {
             let mut out = Vec::new();
             compress_to_vec(level, &params(quality, 22), b"", &mut out).expect("empty input");
-            assert_eq!(out, vec![6]);
+            assert_eq!(out, vec![59]);
 
             let mut dst = [0u8; 4];
             assert_eq!(
                 compress_to_slice(level, &params(quality, 22), b"", &mut dst).ok(),
                 Some(1)
             );
-            assert_eq!(dst[0], 6);
+            assert_eq!(dst[0], 59);
         }
-    }
-
-    #[test]
-    fn the_maximum_compressed_size_matches_the_reference() {
-        assert_eq!(max_compressed_size(0), Some(2));
-        assert_eq!(max_compressed_size(1), Some(1 + 6));
-        assert_eq!(max_compressed_size(1 << 14), Some((1 << 14) + 10));
-        assert_eq!(max_compressed_size(usize::MAX), None);
-    }
-
-    #[test]
-    fn the_uncompressed_fallback_is_a_valid_stream_shape() {
-        let mut out = Vec::new();
-        make_uncompressed_stream(b"", &mut out);
-        assert_eq!(out, vec![6]);
-
-        let payload: Vec<u8> = (0..70_000u32).map(|i| (i % 251) as u8).collect();
-        let mut out = Vec::new();
-        make_uncompressed_stream(&payload, &mut out);
-        assert_eq!(out[0], 0x21);
-        assert_eq!(out[1], 0x03);
-        assert_eq!(out[out.len() - 1], 3);
-        assert!(out.len() > payload.len());
-        assert!(
-            out.windows(payload.len())
-                .any(|slice| slice == payload.as_slice())
-        );
     }
 
     /// Address of the retained encoder, so reuse can be observed directly.

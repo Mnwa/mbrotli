@@ -458,17 +458,21 @@ impl<const BUCKET_BITS: u32, const SWEEP_BITS: u32, const HASH_LEN: u32, const U
 /// current one. They select the same bucket — the tagged `HashBytes` merely
 /// keeps eight more low bits, which the key shifts straight back off — and
 /// they walk it newest to oldest, exactly as this loop does. A tag is a
-/// function of the hashed bytes, so two positions whose first four bytes agree
-/// always share a tag; a slot the tag mask drops therefore differs in those
+/// function of the hashed bytes, so within the same bucket two positions whose
+/// first four bytes agree share a tag; a slot the tag mask drops differs in those
 /// four bytes, and a candidate that differs there can never reach the
 /// reference's `len >= 4` acceptance test. Both matchers also stop at the
 /// first candidate beyond `max_backward`, and positions grow monotonically
 /// along the ring, so both stop having seen the same prefix of candidates.
-/// The accepted-match sets coincide, and so do the streams.
+/// The accepted-match sets coincide, and so do the streams. The SIMD backend
+/// uses the tag mask; the scalar backend keeps the unfiltered scan as an oracle.
 pub(crate) struct BucketMatcher<const HASH64: bool, const BUCKET_BITS: u32> {
     num: Vec<u16>,
     buckets: Vec<u32>,
-    block_bits: u32,
+    /// Compact block offsets plus one; zero means no payload was allocated.
+    offsets: Vec<u32>,
+    /// One initialized tag per compact position slot (H58/H68 rejection).
+    tags: Vec<u8>,
     block_size: usize,
     block_mask: u16,
     last_distances: usize,
@@ -477,23 +481,26 @@ pub(crate) struct BucketMatcher<const HASH64: bool, const BUCKET_BITS: u32> {
 impl<const HASH64: bool, const BUCKET_BITS: u32> BucketMatcher<HASH64, BUCKET_BITS> {
     /// Number of buckets in the table.
     const BUCKET_SIZE: usize = 1usize << BUCKET_BITS;
+    /// A four-position starter block; promoted once its fifth slot is needed.
+    const SPARSE: u32 = 1 << 31;
 
     /// Creates an empty table of the shape `shape` describes.
     /// Returns the bytes this match finder keeps allocated.
     pub(crate) fn retained_bytes(&self) -> usize {
-        self.num.capacity() * size_of::<u16>() + self.buckets.capacity() * size_of::<u32>()
+        self.num.capacity() * size_of::<u16>()
+            + (self.buckets.capacity() + self.offsets.capacity()) * size_of::<u32>()
+            + self.tags.capacity()
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) fn new(shape: BucketShape) -> Self {
         debug_assert_eq!(shape.bucket_bits, BUCKET_BITS);
         let block_size = 1usize << shape.block_bits;
         Self {
             num: vec![0u16; Self::BUCKET_SIZE],
-            // The reference leaves this uninitialised: a slot is only read
-            // after the counter that guards it has been incremented. Zeroing
-            // costs one pass and removes the question entirely.
-            buckets: vec![0u32; Self::BUCKET_SIZE * block_size],
-            block_bits: shape.block_bits,
+            buckets: Vec::new(),
+            offsets: vec![0; Self::BUCKET_SIZE],
+            tags: Vec::new(),
             block_size,
             block_mask: (block_size - 1) as u16,
             last_distances: shape.last_distances,
@@ -503,14 +510,50 @@ impl<const HASH64: bool, const BUCKET_BITS: u32> BucketMatcher<HASH64, BUCKET_BI
     /// Returns the bucket of the bytes at `offset` (`HashBytes`).
     #[inline(always)]
     fn hash(data: &[u8], offset: usize) -> usize {
+        Self::hash_with_tag(data, offset) >> 8
+    }
+
+    /// The reference bucket hash plus eight rejection bits below its key.
+    #[inline(always)]
+    fn hash_with_tag(data: &[u8], offset: usize) -> usize {
         if HASH64 {
             // H6 tunes the multiplier to a five-byte match and always takes
             // fifteen bits, whatever the bucket count is.
             let hash_mul = HASH_MUL64 << (64 - 5 * 8);
-            (read_u64(data, offset).wrapping_mul(hash_mul) >> (64 - 15)) as usize
+            (read_u64(data, offset).wrapping_mul(hash_mul) >> (64 - 15 - 8)) as usize
         } else {
-            (read_u32(data, offset).wrapping_mul(HASH_MUL32) >> (32 - BUCKET_BITS)) as usize
+            (read_u32(data, offset).wrapping_mul(HASH_MUL32) >> (32 - BUCKET_BITS - 8)) as usize
         }
+    }
+
+    /// Activates one initialized compact block on first use. Existing offsets
+    /// survive reset; counters alone govern which payload entries are valid.
+    #[inline(always)]
+    fn activate_bucket(&mut self, key: usize) -> usize {
+        let offset = self.offsets[key];
+        if offset != 0 {
+            let old = ((offset & !Self::SPARSE) - 1) as usize;
+            if offset & Self::SPARSE == 0 || self.num[key] < 4 {
+                return old;
+            }
+            let start = self.buckets.len();
+            self.buckets.resize(start + self.block_size, 0);
+            self.buckets.copy_within(old..old + 4, start);
+            self.offsets[key] = start as u32 + 1;
+            return start;
+        }
+        let start = self.buckets.len();
+        let sparse = self.block_size > 32;
+        let initial_size = if sparse { 4 } else { self.block_size };
+        self.buckets.resize(start + initial_size, 0);
+        // Like the pinned C build, tag only q5/q6. Deeper buckets measured
+        // slower with tag-mask traversal; retain their unfiltered search.
+        if self.block_size <= 32 {
+            self.tags.resize(start + self.block_size, 0);
+        }
+        // At most 2^15 buckets of (2^8 + 4) entries, below the flag bit.
+        self.offsets[key] = (start as u32 + 1) | if sparse { Self::SPARSE } else { 0 };
+        start
     }
 }
 
@@ -543,14 +586,19 @@ impl<const HASH64: bool, const BUCKET_BITS: u32> Matcher for BucketMatcher<HASH6
 
     #[inline(always)]
     fn store(&mut self, data: &[u8], mask: usize, ix: usize) {
-        let key = Self::hash(data, ix & mask);
+        let hash = Self::hash_with_tag(data, ix & mask);
+        let key = hash >> 8;
+        let base = self.activate_bucket(key);
         let Some(count) = self.num.get_mut(key) else {
             return;
         };
         let minor_ix = usize::from(*count & self.block_mask);
         *count = count.wrapping_add(1);
-        if let Some(slot) = self.buckets.get_mut(minor_ix + (key << self.block_bits)) {
+        if let Some(slot) = self.buckets.get_mut(minor_ix + base) {
             *slot = ix as u32;
+        }
+        if let Some(tag) = self.tags.get_mut(minor_ix + base) {
+            *tag = hash as u8;
         }
     }
 
@@ -568,8 +616,9 @@ impl<const HASH64: bool, const BUCKET_BITS: u32> Matcher for BucketMatcher<HASH6
         let min_score = out.score;
         let mut best_score = out.score;
         let mut best_len = out.len;
-        let key = Self::hash(data, cur_ix_masked);
-        let bucket_base = key << self.block_bits;
+        let hash = Self::hash_with_tag(data, cur_ix_masked);
+        let key = hash >> 8;
+        let bucket_base = self.activate_bucket(key);
 
         out.len = 0;
         out.len_code_delta = 0;
@@ -615,12 +664,13 @@ impl<const HASH64: bool, const BUCKET_BITS: u32> Matcher for BucketMatcher<HASH6
         }
 
         let count = self.num.get(key).copied().unwrap_or(0);
-        let total = usize::from(count);
-        let down = total.saturating_sub(self.block_size);
-        let mut index = total;
-        while index > down {
-            index -= 1;
-            let slot = bucket_base + usize::from((index as u16) & self.block_mask);
+        let mut candidates = super::tags::Candidates::new(count, self.block_size);
+        let tags = self
+            .tags
+            .get(bucket_base..bucket_base + self.block_size)
+            .unwrap_or_default();
+        while let Some(index) = candidates.next(simd, tags, hash as u8) {
+            let slot = bucket_base + index;
             let prev_ix = self.buckets.get(slot).copied().unwrap_or(0) as usize;
             let backward = query.cur_ix - prev_ix;
             if backward > query.max_backward {
@@ -669,6 +719,9 @@ impl<const HASH64: bool, const BUCKET_BITS: u32> Matcher for BucketMatcher<HASH6
             if let Some(entry) = self.buckets.get_mut(slot) {
                 *entry = query.cur_ix as u32;
             }
+            if let Some(tag) = self.tags.get_mut(slot) {
+                *tag = hash as u8;
+            }
             *counter = counter.wrapping_add(1);
         }
 
@@ -714,6 +767,8 @@ pub(crate) struct ChainMatcher<const NUM_BANKS: usize, const BANK_BITS: u32> {
     head: Vec<u16>,
     tiny_hash: Vec<u8>,
     slots: Vec<ChainSlot>,
+    /// Compact bank offsets plus one, retained across logical resets.
+    bank_offsets: Vec<u32>,
     // Heap-allocated rather than a `[u16; NUM_BANKS]` field: H42 needs five
     // hundred and twelve of these, and inlining a kibibyte would make every
     // other `MatchFinder` variant carry the same footprint.
@@ -739,6 +794,7 @@ impl<const NUM_BANKS: usize, const BANK_BITS: u32> ChainMatcher<NUM_BANKS, BANK_
             + self.head.capacity() * size_of::<u16>()
             + self.tiny_hash.capacity()
             + self.slots.capacity() * size_of::<ChainSlot>()
+            + self.bank_offsets.capacity() * size_of::<u32>()
             + self.free_slot_idx.capacity() * size_of::<u16>()
     }
 
@@ -749,7 +805,8 @@ impl<const NUM_BANKS: usize, const BANK_BITS: u32> ChainMatcher<NUM_BANKS, BANK_
             addr: vec![CHAIN_EMPTY_ADDR; CHAIN_BUCKET_SIZE],
             head: vec![0u16; CHAIN_BUCKET_SIZE],
             tiny_hash: vec![0u8; 1 << 16],
-            slots: vec![ChainSlot::default(); NUM_BANKS * Self::BANK_SIZE],
+            slots: Vec::new(),
+            bank_offsets: vec![0; NUM_BANKS],
             free_slot_idx: vec![0u16; NUM_BANKS],
             last_distances: shape.last_distances,
             max_hops: shape.max_hops,
@@ -760,6 +817,20 @@ impl<const NUM_BANKS: usize, const BANK_BITS: u32> ChainMatcher<NUM_BANKS, BANK_
     #[inline(always)]
     fn hash(data: &[u8], offset: usize) -> usize {
         (read_u32(data, offset).wrapping_mul(HASH_MUL32) >> (32 - CHAIN_BUCKET_BITS)) as usize
+    }
+
+    /// Materializes a bank without changing its circular slot numbering.
+    #[inline(always)]
+    fn activate_bank(&mut self, bank: usize) -> usize {
+        let offset = self.bank_offsets[bank];
+        if offset != 0 {
+            return (offset - 1) as usize;
+        }
+        let start = self.slots.len();
+        self.slots
+            .resize(start + Self::BANK_SIZE, ChainSlot::default());
+        self.bank_offsets[bank] = start as u32 + 1;
+        start
     }
 }
 
@@ -799,6 +870,7 @@ impl<const NUM_BANKS: usize, const BANK_BITS: u32> Matcher for ChainMatcher<NUM_
     fn store(&mut self, data: &[u8], mask: usize, ix: usize) {
         let key = Self::hash(data, ix & mask);
         let bank = key & Self::BANK_SELECT;
+        let bank_base = self.activate_bank(bank);
         let free = self.free_slot_idx.get_mut(bank).map_or(0u16, |slot| {
             let current = *slot;
             *slot = current.wrapping_add(1);
@@ -812,7 +884,7 @@ impl<const NUM_BANKS: usize, const BANK_BITS: u32> Matcher for ChainMatcher<NUM_
         }
         let delta = if delta > 0xFFFF { 0xFFFF } else { delta as u16 };
         let head = self.head.get(key).copied().unwrap_or(0);
-        if let Some(slot) = self.slots.get_mut(bank * Self::BANK_SIZE + idx) {
+        if let Some(slot) = self.slots.get_mut(bank_base + idx) {
             slot.delta = delta;
             slot.next = head;
         }
@@ -885,7 +957,7 @@ impl<const NUM_BANKS: usize, const BANK_BITS: u32> Matcher for ChainMatcher<NUM_
         }
 
         let bank = key & Self::BANK_SELECT;
-        let bank_base = bank * Self::BANK_SIZE;
+        let bank_base = self.activate_bank(bank);
         let mut backward = 0usize;
         let mut delta = query
             .cur_ix
@@ -1037,6 +1109,47 @@ impl MatchFinder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cold_q9_chain_allocates_only_the_bank_it_uses() {
+        let mut matcher = ChainMatcher::<512, 9>::new(Q9_CHAIN);
+        assert!(matcher.slots.is_empty());
+        let data = [b'a'; 64];
+        matcher.store(&data, usize::MAX, 0);
+        assert_eq!(matcher.slots.len(), 512);
+        matcher.store(&data, usize::MAX, 1);
+        assert_eq!(matcher.slots.len(), 512);
+        let retained = matcher.retained_bytes();
+        matcher.prepare(false, data.len(), &data);
+        matcher.store(&data, usize::MAX, 0);
+        assert_eq!(matcher.retained_bytes(), retained);
+    }
+
+    #[test]
+    fn a_cold_q9_bucket_table_allocates_payload_only_when_activated() {
+        let mut matcher = BucketMatcher::<false, 15>::new(Q9_BUCKET);
+        assert!(matcher.retained_bytes() < 256 * 1024);
+        let data = [b'a'; 64];
+        matcher.store(&data, usize::MAX, 0);
+        assert_eq!(matcher.buckets.len(), 4);
+        matcher.store(&data, usize::MAX, 1);
+        assert_eq!(matcher.buckets.len(), 4);
+    }
+
+    #[test]
+    fn a_sparse_bucket_promotes_without_losing_its_recent_positions() {
+        let mut matcher = BucketMatcher::<false, 15>::new(Q9_BUCKET);
+        let data = [b'a'; 64];
+        for position in 0..5 {
+            matcher.store(&data, usize::MAX, position);
+        }
+        let base = matcher.activate_bucket(BucketMatcher::<false, 15>::hash(&data, 0));
+        assert_eq!(&matcher.buckets[base..base + 5], &[0, 1, 2, 3, 4]);
+        let capacity = matcher.buckets.capacity();
+        matcher.prepare(false, data.len(), &data);
+        matcher.store(&data, usize::MAX, 0);
+        assert_eq!(matcher.buckets.capacity(), capacity);
+    }
     use fearless_simd::{Level, dispatch};
 
     /// A payload whose last third repeats the middle third.

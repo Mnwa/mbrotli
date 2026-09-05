@@ -46,6 +46,13 @@ pub(crate) struct LiteralCostArena {
     histogram: Vec<u32>,
 }
 
+impl LiteralCostArena {
+    /// Counts the literal-model histogram allocation.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        self.histogram.capacity() * size_of::<u32>()
+    }
+}
+
 impl Default for LiteralCostArena {
     /// Returns zeroed histograms.
     fn default() -> Self {

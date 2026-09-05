@@ -141,12 +141,22 @@ classDiagram
         -u64 stream_offset
     }
     class EncoderSession {
-        -&mut Compressor compressor
-        -Option~&PreparedDictionary~ dictionary
-        -usize limit
-        -Phase phase
+        -SessionCore core
         +process(input, output, Operation) Result~Progress~
         +is_finished() bool
+    }
+    class SessionCore {
+        <<private>>
+        -&mut Compressor compressor
+        -Option~&PreparedDictionary~ dictionary
+        -StreamState state
+        -u64 logical_position
+    }
+    class StreamState {
+        <<private>>
+        -Phase phase
+        -usize limit
+        -bool flint
     }
     class PreparedDictionary {
         <<immutable, Send + Sync>>
@@ -162,6 +172,7 @@ classDiagram
         -W sink
         -Vec~u8~ outbox
         -usize head
+        -usize end
         -State state
         +try_finish() io::Result
         +finish() Result~W, FinishError~
@@ -186,8 +197,10 @@ classDiagram
 
     Compressor *-- EncoderConfig
     Compressor ..> CompressParams : lowers into
-    EncoderSession --> Compressor : borrows &mut
-    EncoderSession ..> PreparedDictionary : borrows &
+    EncoderSession *-- SessionCore
+    SessionCore *-- StreamState
+    SessionCore --> Compressor : borrows &mut
+    SessionCore ..> PreparedDictionary : borrows &
     EncoderWriter *-- EncoderSession
     EncoderReader *-- EncoderSession
     Compressor ..> StreamConfig : starts a session from
@@ -272,7 +285,7 @@ flowchart TD
     pol -->|Aggressive| keep["keep everything"]
     pol -->|CurrentConfig| keep
     pol -->|"Bounded { max_bytes }"| cmp{"retained_bytes() > max_bytes?"}
-    pol -->|ReleaseAll| drop["drop the retained encoder"]
+    pol -->|ReleaseAll| drop["drop encoder and staging/pending allocations"]
     cmp -->|yes| drop
     cmp -->|no| keep
     recfg["reconfigure to a different config"] --> pol2{"RetentionPolicy"}
@@ -280,10 +293,14 @@ flowchart TD
     pol2 -->|other| keep2["keep until the next call replaces it"]
 ```
 
-`retained_bytes` sums the staging buffers and the retained encoder's own
-buffers — window, match finder, command and output storage — which each encoder
-family reports for itself. `trim(policy)` applies a policy once without changing
-the compressor's own.
+`retained_bytes` counts every owned heap allocation: staging/pending buffers,
+boxed arenas, window and matcher tables, commands, entropy-code buffers,
+meta-block splits, histogram clusters and HQ cost/search workspace. Shared
+dictionary storage and caller-owned output are excluded. Allocator-instrumented
+integration tests compare the sum with actual live requested bytes at every
+quality. `trim(policy)` applies a policy once without changing the configured
+policy. The configured policy runs after one-shot completion and session drop,
+including writer/reader completion and abandonment.
 
 ### 2.2. Abandoned sessions
 
@@ -302,21 +319,22 @@ stateDiagram-v2
     Abandoned --> Idle: recover()
 ```
 
-A session that finished leaves its encoder retained, so the next stream of the
-same shape reuses every allocation. One abandoned part-way drops the retained
-encoder instead.
+A session that finished retains its encoder subject to its retention policy.
+One abandoned part-way drops the encoder before applying that policy to the
+remaining buffers. Final bytes still waiting for delivery keep `is_finished()`
+false, even after the encoder has emitted its last block.
 
 ## 3. One-shot paths
 
 `compress_into` is the primary entry point; `compress` is it with a fresh `Vec`.
-Both reproduce the reference one-shot entry point, including its two special
-cases.
+Both use the same encoding contract as sessions, including empty input.
 
 ```mermaid
 sequenceDiagram
     participant Caller
     participant C as Compressor
     participant Drv as core::driver
+    participant State as core::stream::StreamState
     participant Enc as Encoder
 
     Caller->>C: compress_into(src, dst)
@@ -324,19 +342,14 @@ sequenceDiagram
     C->>C: config.lower(Some(src.len()))
     C->>C: dst.try_reserve(bound(params, src.len()))?
     C->>Drv: compress_to_vec_attached(&mut workspace, level, params, dictionary, src, dst)
-    alt src is empty
-        Drv-->>C: dst += [0x06]
-    else
-        Drv->>Enc: workspace.acquire(level, params)
-        loop each block of at most block_size_limit bytes
-            Drv->>Enc: encode_block_with(block, is_last, dictionary)
-            Enc-->>Drv: completed bytes, possibly none
-            Drv->>Drv: dst.extend_from_slice(bytes)
-        end
-        opt output longer than max_compressed_size(src.len())
-            Drv->>Drv: truncate and rewrite as uncompressed meta-blocks
-        end
+    Drv->>Enc: workspace.acquire(level, params), including empty input
+    Drv->>State: process(src, Append(dst), Finish)
+    loop shared block scheduling, borrowed input
+        State->>Enc: encode_block_with(block, is_last, dictionary)
+        Enc-->>State: completed bytes, possibly none
+        State->>State: append completed bytes
     end
+    State-->>Drv: Progress
     Drv-->>C: Ok(())
     C->>C: finish_operation()  (retention policy)
     C-->>Caller: Ok(start..dst.len())
@@ -346,9 +359,10 @@ On failure `dst` is truncated back to the length it had, so whatever the caller
 already had in it survives byte for byte.
 
 `compress_to_slice` follows the same flow but writes each completed block into
-the caller's buffer and reports `OutputTooSmall` instead of growing. Because the
-uncompressed fallback can still shrink the result, a buffer that was too small
-for the compressed form is only fatal once the fallback has been ruled out.
+the caller's buffer and reports `OutputTooSmall` instead of growing or switching
+to another encoding. Exactly the vector's final length is enough. Both destinations use the same
+`core::stream::StreamState` block scheduler as sessions. One-shot calls use empty,
+unallocated staging/pending vectors because all input and finalization are known.
 
 `Compressor::max_compressed_size` is an associated function, so it needs no
 compressor. It is therefore the bound for the *loosest* configuration — a
@@ -372,7 +386,7 @@ stateDiagram-v2
     Flushed --> Flushed: Flush again emits nothing
     Open --> Finished: Finish — emit the last block with is_last
     Flushed --> Finished: Finish
-    Finished --> Finished: idempotent, zero consumed and produced
+    Finished --> Finished: drain remaining final output, consume nothing
     Open --> Failed: the encoder reported a failure
     Failed --> Failed: process returns InvalidState
 ```
@@ -388,8 +402,10 @@ flowchart TD
     more -->|yes| needout["return NeedsOutput"]
     more -->|no| fin{"phase == Finished?"}
     fin -->|yes| done["return Finished"]
-    fin -->|no| stage["stage up to `limit - staged` bytes from `input`"]
-    stage --> full{"staged == limit AND input still has bytes?"}
+    fin -->|no| tail{"block end or explicit operation known?"}
+    tail -->|no| stage["stage undecided tail, return NeedsInput"]
+    tail -->|yes| source["borrow complete input block or complete staging"]
+    source --> full{"input follows this block?"}
     full -->|yes| encode["encode_block_with(is_last = false)"]
     encode --> drain
     full -->|no| op{"operation"}
@@ -402,11 +418,14 @@ flowchart TD
     last --> drain
 ```
 
+Experimental continuation restarts additionally flush the first two bytes;
+the same scheduler handles that bounded restart before normal block scheduling.
+
 Two properties fall out of that shape:
 
-- **A whole block is only encoded once something is known to follow it.** The
-  session stages up to `limit` bytes and emits a non-final block only when the
-  caller still has bytes in the same call. That is what keeps the last block of a
+- **A non-final block is only encoded once something is known to follow it.**
+  The shared scheduler borrows complete blocks directly when their end is known;
+  it stages only a tail that must wait for later input or an operation. That keeps the last block of a
   stream the one carrying `is_last`, and therefore what makes a streamed stream
   reproduce the one-shot bytes for an input that is a whole number of blocks.
 - **A call that moved nothing always says why.** Zero consumed and zero produced
@@ -414,21 +433,25 @@ Two properties fall out of that shape:
   no caller can spin.
 
 Encoded bytes are copied straight into the caller's slice, and only what does not
-fit is held in the compressor's `pending` buffer. A streaming path therefore pays
-one copy — the one the borrow of the encoder's scratch forces — rather than two.
+fit is held in the compressor's `pending` buffer. Fast encoders can write directly
+into a caller slice with enough reservation; other cases use retained encoder
+scratch. No extra staging copy is made for a directly borrowed input block.
 
-### 4.1. One-shot and streaming are not the same bytes
+### 4.1. Universal API byte identity
 
-The reference's one-shot entry point applies two shortcuts its streaming entry
-point does not: an empty input becomes a single byte, and a stream that grew is
-rewritten as uncompressed meta-blocks. This crate reproduces both encoders
-faithfully, so `compress` applies those shortcuts and a session does not. For
-every other input, a session fed `InputSize::Exact` with no explicit flush
-produces exactly the one-shot bytes — which `tests/streaming.rs` asserts across
-every corpus and quality.
+One-shot and incremental encoding produce the same bytes for equivalent stream
+settings, including empty input and incompressible small-window streams. One-shot
+calls no longer use C's empty shortcut or whole-stream uncompressed rewrite.
+A zero-offset session declaring `InputSize::Exact` and no extra flushes is the
+incremental equivalent of a one-shot call. Unknown size, different dictionaries,
+explicit flush boundaries or continuation offsets can change encoding decisions.
 
-Byte identity with the pinned reference outranks internal uniformity here; see
-§4 of the implementation specification's authority order.
+C streaming FINISH with matching settings is the differential oracle, not native
+C one-shot. C's q0/q1 PROCESS calls also emit fragments at caller chunk boundaries,
+whereas Rust stages undecided tails. The Criterion streaming adapter normalizes
+those C chunks and charges staging to the timed C operation. Its one-shot adapter
+borrows the whole input and calls C streaming FINISH without staging or rewrites.
+See [universal-encoding.md](universal-encoding.md) for the decision and regressions.
 
 ### 4.2. Flushing
 
@@ -451,6 +474,11 @@ resulting block, so a partial sink write followed by an error left no durable
 cursor for the unwritten suffix. `EncoderWriter` keeps compressed bytes in a
 cursor-addressed buffer until the sink has actually taken them.
 
+The initialized outbox is bounded to 128 KiB and reused without clearing its
+contents. Only `head..end` contains pending bytes. A large `write` can accept a
+prefix and return its length; it never grows the outbox to buffer the whole
+input's output. Flush and finish drain between bounded pulls.
+
 ```mermaid
 sequenceDiagram
     participant Caller
@@ -459,7 +487,7 @@ sequenceDiagram
     participant Sink as inner writer
 
     Caller->>W: write(buf)
-    W->>Sink: drain outbox[head..]
+    W->>Sink: drain outbox[head..end]
     alt the sink fails
         Sink-->>W: Err
         W-->>Caller: Err, zero bytes accepted
@@ -473,9 +501,12 @@ sequenceDiagram
     end
 
     Caller->>W: try_finish()
-    W->>Sink: drain outbox[head..]
-    W->>S: process(&[], room, Finish)  (once)
-    W->>Sink: drain, then flush
+    W->>Sink: drain outbox[head..end]
+    loop until session output is fully delivered
+        W->>S: process(&[], bounded room, Finish)
+        W->>Sink: drain
+    end
+    W->>Sink: flush
     W-->>Caller: Ok(())
 ```
 
@@ -547,20 +578,27 @@ scratch buffer overflow. No valid caller input produces one.
 graph TD
     A["Compressor::new / CompressorBuilder::build"] -->|"Level::try_detect()"| B["Level stored in the Compressor"]
     B --> C["EncoderCache::acquire(level, params)"]
-    C --> D["FastEncoder / GreedyEncoder / HqEncoder { level }"]
-    D -->|"once per encode_block"| E["dispatch!(level, simd => ...)"]
-    E --> F["match scan, generic over S: Simd"]
+    C -->|"new encoder only"| D["core::dispatch::select(level)"]
+    D --> E["retained Box dyn Kernels containing Selected&lt;S&gt;"]
+    E -->|"block-boundary virtual call"| F["S::vectorize → monomorphized scan"]
 
     classDef once fill:#d9ead3,stroke:#38761d;
     class E once;
 ```
 
-Feature detection happens once per compressor rather than once per process, and
-the resolved level is carried by value from there. The `dispatch!` macro is
-expanded once per `encode_block` — that is, once per input block — and never per
-meta-block, command, match or vector. `CompressorBuilder::with_level` pins a
-backend instead of detecting one, which is how the tests exercise a backend the
-host would not have chosen; every backend produces identical bytes.
+Feature detection happens when the compressor's opaque `Backend` is selected.
+`CompressorBuilder::with_backend` accepts only a host-validated backend, including
+`Backend::SCALAR`; no `fearless_simd` type appears in the public API. The single
+selection dispatch occurs when the retained encoder is created, not per block.
+`Selected<S>` retains the proof token across the operation/session and reuse.
+Its feature-enabled kernel calls pass `S` by value into inner loops; no inner
+loop has virtual dispatch or feature detection.
+
+The public `EncoderSession` owns a private `core::session::SessionCore` wrapper.
+It handles ownership and logical-position checks; the shared `core::stream`
+module handles phase transitions, block scheduling and pending delivery for
+both one-shot and incremental paths. Completed sessions ignore further input,
+including at the maximum logical position.
 
 ## 9. Verification topology
 
@@ -593,7 +631,7 @@ graph LR
 | `tests/public_api.rs` | The public surface from outside the crate: conversions, accessors, errors, `Send`/`Sync`. |
 | `tests/randomized.rs` | Seeded property tests mixing literal runs, back-references and noise. |
 | Unit tests in `core::*` | Layer-by-layer differential tests against encoder-internal C functions; see [hq-encoder.md](hq-encoder.md) §10. |
-| `fuzz/afl/` | Twenty AFL targets for the same oracles plus parameter rejection, dictionary preparation and the compressor lifecycle; see [fuzzing.md](fuzzing.md). |
+| `fuzz/afl/` | Twenty-two AFL targets for the same oracles plus parameter rejection, dictionary preparation and the compressor lifecycle; see [fuzzing.md](fuzzing.md). |
 
 ## Known gaps
 
@@ -615,10 +653,10 @@ graph LR
 - **One retained encoder.** The workspace holds exactly one, so alternating
   between two configurations rebuilds on every call. `RetentionPolicy` bounds and
   releases it but does not yet keep one slot per encoder family.
-- **Dispatch is per block, not per session.** The single top-level dispatch the
-  implementation specification asks for (§8) would need the SIMD token threaded
-  through the session's lifetime; today each `encode_block` dispatches once.
-- **Allocation on a cold call is unchanged.** Making reuse the default removes
-  the per-call cost for repeated work, but a first call at qualities 7 to 9 still
-  builds the full matcher before it looks at the input. The lazy and
-  generation-stamped representations that would fix that are not implemented.
+- **Native C API differences are intentional.** Universal Rust API identity
+  takes priority over C one-shot empty/fallback shortcuts. C comparisons use
+  equivalent streaming settings, as recorded in [universal-encoding.md](universal-encoding.md).
+- **Release performance gates remain open.** Lazy bucket payloads and chain
+  banks eliminate eager cold payload initialization, and allocator regressions
+  enforce zero warmed allocations on text/binary/multi-block cases. They do not
+  establish every speed/RSS gate on both AVX2 and NEON hardware.

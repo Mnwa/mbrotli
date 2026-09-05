@@ -12,3 +12,4 @@ pub(crate) mod hashers;
 pub(crate) mod metablock;
 pub(crate) mod params;
 pub(crate) mod split;
+mod tags;

@@ -781,10 +781,12 @@ mod tests {
             simd, &data, usize::MAX, 400 + skipped, data.len() - 400 - skipped,
             400 + skipped, usize::MAX >> 1, 0, 0, &mut out,
         ));
-        assert!(
-            !out.iter().any(|m| m.distance == 400),
-            "a skipped position was stored anyway: {out:?}"
-        );
+        for found in &out {
+            assert_ne!(
+                found.distance, 400,
+                "a skipped position was stored anyway: {out:?}"
+            );
+        }
     }
 
     #[test]

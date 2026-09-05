@@ -788,9 +788,8 @@ impl Compressor {
         self.pending.clear();
         self.served = 0;
         if self.staging.capacity() < limit {
-            let extra = limit - self.staging.capacity();
             self.staging
-                .try_reserve(extra)
+                .try_reserve(limit)
                 .map_err(|_| EncodeError::AllocationFailed { requested: limit })?;
         }
         self.active = true;
@@ -816,16 +815,8 @@ impl Compressor {
     }
 
     /// Applies the retention policy once an operation has finished.
-    fn finish_operation(&mut self) {
-        match self.retention {
-            RetentionPolicy::Aggressive | RetentionPolicy::CurrentConfig => {}
-            RetentionPolicy::Bounded { max_bytes } => {
-                if self.retained_bytes() > max_bytes {
-                    self.workspace.invalidate();
-                }
-            }
-            RetentionPolicy::ReleaseAll => self.workspace.invalidate(),
-        }
+    pub(crate) fn finish_operation(&mut self) {
+        self.trim(self.retention);
     }
 
     /// Drops every trace of a stream, keeping capacity.
@@ -839,28 +830,6 @@ impl Compressor {
     /// Returns whether encoded bytes are still waiting to be delivered.
     pub(crate) const fn has_pending(&self) -> bool {
         self.served < self.pending.len()
-    }
-
-    /// Copies as much pending output into `out` as fits, and reports how much.
-    pub(crate) fn drain_pending(&mut self, out: &mut [u8]) -> usize {
-        let available = self.pending.len() - self.served;
-        let count = available.min(out.len());
-        if count == 0 {
-            return 0;
-        }
-        let Some(source) = self.pending.get(self.served..self.served + count) else {
-            return 0;
-        };
-        let Some(target) = out.get_mut(..count) else {
-            return 0;
-        };
-        target.copy_from_slice(source);
-        self.served += count;
-        if self.served == self.pending.len() {
-            self.pending.clear();
-            self.served = 0;
-        }
-        count
     }
 }
 
@@ -919,19 +888,19 @@ impl CompressorBuilder {
     /// # Examples
     ///
     /// ```
-    /// use fearless_simd::Level;
+    /// use mbrotli::Backend;
     /// use mbrotli::{Compressor, EncoderConfig, Quality};
     ///
     /// let config = EncoderConfig::default().with_quality(Quality::Q1);
     /// let mut detected = Compressor::new(config)?;
-    /// let mut scalar = Compressor::builder(config).with_level(Level::fallback()).build()?;
+    /// let mut scalar = Compressor::builder(config).with_backend(Backend::SCALAR).build()?;
     ///
     /// assert_eq!(scalar.compress(b"identical bytes")?, detected.compress(b"identical bytes")?);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
-    pub const fn with_level(mut self, level: Level) -> Self {
-        self.level = Some(level);
+    pub const fn with_backend(mut self, backend: super::Backend) -> Self {
+        self.level = Some(backend.0);
         self
     }
 
@@ -1085,28 +1054,6 @@ mod tests {
             .reconfigure(EncoderConfig::default().with_quality(Quality::Q1))
             .expect("legal");
         assert_eq!(encoder.retained_bytes(), 0);
-    }
-
-    #[test]
-    fn draining_pending_output_serves_every_byte_once() {
-        let mut encoder = compressor(Quality::Q1);
-        encoder.pending.extend_from_slice(b"0123456789");
-        assert!(encoder.has_pending());
-
-        let mut out = [0u8; 4];
-        assert_eq!(encoder.drain_pending(&mut out), 4);
-        assert_eq!(&out, b"0123");
-        assert_eq!(encoder.drain_pending(&mut out), 4);
-        assert_eq!(&out, b"4567");
-        assert_eq!(encoder.drain_pending(&mut out), 2);
-        assert_eq!(&out[..2], b"89");
-        assert!(!encoder.has_pending());
-        assert_eq!(encoder.drain_pending(&mut out), 0);
-
-        // A zero-length destination takes nothing and loses nothing.
-        encoder.pending.extend_from_slice(b"tail");
-        assert_eq!(encoder.drain_pending(&mut []), 0);
-        assert!(encoder.has_pending());
     }
 
     #[test]

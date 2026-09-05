@@ -74,6 +74,8 @@ pub(crate) struct ZopfliWorkspace {
     queue: StartPosQueue,
     /// Matches at the position being examined, for quality ten.
     scratch: Vec<BackwardMatch>,
+    /// Bounded attached-prefix candidates reused across positions and streams.
+    prefix_matches: Vec<(usize, usize)>,
     /// Every position's matches end to end, for quality eleven.
     arena: Vec<BackwardMatch>,
     /// How many of [`ZopfliWorkspace::arena`] belong to each position.
@@ -88,6 +90,7 @@ impl ZopfliWorkspace {
             nodes: Vec::new(),
             queue: StartPosQueue::default(),
             scratch: Vec::new(),
+            prefix_matches: Vec::new(),
             arena: Vec::new(),
             num_matches: Vec::new(),
             model: ZopfliCostModel::new(max_bytes, alphabet_size),
@@ -100,6 +103,7 @@ impl ZopfliWorkspace {
             + (self.scratch.capacity() + self.arena.capacity()) * size_of::<BackwardMatch>()
             + self.num_matches.capacity() * size_of::<u32>()
             + self.model.retained_bytes()
+            + self.prefix_matches.capacity() * size_of::<(usize, usize)>()
     }
 
     /// Sizes every buffer for a block of `num_bytes` and clears the nodes.
@@ -652,39 +656,31 @@ const MAX_PREFIX_MATCHES: usize = 64;
 /// are ascending in length, and the merged sequence has to stay ascending, with
 /// the smaller distance first on a tie. `prefix` is `(distance, length)`
 /// because the attached search has no length code to carry.
-fn merge_prefix_matches(prefix: &[(usize, usize)], tree: &mut Vec<BackwardMatch>) {
+fn merge_prefix_matches(prefix: &[(usize, usize)], tree: &mut Vec<BackwardMatch>, start: usize) {
     if prefix.is_empty() {
         return;
     }
-    let mut merged = Vec::with_capacity(prefix.len() + tree.len());
-    let mut left = prefix.iter().copied().peekable();
-    let mut right = tree.drain(..).peekable();
-    loop {
-        match (left.peek(), right.peek()) {
-            (Some(&(distance, length)), Some(other)) => {
-                if length < other.length()
-                    || (length == other.length() && distance < other.distance as usize)
-                {
-                    merged.push(BackwardMatch::new(distance, length));
-                    left.next();
-                } else {
-                    merged.push(*other);
-                    right.next();
-                }
-            }
-            (Some(&(distance, length)), None) => {
-                merged.push(BackwardMatch::new(distance, length));
-                left.next();
-            }
-            (None, Some(other)) => {
-                merged.push(*other);
-                right.next();
-            }
-            (None, None) => break,
+    // Merge backwards into the retained arena tail. Equal tree matches precede
+    // prefix matches, exactly as the forward reference merge orders them.
+    let mut right = tree.len();
+    let mut left = prefix.len();
+    let mut output = right + left;
+    tree.resize(output, BackwardMatch::new(0, 0));
+    while left > 0 {
+        output -= 1;
+        let (distance, length) = prefix[left - 1];
+        if right > start
+            && (length < tree[right - 1].length()
+                || (length == tree[right - 1].length()
+                    && distance < tree[right - 1].distance as usize))
+        {
+            right -= 1;
+            tree[output] = tree[right];
+        } else {
+            left -= 1;
+            tree[output] = BackwardMatch::new(distance, length);
         }
     }
-    drop(right);
-    *tree = merged;
 }
 
 /// Quality ten's inner loop: one tree query per position, priced immediately
@@ -719,6 +715,7 @@ fn zopfli_compute_shortest_path<S: Simd>(
         nodes,
         queue,
         scratch,
+        prefix_matches,
         model,
         ..
     } = workspace;
@@ -741,7 +738,6 @@ fn zopfli_compute_shortest_path<S: Simd>(
     // Scratch for the attached dictionary's own candidates, merged into the
     // tree's below. Sixty-four is the reference's `LookupAllCompoundDictionary`
     // limit, and it never grows past that.
-    let mut prefix_matches: Vec<(usize, usize)> = Vec::new();
 
     let mut i = 0usize;
     while i + HASH_TYPE_LENGTH - 1 < num_bytes {
@@ -805,9 +801,9 @@ fn zopfli_compute_shortest_path<S: Simd>(
                 dictionary_start,
                 params.dist.max_distance as usize,
                 MAX_PREFIX_MATCHES,
-                &mut prefix_matches,
+                prefix_matches,
             );
-            merge_prefix_matches(&prefix_matches, scratch);
+            merge_prefix_matches(prefix_matches, scratch, 0);
         }
         // A copy longer than the cap makes every shorter candidate irrelevant.
         if let Some(&longest) = scratch.last()
@@ -934,7 +930,6 @@ pub(crate) fn create_hq_zopfli_backward_references<S: Simd>(
     let max_zopfli_len = params.max_zopfli_len();
     let short_scan = params.short_scan();
     let gap = attached.map_or(0, SharedContextInner::total_size);
-    let mut prefix_matches: Vec<(usize, usize)> = Vec::new();
     let store_end = if num_bytes >= STORE_LOOKAHEAD {
         position + num_bytes - STORE_LOOKAHEAD + 1
     } else {
@@ -1008,7 +1003,7 @@ pub(crate) fn create_hq_zopfli_backward_references<S: Simd>(
             workspace.arena.extend_from_slice(&workspace.scratch);
         }
         if let Some(context) = attached {
-            prefix_matches.clear();
+            workspace.prefix_matches.clear();
             context.find_all_matches(
                 ringbuffer,
                 ringbuffer_mask,
@@ -1018,15 +1013,13 @@ pub(crate) fn create_hq_zopfli_backward_references<S: Simd>(
                 dictionary_start,
                 params.dist.max_distance as usize,
                 MAX_PREFIX_MATCHES,
-                &mut prefix_matches,
+                &mut workspace.prefix_matches,
             );
-            if !prefix_matches.is_empty() {
-                // The arena holds every position's matches end to end, so only
-                // this position's tail takes part in the merge.
-                let mut tail: Vec<BackwardMatch> = workspace.arena.split_off(cur_match_pos);
-                merge_prefix_matches(&prefix_matches, &mut tail);
-                workspace.arena.append(&mut tail);
-            }
+            merge_prefix_matches(
+                &workspace.prefix_matches,
+                &mut workspace.arena,
+                cur_match_pos,
+            );
         }
         let found = workspace.arena.len() - cur_match_pos;
         workspace.num_matches[i] = found as u32;
@@ -1130,6 +1123,42 @@ mod tests {
     use crate::compressor::core::shared::ringbuffer::RingBuffer;
     use crate::compressor::{CompressParams, QualityLevel, WindowBits};
     use fearless_simd::{Level, dispatch};
+
+    #[test]
+    fn prefix_merge_preserves_prior_arena_entries_and_tree_ties() {
+        let prior = BackwardMatch::new(99, 99);
+        let tree_tie = BackwardMatch::dictionary(8, 7, 4);
+        let mut arena = vec![
+            prior,
+            BackwardMatch::new(2, 3),
+            tree_tie,
+            BackwardMatch::new(1, 10),
+        ];
+        arena.reserve(4);
+        let capacity = arena.capacity();
+        merge_prefix_matches(&[(1, 3), (8, 7), (4, 12)], &mut arena, 1);
+        let actual: Vec<_> = arena
+            .iter()
+            .map(|entry| (entry.distance, entry.length(), entry.length_code()))
+            .collect();
+        assert_eq!(
+            actual,
+            [
+                (99, 99, 99),
+                (1, 3, 3),
+                (2, 3, 3),
+                (8, 7, 4),
+                (8, 7, 7),
+                (1, 10, 10),
+                (4, 12, 12)
+            ]
+        );
+        assert_eq!(arena.capacity(), capacity);
+        merge_prefix_matches(&[], &mut arena, 1);
+        assert_eq!(arena.len(), 7);
+        merge_prefix_matches(&[(3, 5)], &mut arena, 7);
+        assert_eq!(arena.last().expect("inserted").length(), 5);
+    }
 
     /// A ring buffer holding `data`, laid out as the encoder would.
     fn ring(params: &HqParams, data: &[u8]) -> RingBuffer {

@@ -108,14 +108,15 @@ mod c_brotli {
     use google_brotli_ffi as ffi;
     use std::ffi::c_int;
 
-    /// Returns the upper bound on the compressed size of `input_size` bytes.
+    /// Conservative capacity for the C stream, without relying on one-shot rewrites.
     pub fn max_compressed_size(input_size: usize) -> usize {
-        // SAFETY: `BrotliEncoderMaxCompressedSize` is a pure arithmetic helper
-        // that touches no memory.
-        unsafe { ffi::BrotliEncoderMaxCompressedSize(input_size) }
+        input_size
+            .checked_mul(2)
+            .and_then(|size| size.checked_add(4096))
+            .expect("bounded benchmark corpus")
     }
 
-    /// Compresses `src` into `dst`, replacing its contents.
+    /// Compresses `src` into `dst` with C streaming FINISH, without outer rewrites.
     ///
     /// Returns the compressed length, or `None` when the encoder fails.
     pub fn compress_into(
@@ -126,32 +127,46 @@ mod c_brotli {
     ) -> Option<usize> {
         dst.clear();
         dst.reserve(max_compressed_size(src.len()));
-
-        let mut encoded_size = dst.capacity();
-        // SAFETY: `src` is a valid slice of `src.len()` readable bytes, and
-        // `dst` owns at least `encoded_size` bytes of allocated capacity. The
-        // encoder writes no more than `encoded_size` bytes into that buffer and
-        // reports how many it wrote through `encoded_size`. The two buffers
-        // cannot alias because `dst` was freshly reserved.
-        let status = unsafe {
-            ffi::BrotliEncoderCompress(
-                quality as c_int,
-                lgwin as c_int,
-                ffi::BROTLI_DEFAULT_MODE,
-                src.len(),
-                src.as_ptr(),
-                &mut encoded_size,
-                dst.as_mut_ptr(),
-            )
+        let mut available_in = src.len();
+        let mut next_in = src.as_ptr();
+        let mut available_out = dst.capacity();
+        let mut next_out = dst.as_mut_ptr();
+        let mut encoded_size = 0;
+        // SAFETY: source and destination are disjoint live allocations. The C
+        // API writes at most available_out bytes and reports its initialized
+        // prefix in encoded_size. State is destroyed on every constructed path.
+        let complete = unsafe {
+            let state = ffi::BrotliEncoderCreateInstance(None, None, std::ptr::null_mut());
+            if state.is_null() {
+                return None;
+            }
+            for (parameter, value) in [
+                (ffi::BROTLI_PARAM_QUALITY, quality as u32),
+                (ffi::BROTLI_PARAM_LGWIN, lgwin as u32),
+                (ffi::BROTLI_PARAM_SIZE_HINT, src.len() as u32),
+            ] {
+                if ffi::BrotliEncoderSetParameter(state, parameter, value) != ffi::BROTLI_TRUE {
+                    ffi::BrotliEncoderDestroyInstance(state);
+                    return None;
+                }
+            }
+            let status = ffi::BrotliEncoderCompressStream(
+                state,
+                ffi::BROTLI_OPERATION_FINISH,
+                &raw mut available_in,
+                &raw mut next_in,
+                &raw mut available_out,
+                &raw mut next_out,
+                &raw mut encoded_size,
+            );
+            let finished = ffi::BrotliEncoderIsFinished(state);
+            ffi::BrotliEncoderDestroyInstance(state);
+            status == ffi::BROTLI_TRUE && finished == ffi::BROTLI_TRUE
         };
-
-        if status != ffi::BROTLI_TRUE {
+        if !complete {
             return None;
         }
-
-        // SAFETY: the encoder reported success, so the first `encoded_size`
-        // bytes of `dst` are initialized and `encoded_size` is within the
-        // capacity reserved above.
+        // SAFETY: successful finalization initialized exactly this prefix.
         unsafe { dst.set_len(encoded_size) };
         Some(encoded_size)
     }
@@ -190,6 +205,29 @@ mod c_brotli {
     ///
     /// Returns the compressed length, or `None` when the encoder fails.
     pub fn compress_streaming(
+        quality: usize,
+        lgwin: usize,
+        chunks: &[&[u8]],
+        dst: &mut Vec<u8>,
+    ) -> Option<usize> {
+        // C's fast streaming API encodes each PROCESS chunk immediately. Rust
+        // stages up to the configured window for chunk-independent output.
+        // Normalize C to those same fragment boundaries, including the staging
+        // allocation/copy in the timed end-to-end operation on both sides.
+        if quality < 2 {
+            let staged = chunks.concat();
+            let fragments: Vec<_> = if staged.is_empty() {
+                vec![staged.as_slice()]
+            } else {
+                staged.chunks(1usize << lgwin).collect()
+            };
+            compress_streaming_fragments(quality, lgwin, &fragments, dst)
+        } else {
+            compress_streaming_fragments(quality, lgwin, chunks, dst)
+        }
+    }
+
+    fn compress_streaming_fragments(
         quality: usize,
         lgwin: usize,
         chunks: &[&[u8]],
@@ -848,7 +886,21 @@ fn bench_streaming(criterion: &mut Criterion) {
             // Every shape has to reach the same bytes before any of them is
             // timed, or the comparison is between two different jobs.
             let mut compressor = encoder(quality);
-            let expected = compressor.compress(data).expect("mbrotli failed");
+            let mut expected = Vec::new();
+            compressor
+                .reader(data, stream)
+                .expect("reader")
+                .read_to_end(&mut expected)
+                .expect("read");
+            let mut writer = compressor.writer(Vec::new(), stream).expect("writer");
+            for chunk in &chunks {
+                writer.write_all(chunk).expect("write");
+            }
+            assert_eq!(
+                writer.finish().expect("finish"),
+                expected,
+                "adapter equivalence"
+            );
             let mut theirs = Vec::new();
             c_brotli::compress_streaming(numeric, usize::from(LGWIN.bits()), &chunks, &mut theirs)
                 .expect("C Brotli failed to compress");
@@ -1147,6 +1199,56 @@ fn bench_dictionary(criterion: &mut Criterion) {
     }
 }
 
+/// Measures the canonical empty and incompressible cases that used to be rewritten.
+fn bench_universal(criterion: &mut Criterion) {
+    let noise = incompressible(16 << 10);
+    for quality in [Quality::Q0, Quality::Q1, Quality::Q5, Quality::Q11] {
+        let config = config(quality).with_window(Window::standard(10).expect("window"));
+        let mut group = criterion.benchmark_group(format!("universal/q{}", quality.get()));
+        for (name, data) in [("empty", &[][..]), ("binary-16KiB", noise.as_slice())] {
+            group.throughput(if data.is_empty() {
+                Throughput::Elements(1)
+            } else {
+                Throughput::Bytes(data.len() as u64)
+            });
+            let expected = Compressor::new(config)
+                .expect("config")
+                .compress(data)
+                .expect("compress");
+            let mut reference = Vec::new();
+            c_brotli::compress_into(quality.get().into(), 10, data, &mut reference)
+                .expect("C stream");
+            assert_eq!(expected, reference, "canonical q{} {name}", quality.get());
+            assert_eq!(
+                c_brotli::decompress(&expected, data.len()).as_deref(),
+                Some(data)
+            );
+            println!(
+                "universal q{} {name}: {} bytes on both implementations",
+                quality.get(),
+                expected.len()
+            );
+            group.bench_function(BenchmarkId::new("c-brotli", name), |bencher| {
+                bencher.iter(|| {
+                    let mut output = Vec::new();
+                    c_brotli::compress_into(quality.get().into(), 10, black_box(data), &mut output)
+                        .expect("C stream");
+                    output
+                });
+            });
+            group.bench_function(BenchmarkId::new("mbrotli", name), |bencher| {
+                bencher.iter(|| {
+                    Compressor::new(config)
+                        .expect("config")
+                        .compress(black_box(data))
+                        .expect("compress")
+                });
+            });
+        }
+        group.finish();
+    }
+}
+
 criterion_group!(
     benches,
     bench_cold,
@@ -1155,6 +1257,7 @@ criterion_group!(
     bench_tiny,
     bench_streaming,
     bench_flush,
-    bench_dictionary
+    bench_dictionary,
+    bench_universal
 );
 criterion_main!(benches);

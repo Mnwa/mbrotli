@@ -106,6 +106,7 @@ impl ZopfliCostModel {
                 + self.histogram_cmd.capacity()
                 + self.histogram_dist.capacity())
                 * size_of::<u32>()
+            + self.literal_arena.retained_bytes()
     }
 
     /// Makes sure the model can price a block of `num_bytes` bytes.

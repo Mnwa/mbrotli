@@ -131,6 +131,28 @@ pub(crate) struct SplitArena<const N: usize> {
     assign: Histogram<N>,
 }
 
+impl<const N: usize> SplitArena<N> {
+    /// Counts all heap-backed scratch storage.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        (self.histograms.capacity() + self.all_histograms.capacity() + self.batch.capacity())
+            * size_of::<Histogram<N>>()
+            + (self.insert_cost.capacity() + self.cost.capacity()) * size_of::<f64>()
+            + (self.switch_signal.capacity() + self.block_ids.capacity()) * size_of::<u8>()
+            + (self.new_id.capacity()) * size_of::<u16>()
+            + (self.histogram_symbols.capacity()
+                + self.block_lengths.capacity()
+                + self.sizes.capacity()
+                + self.new_clusters.capacity()
+                + self.symbols.capacity()
+                + self.remap.capacity()
+                + self.cluster_size.capacity()
+                + self.clusters.capacity()
+                + self.new_index.capacity())
+                * size_of::<u32>()
+            + (self.pairs.capacity()) * size_of::<HistogramPair>()
+    }
+}
+
 impl<const N: usize> Default for SplitArena<N> {
     /// Returns empty scratch storage.
     fn default() -> Self {
@@ -628,6 +650,15 @@ pub(crate) struct BlockSplitter {
 }
 
 impl BlockSplitter {
+    /// Counts symbol staging and all three splitting arenas.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        (self.literals.capacity() + self.commands.capacity() + self.distances.capacity())
+            * size_of::<u16>()
+            + self.literal_arena.retained_bytes()
+            + self.command_arena.retained_bytes()
+            + self.distance_arena.retained_bytes()
+    }
+
     /// Splits all three symbol streams of a meta-block (`BrotliSplitBlock`).
     ///
     /// `pos` is the wrapped position of the first literal.

@@ -11,9 +11,9 @@ back into the test suite, and which boundaries are still unfuzzed.
 `fuzz/afl` is a separate, unpublished package, deliberately excluded from the
 root workspace (`Cargo.toml`, `exclude = ["fuzz/afl"]`) so that AFL's
 instrumentation and its runtime never reach an ordinary root `cargo test` or
-`cargo clippy`. It depends on `mbrotli` and on `google-brotli-ffi` by path, and
-pins `fearless_simd` with `force_support_fallback` so the scalar backend is
-reachable for the equivalence target.
+`cargo clippy`. It depends on `mbrotli` and on `google-brotli-ffi` by path.
+Backend selection goes through `mbrotli::Backend`, including its scalar baseline;
+the fuzz package no longer depends directly on the SIMD implementation crate.
 
 The package is split so that the AFL dependency stops at the binary layer:
 
@@ -36,7 +36,7 @@ graph TD
     subgraph under["Under test / oracles"]
         mbrotli["mbrotli public API"]
         ffi["google-brotli-ffi<br/>(C encoder and decoder)"]
-        simd["fearless_simd::Level"]
+        simd["mbrotli::Backend"]
     end
 
     bins --> targets
@@ -57,7 +57,7 @@ Only `src/bin/` names `afl`. Every target body is a plain
 reproducible without an instrumented binary.
 
 `Context` is built once per process and carries the prepared state: the detected
-`Level` and the deduplicated list of host backends. A `Compressor` is stateful
+opaque `Backend` and the deduplicated list of host backends. A `Compressor` is stateful
 now, so each iteration builds the one its case calls for through
 `Context::encoder`; that construction is itself part of what the targets
 exercise, and it allocates nothing large. Nothing in `mbrotli` holds mutable
@@ -133,8 +133,8 @@ target that can reach the validating conversions and the large-window refusal.
 | `q11_roundtrip` | payload | same, at quality 11 |
 | `params_roundtrip` | header | bound, round-trip, and that a reused compressor, a second call on it and a fresh one all agree, over every legal setting |
 | `simd_equivalence` | header | every distinct host backend emits identical bytes |
-| `differential_c` | header | byte identity with Google Brotli v1.2.0 configured with the same quality, window, mode, block size, size hint, distance layout and context setting |
-| `streaming_equivalence` | header | writer, reader and low-level session all emit the same stream at an arbitrary chunk size; every `process` call that moved nothing reports why; the stream round-trips; and a declared size reaches the one-shot bytes wherever the reference's one-shot shortcuts do not apply |
+| `differential_c` | header | byte identity with Google Brotli v1.2.0 streaming FINISH configured with the same quality, window, mode, block size, size hint, distance layout and context setting, including empty input |
+| `streaming_equivalence` | header | vector, append, exact slice, writer, reader and low-level session emit identical bytes with declared size at arbitrary chunk sizes, including empty and incompressible inputs; every `process` call that moved nothing reports why; the stream round-trips |
 | `output_capacity` | header | exactly sized `dst` accepted, one byte short reported as `OutputTooSmall`, appending preserves the destination's prefix and returns the range it added, and a failed call does not change the next one |
 | `parameter_parsing` | numeric | `TryFrom` and `Window` contracts hold; every legal quality compresses and round-trips; `Compressor::new` refuses a large window at qualities 0 to 2 and accepts it above |
 | `large_window` | large window | `Window::large` contract holds; qualities 0, 1 and 2 refuse when the compressor is built rather than dropping the request; bound, determinism, backend identity; C decoder round-trip up to 30 declared bits, and above it the stream differs from the 30-bit stream only in the six header bits |
@@ -182,13 +182,10 @@ rejections — are asserted on rather than treated as crashes.
 
 ## SIMD dispatch point
 
-`host_levels` enumerates the backends the equivalence target compares. It
-gathers `Level::new()`, `Level::baseline()`, `Level::fallback()` and every
-architecture token the host exposes, then deduplicates by enum variant: those
-routinely resolve to the same backend — on aarch64 the first two and the Neon
-token are all Neon — and comparing a backend against itself costs an iteration
-without buying coverage. Detection happens once, in `Context::default()`, never
-inside the loop.
+`host_levels` delegates to `Backend::available()`, which returns each supported
+backend once, scalar first. `Context::default()` detects and enumerates before
+the persistent loop. The fuzz package no longer depends directly on
+`fearless_simd`; unsupported implementation tokens cannot cross the public API.
 
 ## Finding lifecycle
 

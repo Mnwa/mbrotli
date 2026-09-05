@@ -20,12 +20,6 @@ features = ["experimental"]
 path = "../../brotli-ffi"
 features = ["experimental"]
 
-# The scalar fallback backend has to be reachable so the SIMD equivalence
-# target can compare against it.
-[dependencies.fearless_simd]
-version = "=0.7.0"
-features = ["libm", "force_support_fallback"]
-
 [profile.release]
 debug = true
 codegen-units = 1

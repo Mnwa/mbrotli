@@ -111,6 +111,25 @@ fn logical_position_overflow_is_rejected_before_consuming_input() {
 }
 
 #[test]
+fn a_finished_continuation_ignores_input_even_at_the_position_limit() {
+    let mut compressor =
+        Compressor::new(EncoderConfig::default().with_quality(Quality::Q5)).expect("config");
+    let mut session = compressor
+        .start(StreamConfig::default().with_stream_offset((1 << 63) - 1))
+        .expect("position");
+    let progress = session
+        .process(&[], &mut [0; 16], Operation::Finish)
+        .expect("finish");
+    assert_eq!(progress.status, mbrotli::EncoderStatus::Finished);
+    let again = session
+        .process(b"ignored", &mut [0; 16], Operation::Finish)
+        .expect("idempotent finish");
+    assert_eq!(again.consumed, 0);
+    assert_eq!(again.produced, 0);
+    assert_eq!(again.status, mbrotli::EncoderStatus::Finished);
+}
+
+#[test]
 fn continuation_flint_handles_empty_tiny_and_split_input_on_every_backend() {
     use std::io::Write;
     for quality in [Quality::Q2, Quality::Q5, Quality::Q10, Quality::Q11] {

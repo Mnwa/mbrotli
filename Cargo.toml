@@ -25,7 +25,7 @@ exclude = [
 
 [dependencies.fearless_simd]
 version = "=0.7.0"
-features = ["libm"]
+features = ["libm", "force_support_fallback"]
 
 [dependencies.thiserror]
 version = "2"
@@ -38,13 +38,6 @@ version = "0.24"
 optional = true
 
 [dev-dependencies]
-
-# Tests exercise the scalar fallback backend explicitly; enabling the feature
-# here keeps it out of the distributable build while making `Level::fallback()`
-# available to every test target.
-[dev-dependencies.fearless_simd]
-version = "=0.7.0"
-features = ["libm", "force_support_fallback"]
 
 [dev-dependencies.criterion]
 version = "0.8"

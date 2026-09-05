@@ -62,6 +62,16 @@ pub(crate) struct ClusterArena<const N: usize> {
     reindexed: Vec<Histogram<N>>,
 }
 
+impl<const N: usize> ClusterArena<N> {
+    /// Counts all heap-backed scratch storage.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        (self.pairs.capacity()) * size_of::<HistogramPair>()
+            + (self.cluster_size.capacity() + self.clusters.capacity() + self.new_index.capacity())
+                * size_of::<u32>()
+            + (self.reindexed.capacity()) * size_of::<Histogram<N>>()
+    }
+}
+
 impl<const N: usize> Default for ClusterArena<N> {
     /// Returns empty scratch storage.
     fn default() -> Self {

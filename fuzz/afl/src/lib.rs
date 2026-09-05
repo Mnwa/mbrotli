@@ -6,17 +6,16 @@
 //!
 //! Nothing in this crate depends on AFL. Each binary under `src/bin/` is a
 //! three line adapter around one [`targets`] function, so a minimised crash can
-//! be replayed from an ordinary `cargo test` — see `tests/regressions.rs` — and
+//! be replayed through `cargo afl test` — see `tests/regressions.rs` — and
 //! not only by piping bytes into an instrumented binary.
 
-use fearless_simd::Level;
 use google_brotli_ffi as ffi;
+use mbrotli::Backend;
 use mbrotli::{
     BlockBits, BlockSize, CompressionMode, Compressor, DistanceParams, EncoderConfig, InputSize,
     LiteralContextMode, Quality, StreamConfig, Window,
 };
 use std::ffi::c_int;
-use std::mem::discriminant;
 
 pub mod targets;
 
@@ -59,22 +58,22 @@ pub const MAX_PAYLOAD: usize = 128 * 1024;
 
 /// Prepared state shared by every iteration of a target.
 ///
-/// Level enumeration happens once, when the context is built, so no iteration
+/// Backend enumeration happens once, when the context is built, so no iteration
 /// repeats it. A [`Compressor`] is stateful now, so each target builds the one
 /// it needs from the case's configuration; that construction is itself part of
 /// what the targets exercise, and it allocates nothing large.
 pub struct Context {
     /// The level this host detected, which every ordinary target encodes on.
-    pub level: Level,
+    pub level: Backend,
     /// Every distinct backend this host can run.
-    pub levels: Vec<Level>,
+    pub levels: Vec<Backend>,
 }
 
 impl Default for Context {
     /// Detects the host's instruction set and enumerates its backends.
     fn default() -> Self {
         Self {
-            level: Level::try_detect().unwrap_or_else(Level::baseline),
+            level: Backend::default(),
             levels: host_levels(),
         }
     }
@@ -89,7 +88,7 @@ impl Context {
     /// which [`decode_case`] never produces.
     pub fn encoder(&self, config: EncoderConfig) -> Compressor {
         Compressor::builder(config)
-            .with_level(self.level)
+            .with_backend(self.level)
             .build()
             .expect("decode_case only builds legal configurations")
     }
@@ -99,9 +98,9 @@ impl Context {
     /// # Panics
     ///
     /// Panics when the configuration is one no compressor can be built for.
-    pub fn encoder_on(&self, level: Level, config: EncoderConfig) -> Compressor {
+    pub fn encoder_on(&self, level: Backend, config: EncoderConfig) -> Compressor {
         Compressor::builder(config)
-            .with_level(level)
+            .with_backend(level)
             .build()
             .expect("decode_case only builds legal configurations")
     }
@@ -191,47 +190,10 @@ pub fn cap(data: &[u8]) -> &[u8] {
 /// Returns every *distinct* SIMD backend the host can run, scalar fallback
 /// included.
 ///
-/// `Level::new()`, `Level::baseline()` and the architecture-specific token
-/// accessors routinely resolve to the same backend — on aarch64 all three of
-/// the first are Neon — so the list is deduplicated by variant. Without that,
-/// the equivalence target would compress the same input through the same code
-/// path several times per iteration and pay for it in throughput.
-pub fn host_levels() -> Vec<Level> {
-    let detected = Level::new();
-    let mut candidates = vec![detected, Level::baseline(), Level::fallback()];
-
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    {
-        if let Some(token) = detected.as_sse2() {
-            candidates.push(Level::Sse2(token));
-        }
-        if let Some(token) = detected.as_sse4_2() {
-            candidates.push(Level::Sse4_2(token));
-        }
-        if let Some(token) = detected.as_avx2() {
-            candidates.push(Level::Avx2(token));
-        }
-        if let Some(token) = detected.as_avx512() {
-            candidates.push(Level::Avx512(token));
-        }
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        if let Some(token) = detected.as_neon() {
-            candidates.push(Level::Neon(token));
-        }
-    }
-
-    let mut levels: Vec<Level> = Vec::with_capacity(candidates.len());
-    for candidate in candidates {
-        if !levels
-            .iter()
-            .any(|kept| discriminant(kept) == discriminant(&candidate))
-        {
-            levels.push(candidate);
-        }
-    }
-    levels
+/// The public enumeration already validates host support and returns each
+/// backend exactly once. No implementation-specific SIMD type crosses the API.
+pub fn host_levels() -> Vec<Backend> {
+    Backend::available()
 }
 
 /// Compresses `input` with the pinned C encoder, configured like `config`.
@@ -246,7 +208,12 @@ pub fn host_levels() -> Vec<Level> {
 /// Panics when the C encoder reports failure; that would mean the harness, not
 /// the encoder under test, is broken.
 pub fn c_compress_with(config: &EncoderConfig, input: &[u8]) -> Vec<u8> {
-    let capacity = unsafe { ffi::BrotliEncoderMaxCompressedSize(input.len()) }.max(64) + 4096;
+    // The native one-shot bound assumes a rewrite that streaming does not use.
+    let capacity = input
+        .len()
+        .checked_mul(2)
+        .and_then(|size| size.checked_add(4096))
+        .expect("bounded fuzz payload");
     let mut output = vec![0u8; capacity];
     unsafe {
         let state = ffi::BrotliEncoderCreateInstance(None, None, std::ptr::null_mut());

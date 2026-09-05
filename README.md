@@ -1,12 +1,19 @@
 # mbrotli
 
-Brotli compression in safe Rust, byte-identical to Google's reference encoder.
+Brotli compression in safe Rust, with identical bytes across compression APIs.
 
 `mbrotli` implements every Brotli quality as a port of
-[google/brotli] v1.2.0, commit `028fb5a`. For any input and any
-combination of standard encoder parameters covered by the differential suite, it emits the same bytes the
-reference encoder does. That is not an aspiration: it is what the test suite
-asserts, on every corpus, on every run.
+[google/brotli] v1.2.0, commit `028fb5a`. One-shot, vector, slice, session,
+reader and writer APIs emit the same bytes for equivalent stream settings,
+including empty and incompressible input. The differential suite compares against
+C streaming with matching parameters and block scheduling, and verifies output
+with the C decoder. Native C one-shot empty-input and whole-stream fallback
+rewrites are intentionally omitted.
+
+For one-shot/session identity, supply `InputSize::Exact(input.len() as u64)` and
+use the same configuration and dictionary without extra flushes. Unknown size,
+different flush boundaries and nonzero continuation offsets are different stream
+settings, not alternate ways to encode the same stream.
 
 [google/brotli]: https://github.com/google/brotli/tree/028fb5a
 
@@ -48,7 +55,7 @@ serialise the compression itself, not merely the access. One immutable
 
 | Feature | State |
 | --- | --- |
-| Quality 0–11 | implemented, byte-identical to the reference |
+| Quality 0–11 | implemented, compared with equivalent C streaming settings |
 | Decoder | not implemented, and out of scope |
 | One-shot, appending, fixed-slice APIs | implemented |
 | Low-level `EncoderSession` | implemented — one state machine under every path |
@@ -69,9 +76,10 @@ serialise the compression itself, not merely the access. One immutable
 RFC 9841's serialized shared dictionary format is behind the `experimental`
 Cargo feature, because it has no stable reference encoder: the C library
 compiles its parser out unless `BROTLI_EXPERIMENTAL` is defined, and has never
-exposed it as a supported API. The byte-identity guarantee the rest of this
-crate rests on therefore does not apply to it, and the API may change in a patch
-release.
+exposed it as a supported API. The default encoder's equivalent-C-streaming byte
+oracle therefore does not cover full custom static search, and the API may change
+in a patch release. Rust API/backend identity and decoder compatibility remain
+required for equivalent stream settings.
 
 ```toml
 [dependencies]

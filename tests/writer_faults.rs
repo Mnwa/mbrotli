@@ -15,6 +15,35 @@ use support::{c_decompress, encoder};
 /// Window every case in this file uses.
 const LGWIN: u8 = 22;
 
+#[test]
+fn a_large_write_applies_backpressure_before_accepting_the_entire_input() {
+    let mut random = 7u32;
+    let data: Vec<u8> = (0..3 * 1024 * 1024)
+        .map(|_| {
+            random ^= random << 13;
+            random ^= random >> 17;
+            random ^= random << 5;
+            random as u8
+        })
+        .collect();
+    let mut compressor = encoder(Quality::Q1, 16);
+    let mut writer = compressor
+        .writer(ZeroSink, StreamConfig::default())
+        .expect("writer");
+    let accepted = writer.write(&data).expect("accepted input is owned");
+    assert!(
+        accepted > 0 && accepted < data.len(),
+        "backpressure must bound pending output"
+    );
+    assert_eq!(
+        writer
+            .write(&data[accepted..])
+            .expect_err("blocked sink")
+            .kind(),
+        ErrorKind::WriteZero
+    );
+}
+
 /// The qualities the specification names for this proof, one per encoder core.
 const QUALITIES: [Quality; 5] = [
     Quality::Q0,

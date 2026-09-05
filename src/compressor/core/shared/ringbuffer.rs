@@ -110,14 +110,11 @@ impl RingBuffer {
 
     /// Grows the backing storage to `buflen` bytes (`RingBufferInitBuffer`).
     fn init_buffer(&mut self, buflen: usize) {
-        let mut fresh = vec![0u8; HEAD_ROOM + buflen + SLACK_FOR_EIGHT_BYTE_HASHING];
-        let keep = HEAD_ROOM + self.cur_size + SLACK_FOR_EIGHT_BYTE_HASHING;
-        if let Some(old) = self.data.get(..keep)
-            && let Some(target) = fresh.get_mut(..keep)
-        {
-            target.copy_from_slice(old);
-        }
-        self.data = fresh;
+        // Previously initialized capacity remains usable after reset. History
+        // outside the written range is never a valid match; write establishes
+        // the sentinel/tail and clear_margin establishes the lookahead bytes.
+        self.data
+            .resize(HEAD_ROOM + buflen + SLACK_FOR_EIGHT_BYTE_HASHING, 0);
         self.cur_size = buflen;
         // The two head bytes and the margin are zero, exactly as the reference
         // leaves them; `vec!` already provided that for a fresh allocation and

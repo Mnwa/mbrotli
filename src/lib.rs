@@ -1,7 +1,10 @@
 //! Brotli compression, in safe Rust.
 //!
 //! `mbrotli` implements every Brotli quality as a port of Google's reference
-//! encoder, and emits bytes that are identical to it. There is no `unsafe` in
+//! encoder. Its compression APIs emit identical bytes for equivalent stream
+//! settings, including empty inputs; C's one-shot rewrites are deliberately
+//! omitted. Differential verification uses equivalent C streaming settings.
+//! There is no `unsafe` in
 //! this crate, and the SIMD instruction set is resolved once per compressor
 //! rather than inside any loop.
 //!
@@ -170,8 +173,9 @@
 //!
 //! The `experimental` feature adds serialized shared dictionaries, custom word
 //! and transform indexes, headerless stream continuations, and the separate
-//! Shared Brotli framing writer. These extensions do not carry the standard
-//! encoder's blanket C byte-identity guarantee.
+//! Shared Brotli framing writer. Equivalent-C-streaming byte comparisons do not
+//! cover every extension. Rust API/backend identity and decoder compatibility
+//! remain required for equivalent stream settings.
 //!
 //! [RFC 9841]: https://www.rfc-editor.org/rfc/rfc9841.html
 
@@ -195,7 +199,7 @@ mod compressor;
 #[cfg(feature = "experimental")]
 pub use compressor::framing;
 pub use compressor::{
-    BlockBits, BlockSize, CompressionMode, Compressor, CompressorBuilder, ConfigError,
+    Backend, BlockBits, BlockSize, CompressionMode, Compressor, CompressorBuilder, ConfigError,
     DistanceParams, EncodeError, EncoderConfig, EncoderSession, EncoderStatus, InputSize,
     LiteralContextMode, Operation, Progress, Quality, RetentionPolicy, SizeOverflow, StreamConfig,
     Window, WindowEncoding,

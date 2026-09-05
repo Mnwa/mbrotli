@@ -80,7 +80,7 @@ jobs:
         with:
           workspaces: fuzz/afl
       - name: install cargo-afl
-        run: cargo install cargo-afl --locked
+        run: cargo install cargo-afl --version 0.18.2 --locked
       - name: check
         working-directory: fuzz/afl
         run: |
@@ -109,7 +109,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: fuzz/afl
-      - run: cargo install cargo-afl --locked
+      - run: cargo install cargo-afl --version 0.18.2 --locked
       - name: prepare seeds
         working-directory: fuzz/afl
         run: ./prepare-seeds.sh
@@ -124,24 +124,25 @@ jobs:
         working-directory: fuzz/afl
         env:
           TARGET: ${{ matrix.target }}
+          AFL_SKIP_CPUFREQ: 1
+          AFL_NO_AFFINITY: 1
         run: |
-          cargo afl system-config || true
           seeds=seeds/params
           case "$TARGET" in
             dictionary) seeds=seeds/dictionary ;;
             serialized_dictionary) seeds=seeds/serialized ;;
             framing) seeds=regressions/framing ;;
           esac
-          timeout --preserve-status 600 \
-            cargo afl fuzz -i "$seeds" -o findings "target/release/$TARGET" || true
-      - name: fail on any crash
+          cargo afl fuzz -S ci -i "$seeds" -o findings -V 600 \
+            -- "target/release/$TARGET"
+      - name: fail on any crash or saved hang
         working-directory: fuzz/afl
         run: |
-          crashes=$(find findings -path '*/crashes/id:*' | wc -l)
-          echo "crashes: $crashes"
-          test "$crashes" -eq 0
+          findings_count=$(find findings \( -path '*/crashes/id:*' -o -path '*/hangs/id:*' \) | wc -l)
+          echo "crashes and saved hangs: $findings_count"
+          test "$findings_count" -eq 0
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: always()
         with:
           name: findings-${{ matrix.target }}
           path: fuzz/afl/findings
@@ -149,7 +150,11 @@ jobs:
   benchmark-smoke:
     name: benchmarks compile and validate
     if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -163,3 +168,60 @@ jobs:
       - run: >
           cargo bench --bench compress --
           --sample-size 10 --warm-up-time 1 --measurement-time 2
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: criterion-${{ matrix.os }}
+          path: target/criterion
+
+  coverage:
+    name: function coverage
+    runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_TEST_OPT_LEVEL: 1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-llvm-cov --version 0.9.0 --locked
+      - run: cargo llvm-cov --workspace --all-features --html --fail-under-functions 100
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: function-coverage
+          path: target/llvm-cov/html
+
+  miri:
+    name: interpreter checks for retained storage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - run: cargo miri test --lib compressor::core::shared::ringbuffer::tests
+      - run: cargo miri test --lib prefix_merge_preserves_prior_arena_entries_and_tree_ties
+      - run: cargo miri test --lib a_sparse_bucket_promotes_without_losing_its_recent_positions
+      - run: cargo miri test --lib compressor::core::stream::tests
+
+  address-sanitizer:
+    name: address sanitizer
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -Zsanitizer=address
+      RUSTDOCFLAGS: -Zsanitizer=address
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: >
+          cargo test --release --target x86_64-unknown-linux-gnu
+          --features experimental --test reuse --test writer_faults
+          --test streaming --test simd_backends --test dictionary

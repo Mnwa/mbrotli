@@ -10,6 +10,8 @@ error propagation, with Mermaid diagrams for the mechanics it describes.
 | Specification | Summary |
 | --- | --- |
 | [compressor.md](compressor.md) | Compressor subsystem: the five layers of the public API, where each configuration value is validated, how it lowers into the encoders' own parameters, the stateful compressor and its retained workspace, the one-shot paths, the session state machine, the transactional writer and the cursor-based reader, the split error model, SIMD dispatch, verification topology, and current implementation gaps. |
+| [encoder-workspace.md](encoder-workspace.md) | Retained allocation ownership, sparse matcher promotion, pinned backend kernels, session completion and bounded writer backpressure, with Track A verification evidence and open gates. |
+| [universal-encoding.md](universal-encoding.md) | Universal cross-API byte identity, equivalent stream settings, deliberate native C differences, exact slice capacity and canonical differential oracles. |
 | [fast-encoder.md](fast-encoder.md) | Quality 0 and quality 1 encoder core: module map, workspace ownership, fragment lifecycle, the two scan state machines, bitstream layer, SIMD dispatch points, and table-bit specialisation. |
 | [greedy-encoder.md](greedy-encoder.md) | Quality 2 to 9 encoder core: parameter resolution and the deterministic hasher plan, greedy and lazy command generation, the quick, bucket and forgetful-chain match finders, static-entropy and split meta-block storage, the attached-prefix search, and the single SIMD dispatch. |
 | [hq-encoder.md](hq-encoder.md) | Quality 10 and 11 encoder core: the binary-tree match finder, the Zopfli dynamic program and its numerical-determinism contract, the high-quality block splitter and histogram clustering, how an attached prefix reaches the dynamic program, and the layer-by-layer differential harness. |
@@ -26,7 +28,7 @@ graph TD
     subgraph public["Public API"]
         lib["mbrotli<br/>(crate root re-exports)"]
         cfg["compressor::config<br/>(EncoderConfig, Quality, Window,<br/>BlockSize, CompressionMode,<br/>DistanceParams, ConfigError)"]
-        comp["compressor::encoder<br/>(Compressor, CompressorBuilder,<br/>RetentionPolicy)"]
+        comp["compressor::encoder<br/>(Compressor, CompressorBuilder,<br/>RetentionPolicy, opaque Backend)"]
         sess["compressor::session<br/>(EncoderSession, StreamConfig,<br/>Operation, Progress, EncoderStatus)"]
         err["compressor::error<br/>(EncodeError)"]
         io["compressor::io<br/>(EncoderReader, EncoderWriter,<br/>FinishError)"]
@@ -39,6 +41,8 @@ graph TD
         internal["compressor::internal<br/>(the encoders' own parameter<br/>and error shapes)"]
         sharederr["compressor::shared<br/>(SharedBrotliError)"]
         core["compressor::core"]
+        sessioncore["core::session + core::stream<br/>(SessionCore ownership, shared StreamState,<br/>phases and durable output)"]
+        kernels["core::dispatch<br/>(retained Selected S, dyn Kernels)"]
         framecore["framing::core<br/>(Container, Resource, durable chunks,<br/>directory and footer)"]
         framemeta["framing::core::metadata<br/>(bounded serialization, independent<br/>original/repeated metadata streams)"]
         staticindex["core::rfc9841::static_index<br/>(immutable custom combinations)"]
@@ -77,6 +81,9 @@ graph TD
     rfc --> staticindex
     io --> sess
     sess --> comp
+    sess --> sessioncore
+    sessioncore --> driver
+    driver -->|one-shot Finish| sessioncore
     comp --> cfg
     comp --> err
     comp --> dictapi
@@ -95,6 +102,10 @@ graph TD
     driver --> fast
     driver --> greedy
     driver --> hq
+    fast --> kernels
+    greedy --> kernels
+    hq --> kernels
+    kernels --> simd
     fast --> q0
     fast --> q1
     greedy --> gsearch
@@ -125,7 +136,7 @@ the ergonomic surface; `core` owns the algorithms.
 | `src/lib.rs` | Crate root; re-exports the public surface. |
 | `src/compressor/config.rs` | Validated configuration: `EncoderConfig` and the values inside it. |
 | `src/compressor/encoder.rs` | The stateful `Compressor`, its builder and its retention policy. |
-| `src/compressor/session.rs` | The incremental state machine and the per-stream values. |
+| `src/compressor/session.rs` | Public session wrapper and per-stream values; delegates to private `core::session` and the shared `core::stream` scheduler. |
 | `src/compressor/error.rs` | `EncodeError`, and its conversion into `std::io::Error`. |
 | `src/compressor/io/` | The `Read` and `Write` adapters over a session. |
 | `src/compressor/dictionary/` | Immutable RFC 9841 prefix dictionaries and their builder. |

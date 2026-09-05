@@ -41,6 +41,45 @@ pub(crate) struct MetaBlockSplit {
     pub(crate) distance_histograms: Vec<HistogramDistance>,
 }
 
+impl MetaBlockSplit {
+    /// Resets semantic contents without dropping any reusable capacity.
+    pub(crate) fn clear(&mut self) {
+        for split in [
+            &mut self.literal_split,
+            &mut self.command_split,
+            &mut self.distance_split,
+        ] {
+            split.num_types = 0;
+            split.num_blocks = 0;
+            split.types.clear();
+            split.lengths.clear();
+        }
+        self.literal_context_map.clear();
+        self.distance_context_map.clear();
+        self.literal_histograms.clear();
+        self.command_histograms.clear();
+        self.distance_histograms.clear();
+    }
+
+    /// Counts the splits, context maps and histogram capacities.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        let splits = [
+            &self.literal_split,
+            &self.command_split,
+            &self.distance_split,
+        ];
+        splits
+            .iter()
+            .map(|split| split.types.capacity() + split.lengths.capacity() * size_of::<u32>())
+            .sum::<usize>()
+            + (self.literal_context_map.capacity() + self.distance_context_map.capacity())
+                * size_of::<u32>()
+            + self.literal_histograms.capacity() * size_of::<HistogramLiteral>()
+            + self.command_histograms.capacity() * size_of::<HistogramCommand>()
+            + self.distance_histograms.capacity() * size_of::<HistogramDistance>()
+    }
+}
+
 /// Rounds every histogram so its prefix code codes well by run length.
 ///
 /// Mirrors `BrotliOptimizeHistograms`, which qualities four and up apply before

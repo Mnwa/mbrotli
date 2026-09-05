@@ -10,16 +10,24 @@
 //! or output slices: everything it needs between calls lives in the
 //! compressor's own retained buffers.
 //!
-//! # One-shot and streaming are not the same bytes
+//! # Byte identity across API shapes
 //!
-//! The reference encoder's one-shot entry point applies two shortcuts its
-//! streaming entry point does not: an empty input becomes a single byte, and a
-//! stream that grew is rewritten as uncompressed meta-blocks. This crate
-//! reproduces both encoders faithfully, so
-//! [`Compressor::compress`](super::Compressor::compress) applies those
-//! shortcuts and a session does not. For every other input, a session fed
-//! [`InputSize::Exact`] with no explicit flush produces exactly the one-shot
-//! bytes.
+//! A zero-offset session with [`InputSize::Exact`] and no explicit flush produces
+//! exactly the same bytes as [`Compressor::compress`](super::Compressor::compress),
+//! including empty and incompressible inputs. Vector, slice, reader and writer
+//! destinations do not select a different encoding. Short slices return an error
+//! rather than a smaller alternative stream.
+//!
+//! Declared input size, dictionary and flush boundaries are stream settings:
+//! changing them can change output. C's native one-shot empty-input and whole-stream
+//! uncompressed rewrites are deliberately not used, since an incremental stream
+//! cannot rewind output already delivered to its caller.
+//!
+//! One-shot and incremental encoding share a private block scheduler. Sessions
+//! stage undecided input tails so caller chunk boundaries do not affect output.
+//! Native C quality-zero/one streaming emits fragments at PROCESS boundaries,
+//! so arbitrary C chunk schedules are not a byte-identity oracle for those
+//! qualities.
 
 use super::dictionary::PreparedDictionary;
 use super::encoder::Compressor;
@@ -267,19 +275,6 @@ pub struct Progress {
     pub status: EncoderStatus,
 }
 
-/// Where a session is in the life of its stream.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum Phase {
-    /// Taking input.
-    Open,
-    /// A flush has been emitted and no input has arrived since.
-    Flushed,
-    /// The final meta-block has been emitted and delivered.
-    Finished,
-    /// An error ended the stream; nothing more may be encoded.
-    Failed,
-}
-
 /// One incremental Brotli stream.
 ///
 /// Created by [`Compressor::start`](super::Compressor::start) or
@@ -319,18 +314,7 @@ enum Phase {
 /// ```
 #[derive(Debug)]
 pub struct EncoderSession<'c, 'd> {
-    /// The compressor whose encoder and buffers this stream is using.
-    compressor: &'c mut Compressor,
-    /// The dictionary the match finders consult, if one was attached.
-    dictionary: Option<&'d PreparedDictionary>,
-    /// Largest input one encoder call accepts.
-    limit: usize,
-    /// Where the stream is.
-    phase: Phase,
-    #[cfg(feature = "experimental")]
-    logical_position: u64,
-    #[cfg(feature = "experimental")]
-    flint: bool,
+    core: super::core::session::SessionCore<'c, 'd>,
 }
 
 impl<'c, 'd> EncoderSession<'c, 'd> {
@@ -344,17 +328,8 @@ impl<'c, 'd> EncoderSession<'c, 'd> {
         limit: usize,
         stream: StreamConfig,
     ) -> Self {
-        #[cfg(not(feature = "experimental"))]
-        let _ = stream;
         Self {
-            compressor,
-            dictionary,
-            limit,
-            phase: Phase::Open,
-            #[cfg(feature = "experimental")]
-            logical_position: stream.stream_offset(),
-            #[cfg(feature = "experimental")]
-            flint: stream.stream_offset() != 0,
+            core: super::core::session::SessionCore::new(compressor, dictionary, limit, stream),
         }
     }
 
@@ -412,104 +387,7 @@ impl<'c, 'd> EncoderSession<'c, 'd> {
         output: &mut [u8],
         operation: Operation,
     ) -> Result<Progress, EncodeError> {
-        if self.phase == Phase::Failed {
-            return Err(EncodeError::InvalidState {
-                attempted: "process a stream that has already failed",
-            });
-        }
-
-        let mut consumed = 0usize;
-        let mut produced = 0usize;
-        #[cfg(feature = "experimental")]
-        if self
-            .logical_position
-            .checked_add(input.len() as u64)
-            .is_none_or(|end| end > (1u64 << 63) - 1)
-        {
-            return Err(EncodeError::StreamPositionOverflow {
-                position: self.logical_position,
-                input_bytes: input.len() as u64,
-            });
-        }
-
-        loop {
-            produced += self.compressor.drain_pending(&mut output[produced..]);
-            if self.compressor.has_pending() {
-                return Ok(Progress {
-                    consumed,
-                    produced,
-                    status: EncoderStatus::NeedsOutput,
-                });
-            }
-            if self.phase == Phase::Finished {
-                return Ok(Progress {
-                    consumed,
-                    produced,
-                    status: EncoderStatus::Finished,
-                });
-            }
-
-            // Take what the staging buffer still has room for.
-            let limit = self.limit;
-            #[cfg(feature = "experimental")]
-            let limit = if self.flint { 2 } else { limit };
-            let room = limit - self.compressor.staging.len();
-            let take = room.min(input.len() - consumed);
-            if take > 0 {
-                self.compressor
-                    .staging
-                    .extend_from_slice(&input[consumed..consumed + take]);
-                consumed += take;
-                #[cfg(feature = "experimental")]
-                {
-                    self.logical_position += take as u64;
-                }
-                self.phase = Phase::Open;
-            }
-
-            // A whole block is only encoded once something is known to follow
-            // it, so that the last block of a stream is always the one carrying
-            // `is_last`. That is what makes a streamed stream reproduce the
-            // one-shot bytes for an input that is a whole number of blocks.
-            #[cfg(feature = "experimental")]
-            if self.flint
-                && self.compressor.staging.len() == 2
-                && (consumed < input.len() || operation != Operation::Finish)
-            {
-                self.flush(output, &mut produced)?;
-                self.flint = false;
-                continue;
-            }
-            if self.compressor.staging.len() == self.limit && consumed < input.len() {
-                self.encode(false, output, &mut produced)?;
-                continue;
-            }
-
-            match operation {
-                Operation::Process => {
-                    return Ok(Progress {
-                        consumed,
-                        produced,
-                        status: EncoderStatus::NeedsInput,
-                    });
-                }
-                Operation::Flush => {
-                    if self.phase == Phase::Flushed {
-                        return Ok(Progress {
-                            consumed,
-                            produced,
-                            status: EncoderStatus::NeedsInput,
-                        });
-                    }
-                    self.flush(output, &mut produced)?;
-                    self.phase = Phase::Flushed;
-                }
-                Operation::Finish => {
-                    self.encode(true, output, &mut produced)?;
-                    self.phase = Phase::Finished;
-                }
-            }
-        }
+        self.core.process(input, output, operation)
     }
 
     /// Returns whether the stream has been terminated and delivered.
@@ -530,125 +408,7 @@ impl<'c, 'd> EncoderSession<'c, 'd> {
     /// ```
     #[must_use]
     pub const fn is_finished(&self) -> bool {
-        matches!(self.phase, Phase::Finished)
-    }
-
-    /// Encodes the staged block into `output`, holding back what does not fit.
-    ///
-    /// The encoder hands back a borrowed slice of its own scratch, which the
-    /// next call overwrites, so it has to be copied somewhere before then.
-    /// Copying straight into the caller's slice is what keeps a streaming path
-    /// down to the one copy the borrow forces.
-    fn encode(
-        &mut self,
-        is_last: bool,
-        output: &mut [u8],
-        produced: &mut usize,
-    ) -> Result<(), EncodeError> {
-        let attached = self.dictionary.map(PreparedDictionary::inner);
-        let Compressor {
-            workspace,
-            staging,
-            pending,
-            served,
-            ..
-        } = &mut *self.compressor;
-        let Some(encoder) = workspace.encoder() else {
-            self.phase = Phase::Failed;
-            return Err(EncodeError::InternalInvariant {
-                detail: "a session outlived the encoder it was started with",
-            });
-        };
-        let outcome = if is_last {
-            encoder.encode_block_with(staging, true, attached)
-        } else {
-            encoder.encode_block_with(staging, false, attached)
-        };
-        match outcome {
-            Ok(bytes) => {
-                Self::deliver(bytes, output, produced, pending, served);
-                staging.clear();
-                Ok(())
-            }
-            Err(error) => {
-                self.phase = Phase::Failed;
-                Err(EncodeError::from_core(error, 0))
-            }
-        }
-    }
-
-    /// Emits the staged block and realigns the stream, leaving it open.
-    fn flush(&mut self, output: &mut [u8], produced: &mut usize) -> Result<(), EncodeError> {
-        let attached = self.dictionary.map(PreparedDictionary::inner);
-        let Compressor {
-            workspace,
-            staging,
-            pending,
-            served,
-            ..
-        } = &mut *self.compressor;
-        let Some(encoder) = workspace.encoder() else {
-            self.phase = Phase::Failed;
-            return Err(EncodeError::InternalInvariant {
-                detail: "a session outlived the encoder it was started with",
-            });
-        };
-        match encoder.flush_block(staging, attached) {
-            Ok(bytes) => {
-                Self::deliver(bytes, output, produced, pending, served);
-                staging.clear();
-                Ok(())
-            }
-            Err(error) => {
-                self.phase = Phase::Failed;
-                Err(EncodeError::from_core(error, 0))
-            }
-        }
-    }
-
-    /// Copies `bytes` into `output`, keeping whatever did not fit.
-    fn deliver(
-        bytes: &[u8],
-        output: &mut [u8],
-        produced: &mut usize,
-        pending: &mut Vec<u8>,
-        served: &mut usize,
-    ) {
-        let room = output.len() - *produced;
-        let direct = bytes.len().min(room);
-        if let (Some(target), Some(source)) = (
-            output.get_mut(*produced..*produced + direct),
-            bytes.get(..direct),
-        ) {
-            target.copy_from_slice(source);
-            *produced += direct;
-        }
-        if let Some(rest) = bytes.get(direct..)
-            && !rest.is_empty()
-        {
-            pending.clear();
-            pending.extend_from_slice(rest);
-            *served = 0;
-        }
-    }
-}
-
-impl Drop for EncoderSession<'_, '_> {
-    /// Returns the compressor to a state the next stream can start from.
-    ///
-    /// A session that finished leaves its encoder retained, so the next stream
-    /// of the same shape reuses every allocation. A session abandoned part-way
-    /// drops the retained encoder instead: it holds half a stream, and nothing
-    /// good comes of letting the next one inherit that. Either way the staging
-    /// buffers keep their capacity and lose their contents.
-    fn drop(&mut self) {
-        if self.phase != Phase::Finished {
-            self.compressor.workspace.invalidate();
-        }
-        self.compressor.staging.clear();
-        self.compressor.pending.clear();
-        self.compressor.served = 0;
-        self.compressor.active = false;
+        self.core.is_finished()
     }
 }
 

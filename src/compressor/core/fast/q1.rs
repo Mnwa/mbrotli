@@ -539,7 +539,7 @@ impl TwoPassState {
     /// The arena is assigned through its `Box` and the two buffers are cleared
     /// rather than dropped, so every allocation survives into the next stream.
     pub(crate) fn reset(&mut self) {
-        *self.arena = TwoPassArena::default();
+        self.arena.reset();
         self.commands.clear();
         self.literals.clear();
     }

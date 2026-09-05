@@ -5,9 +5,11 @@ extended. This document is the before/after map for contributors. It is
 informational: nothing here argues for keeping an old name, and no compatibility
 shim was added for any of them.
 
-The bitstream did not move. Every encoder under `src/compressor/core/` is the
-same code it was, and the byte-identity tests against Google Brotli v1.2.0
-(commit `028fb5a`) pass unchanged.
+The current contract prioritizes universal Rust API byte identity over native
+C one-shot identity. Empty inputs now keep the same header as sessions, and
+one-shot calls no longer rewrite expanded output or use a different stream to
+fit a short slice. Differential tests use Google Brotli v1.2.0 (`028fb5a`)
+streaming with equivalent settings; decoder compatibility remains required.
 
 ## Why
 
@@ -27,7 +29,7 @@ across streams; and what one stream knows about itself moved to `StreamConfig`.
 
 | Removed | Replacement |
 | --- | --- |
-| `Brotli` | gone; backend detection happens in `Compressor::new`, and `CompressorBuilder::with_level` pins one |
+| `Brotli` | gone; backend detection happens in `Compressor::new`, and `CompressorBuilder::with_backend` pins an opaque, host-validated `Backend` |
 | `Compressor` (`Copy`, stateless) | `Compressor` (stateful, owns the workspace, `&mut self` methods) |
 | `CompressParams` | `EncoderConfig` for settings, `StreamConfig` for what one stream knows |
 | `CompressWorkspace` | gone; the compressor *is* the workspace |
@@ -143,7 +145,8 @@ and `BrotliEncoderCompressStream` does neither.
 
 ## What did not change
 
-- The bitstream, and byte identity with the pinned C encoder.
+- The underlying encoder kernels and format compatibility; outer one-shot
+  rewrites were subsequently removed for cross-API identity.
 - Every encoder under `src/compressor/core/`, apart from crate-internal
   signatures: a flush now carries the attached dictionary, and the retained
   workspace is reachable from the public layer.

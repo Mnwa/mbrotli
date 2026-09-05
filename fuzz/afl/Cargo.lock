@@ -80,7 +80,6 @@ name = "mbrotli-afl"
 version = "0.1.0"
 dependencies = [
  "afl",
- "fearless_simd",
  "google-brotli-ffi",
  "mbrotli",
 ]

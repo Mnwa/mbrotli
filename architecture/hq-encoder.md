@@ -296,9 +296,28 @@ writer, which stores its two-bit code once per literal block type.
 
 ## 9. SIMD dispatch
 
-There is exactly one `dispatch!` per public call, in `HqEncoder`. The token is
-resolved there and passed by value into the match search, which is monomorphised
-on it. Nothing below that point branches on the instruction set.
+`core::dispatch::select` resolves a token once when `HqEncoder` is constructed.
+The retained `Selected<S>` kernel handles stitching and Zopfli reference search
+through feature-enabled `S::vectorize` calls. Each inner search is monomorphized
+on that concrete token; no block reselects the backend.
+
+```mermaid
+graph LR
+    selected[retained Selected S] --> stitch[boundary stitching]
+    selected --> search[Zopfli search]
+    search --> arena[flat retained match arena]
+    prefix[retained prefix scratch] --> merge[backwards in-place merge]
+    arena --> merge
+    merge --> costs[retained costs and nodes]
+    costs --> mb[retained MetaBlockSplit and builder]
+    mb --> writer[retained entropy-code arrays]
+```
+
+Prefix matches merge backwards into the flat arena tail. Earlier positions
+remain untouched; equal tree matches precede equal prefix matches, preserving
+dictionary length codes. No temporary merged vector or `split_off` allocation
+is needed. Meta-block splits, histogram clusters, entropy-code arrays and cost
+histograms survive reset and are included in retained-byte accounting.
 
 The only SIMD-accelerated primitive on this path is `find_match_length`, shared
 with every other quality. Everything that makes a decision — the tree traversal,

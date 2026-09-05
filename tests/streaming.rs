@@ -144,11 +144,6 @@ fn a_one_byte_schedule_reaches_the_same_stream() {
 #[test]
 fn streaming_matches_one_shot_when_the_size_is_declared() {
     for corpus in structural_corpora() {
-        // Tiny inputs can take the one-shot uncompressed fallback, which the
-        // streaming API deliberately does not apply.
-        if corpus.data.len() < 1024 {
-            continue;
-        }
         for quality in IMPLEMENTED_QUALITIES {
             let mut encoder = encoder(quality, 18);
             let one_shot = encoder.compress(&corpus.data).expect("compression failed");
@@ -166,6 +161,76 @@ fn streaming_matches_one_shot_when_the_size_is_declared() {
                     "case {}, quality {}",
                     corpus.name,
                     quality.get()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn universal_empty_output_intentionally_differs_from_native_c_one_shot() {
+    for quality in IMPLEMENTED_QUALITIES {
+        let mut compressor = encoder(quality, 22);
+        let canonical = compressor.compress(&[]).expect("canonical empty stream");
+        let native = support::c_compress_native_one_shot(quality.get().into(), 22, &[]);
+        assert_ne!(
+            canonical,
+            native,
+            "q{} must not use C's shortcut",
+            quality.get()
+        );
+        assert_eq!(c_decompress(&canonical, 0), Some(Vec::new()));
+        assert_eq!(c_decompress(&native, 0), Some(Vec::new()));
+    }
+}
+
+#[test]
+fn incompressible_small_window_streams_are_identical_across_all_api_shapes() {
+    let mut state = 0x1234_5678u32;
+    let data: Vec<u8> = (0..8193)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state as u8
+        })
+        .collect();
+    for quality in IMPLEMENTED_QUALITIES {
+        let mut compressor = encoder(quality, 10);
+        for data in [&[][..], &data[..1], &data[..1024], data.as_slice()] {
+            let stream = InputSize::Exact(data.len() as u64).into();
+            let expected = compress_with_session(&mut compressor, data, 97, stream);
+            let one_shot = compressor.compress(data).expect("one shot");
+            assert_eq!(one_shot, expected, "q{} len{}", quality.get(), data.len());
+            let mut appended = b"prefix".to_vec();
+            let range = compressor
+                .compress_into(data, &mut appended)
+                .expect("append");
+            assert_eq!(&appended[..range.start], b"prefix");
+            assert_eq!(&appended[range], expected);
+            let mut exact = vec![0; expected.len()];
+            let written = compressor
+                .compress_to_slice(data, &mut exact)
+                .expect("exact slice");
+            assert_eq!(written, expected.len());
+            assert_eq!(exact, expected);
+            let mut short = vec![0; expected.len() - 1];
+            assert!(matches!(
+                compressor.compress_to_slice(data, &mut short),
+                Err(mbrotli::EncodeError::OutputTooSmall { .. })
+            ));
+            for chunk in [1, 1024, 8193] {
+                assert_eq!(
+                    compress_with_writer(&mut compressor, data, chunk, stream),
+                    expected
+                );
+                assert_eq!(
+                    compress_with_reader(&mut compressor, data, chunk, stream),
+                    expected
+                );
+                assert_eq!(
+                    compress_with_session(&mut compressor, data, chunk, stream),
+                    expected
                 );
             }
         }

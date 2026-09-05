@@ -592,7 +592,7 @@ impl<'a> Reader<'a> {
         let end = self
             .position
             .checked_add(count)
-            .ok_or_else(|| self.truncated(field))?;
+            .ok_or(self.truncated(field))?;
         let Some(slice) = self.bytes.get(self.position..end) else {
             return Err(self.truncated(field));
         };
@@ -678,8 +678,12 @@ pub(crate) fn parse(
         word_bytes += expected as u64;
         check_limit("word data", word_bytes, limits.max_word_bytes)?;
         let data = reader.take("a word list's words", expected)?;
-        let list = WordList::from_parts(&size_bits, Cow::Owned(data.to_vec()))
-            .map_err(|source| SerializedError::WordList { index, source })?;
+        // Length was checked above; keep the typed error should word-list
+        // validation gain another invariant, without a never-called closure.
+        let list = match WordList::from_parts(&size_bits, Cow::Owned(data.to_vec())) {
+            Ok(list) => list,
+            Err(source) => return Err(SerializedError::WordList { index, source }),
+        };
         word_lists.push(list);
     }
 
@@ -837,6 +841,30 @@ mod tests {
     /// Parses under limits that refuse nothing the format allows.
     fn parse_permissive(bytes: &[u8]) -> Result<SerializedDictionaryData, SerializedError> {
         parse_exact(bytes, &SerializedLimits::permissive())
+    }
+
+    #[test]
+    fn truncated_transform_list_from_timeout_corpus_is_rejected() {
+        // AFL saved this input as a timeout; isolated replays terminate normally.
+        let bytes = [
+            0x91, 0x00, 0x0b, 0x61, 0x62, 0x96, 0x00, 0x03, 0x61, 0x62, 0x63, 0x10, 0x00, 0x63,
+            0x00, 0x1e,
+        ];
+        assert!(matches!(
+            parse_permissive(&bytes),
+            Err(SerializedError::Truncated { position: 16, .. })
+        ));
+    }
+
+    #[test]
+    fn overflowing_read_length_preserves_cursor() {
+        let mut reader = Reader::new(&[1, 2]);
+        assert_eq!(reader.u8("first").expect("first byte"), 1);
+        assert!(matches!(
+            reader.take("overflow", usize::MAX),
+            Err(SerializedError::Truncated { .. })
+        ));
+        assert_eq!(reader.u8("second").expect("cursor unchanged"), 2);
     }
 
     /// Round-trips a dictionary through its own encoding.

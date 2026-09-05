@@ -63,7 +63,7 @@ fn map_static_contexts(num_contexts: usize, static_map: &[u32; 64], mb: &mut Met
 /// Mirrors `BrotliBuildMetaBlockGreedy`. `pos` is the wrapped position of the
 /// first literal, and `prev_byte`/`prev_byte2` are the two bytes before it, so
 /// the first literal's context is the same one the decoder will compute.
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
+#[cfg(test)]
 pub(crate) fn build_meta_block_greedy(
     ringbuffer: &[u8],
     pos: usize,
@@ -73,6 +73,30 @@ pub(crate) fn build_meta_block_greedy(
     model: ContextModel,
     commands: &[Command],
 ) -> MetaBlockSplit {
+    let mut mb = MetaBlockSplit::default();
+    build_meta_block_greedy_into(
+        ringbuffer, pos, mask, prev_byte, prev_byte2, model, commands, &mut mb,
+    );
+    mb
+}
+
+/// Builds into retained split/histogram storage.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the reference's window, contexts and commands plus caller-owned output"
+)]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
+pub(crate) fn build_meta_block_greedy_into(
+    ringbuffer: &[u8],
+    pos: usize,
+    mask: usize,
+    prev_byte: u8,
+    prev_byte2: u8,
+    model: ContextModel,
+    commands: &[Command],
+    mb: &mut MetaBlockSplit,
+) {
+    mb.clear();
     let num_literals: usize = commands
         .iter()
         .map(|command| command.insert_len as usize)
@@ -80,11 +104,13 @@ pub(crate) fn build_meta_block_greedy(
 
     let num_contexts = model.num_contexts;
     let mut plain_literals = if num_contexts == 1 {
-        Some(BlockSplitter::<NUM_LITERAL_SYMBOLS>::new(
+        Some(BlockSplitter::<NUM_LITERAL_SYMBOLS>::with_storage(
             NUM_LITERAL_SYMBOLS,
             LITERAL_MIN_BLOCK,
             LITERAL_SPLIT_THRESHOLD,
             num_literals,
+            core::mem::take(&mut mb.literal_split),
+            core::mem::take(&mut mb.literal_histograms),
         ))
     } else {
         None
@@ -92,25 +118,31 @@ pub(crate) fn build_meta_block_greedy(
     let mut context_literals = if num_contexts == 1 {
         None
     } else {
-        Some(ContextBlockSplitter::new(
+        Some(ContextBlockSplitter::with_storage(
             NUM_LITERAL_SYMBOLS,
             num_contexts,
             LITERAL_MIN_BLOCK,
             LITERAL_SPLIT_THRESHOLD,
             num_literals,
+            core::mem::take(&mut mb.literal_split),
+            core::mem::take(&mut mb.literal_histograms),
         ))
     };
-    let mut cmd_blocks = BlockSplitter::<NUM_COMMAND_SYMBOLS>::new(
+    let mut cmd_blocks = BlockSplitter::<NUM_COMMAND_SYMBOLS>::with_storage(
         NUM_COMMAND_SYMBOLS,
         COMMAND_MIN_BLOCK,
         COMMAND_SPLIT_THRESHOLD,
         commands.len(),
+        core::mem::take(&mut mb.command_split),
+        core::mem::take(&mut mb.command_histograms),
     );
-    let mut dist_blocks = BlockSplitter::<NUM_HISTOGRAM_DISTANCE_SYMBOLS>::new(
+    let mut dist_blocks = BlockSplitter::<NUM_HISTOGRAM_DISTANCE_SYMBOLS>::with_storage(
         DISTANCE_SPLIT_ALPHABET,
         DISTANCE_MIN_BLOCK,
         DISTANCE_SPLIT_THRESHOLD,
         commands.len(),
+        core::mem::take(&mut mb.distance_split),
+        core::mem::take(&mut mb.distance_histograms),
     );
 
     let static_map = model.map;
@@ -143,7 +175,6 @@ pub(crate) fn build_meta_block_greedy(
         }
     }
 
-    let mut mb = MetaBlockSplit::default();
     if let Some(mut splitter) = plain_literals {
         splitter.finish_block(true);
         mb.literal_split = splitter.split;
@@ -164,9 +195,8 @@ pub(crate) fn build_meta_block_greedy(
     if let Some(map) = static_map
         && num_contexts > 1
     {
-        map_static_contexts(num_contexts, map, &mut mb);
+        map_static_contexts(num_contexts, map, mb);
     }
-    mb
 }
 
 #[cfg(test)]

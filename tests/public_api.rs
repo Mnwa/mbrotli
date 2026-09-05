@@ -571,6 +571,14 @@ fn a_finish_failure_carries_both_halves_and_prints_them() {
     let sink = encoder
         .writer(Refusing, StreamConfig::default())
         .expect("a legal stream");
-    let converted = std::io::Error::from(sink.finish().expect_err("the sink refuses everything"));
+    let converted = sink
+        .finish()
+        .expect_err("the sink refuses everything")
+        .into_error();
+    assert_eq!(converted.kind(), ErrorKind::WouldBlock);
+    let sink = encoder
+        .writer(Refusing, StreamConfig::default())
+        .expect("stream");
+    let converted = std::io::Error::from(sink.finish().expect_err("refused"));
     assert_eq!(converted.kind(), ErrorKind::WouldBlock);
 }

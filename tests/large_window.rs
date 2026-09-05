@@ -230,12 +230,30 @@ fn the_qualities_that_cannot_carry_one_refuse_when_the_compressor_is_built()
 }
 
 #[test]
-fn an_empty_input_is_still_one_byte() -> Result<(), Box<dyn std::error::Error>> {
+fn an_empty_input_preserves_the_window_across_api_shapes() -> Result<(), Box<dyn std::error::Error>>
+{
     for quality in LARGE_WINDOW_QUALITIES {
         for bits in [10u8, 24, 30, 62] {
-            let encoded = encoder(quality, bits)?.compress(b"")?;
-            assert_eq!(encoded, vec![6], "{bits} bits at quality {}", quality.get());
-            assert_eq!(c_decompress(&encoded, 1).as_deref(), Some(b"".as_slice()));
+            let mut compressor = encoder(quality, bits)?;
+            let encoded = compressor.compress(b"")?;
+            let streamed = compressor
+                .writer(Vec::new(), StreamConfig::default())?
+                .finish()
+                .map_err(FinishError::into_error)?;
+            assert_eq!(
+                encoded,
+                streamed,
+                "{bits} bits at quality {}",
+                quality.get()
+            );
+            assert_eq!(encoded[0], 0x11);
+            assert_eq!(encoded[1] & 0x3f, bits);
+            if bits <= C_DECODER_MAX_WINDOW_BITS {
+                assert_eq!(
+                    c_decompress_large_window(&encoded, 1).as_deref(),
+                    Some(b"".as_slice())
+                );
+            }
         }
     }
     Ok(())
@@ -244,9 +262,7 @@ fn an_empty_input_is_still_one_byte() -> Result<(), Box<dyn std::error::Error>> 
 #[test]
 fn a_finished_empty_stream_still_declares_its_large_window()
 -> Result<(), Box<dyn std::error::Error>> {
-    // The one-shot shortcut answers an empty input with an ordinary one-byte
-    // stream, matching the reference; a streaming session has no such shortcut
-    // and emits the header that was asked for.
+    // Empty input keeps the declared header, just like every other API shape.
     let mut compressor = encoder(Quality::Q5, 30)?;
     let streamed = compressor
         .writer(Vec::new(), StreamConfig::default())?
@@ -382,7 +398,7 @@ fn every_backend_produces_the_same_large_window_stream() -> Result<(), Box<dyn s
             let mut expected: Option<Vec<u8>> = None;
             for (name, level) in host_levels() {
                 let encoded = Compressor::builder(config)
-                    .with_level(level)
+                    .with_backend(level)
                     .build()?
                     .compress(&payload)?;
                 match &expected {

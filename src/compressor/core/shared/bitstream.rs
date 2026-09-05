@@ -264,11 +264,12 @@ fn move_to_front_transform(input: &[u32], output: &mut Vec<u32>) {
     }
     let max_value = input.iter().copied().max().unwrap_or(0);
     debug_assert!(max_value < 256);
-    let mut mtf: Vec<u8> = (0..=max_value as u8).collect();
+    let mut values = core::array::from_fn::<_, 256, _>(|index| index as u8);
+    let mtf = &mut values[..=max_value as usize];
     for &value in input {
-        let index = index_of(&mtf, value as u8);
+        let index = index_of(mtf, value as u8);
         output.push(index as u32);
-        move_to_front(&mut mtf, index);
+        move_to_front(mtf, index);
     }
 }
 
@@ -471,13 +472,18 @@ struct BlockEncoder<'a> {
     block_ix: usize,
     block_len: usize,
     entropy_ix: usize,
-    depths: Vec<u8>,
-    bits: Vec<u16>,
+    depths: &'a mut Vec<u8>,
+    bits: &'a mut Vec<u16>,
 }
 
 impl<'a> BlockEncoder<'a> {
     /// Creates an encoder for the stream `split` describes.
-    fn new(histogram_length: usize, split: &'a BlockSplit) -> Self {
+    fn new(
+        histogram_length: usize,
+        split: &'a BlockSplit,
+        depths: &'a mut Vec<u8>,
+        bits: &'a mut Vec<u16>,
+    ) -> Self {
         Self {
             histogram_length,
             block_types: &split.types,
@@ -490,8 +496,8 @@ impl<'a> BlockEncoder<'a> {
                 split.lengths[0] as usize
             },
             entropy_ix: 0,
-            depths: Vec::new(),
-            bits: Vec::new(),
+            depths,
+            bits,
         }
     }
 
@@ -603,6 +609,19 @@ impl Default for MetaBlockWriter {
 }
 
 impl MetaBlockWriter {
+    /// Counts the retained entropy and context-map scratch buffers.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        self.tree.capacity() * size_of::<HuffmanNode>()
+            + self.arena.rle_symbols.capacity() * size_of::<u32>()
+            + self.literal_depth.capacity()
+            + self.command_depth.capacity()
+            + self.distance_depth.capacity()
+            + (self.literal_bits.capacity()
+                + self.command_bits.capacity()
+                + self.distance_bits.capacity())
+                * size_of::<u16>()
+    }
+
     /// Writes a meta-block with block splitting and context modelling.
     ///
     /// Mirrors `BrotliStoreMetaBlock`.
@@ -631,10 +650,24 @@ impl MetaBlockWriter {
 
         store_compressed_meta_block_header(is_last, length, w);
 
-        let mut literal_enc = BlockEncoder::new(NUM_LITERAL_SYMBOLS, &mb.literal_split);
-        let mut command_enc = BlockEncoder::new(NUM_COMMAND_SYMBOLS, &mb.command_split);
-        let mut distance_enc =
-            BlockEncoder::new(num_effective_distance_symbols, &mb.distance_split);
+        let mut literal_enc = BlockEncoder::new(
+            NUM_LITERAL_SYMBOLS,
+            &mb.literal_split,
+            &mut self.literal_depth,
+            &mut self.literal_bits,
+        );
+        let mut command_enc = BlockEncoder::new(
+            NUM_COMMAND_SYMBOLS,
+            &mb.command_split,
+            &mut self.command_depth,
+            &mut self.command_bits,
+        );
+        let mut distance_enc = BlockEncoder::new(
+            num_effective_distance_symbols,
+            &mb.distance_split,
+            &mut self.distance_depth,
+            &mut self.distance_bits,
+        );
 
         literal_enc.build_and_store_block_switch_codes(&mb.literal_split, &mut self.tree, w);
         command_enc.build_and_store_block_switch_codes(&mb.command_split, &mut self.tree, w);

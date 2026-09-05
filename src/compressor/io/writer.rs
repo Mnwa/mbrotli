@@ -1,14 +1,13 @@
 //! A transactional [`Write`] adapter over an encoder session.
 
-use crate::compressor::error::EncodeError;
-use crate::compressor::session::{EncoderSession, EncoderStatus, Operation};
+use crate::compressor::session::{EncoderSession, EncoderStatus, Operation, Progress};
 use std::io::{Error, ErrorKind, Result, Write};
 
 /// How much room a single pull from the session is offered.
 ///
 /// A meta-block's compressed form is usually well under this, so one pull
-/// normally empties the encoder. A larger one simply takes another turn round
-/// the loop, growing the outbox as it goes; nothing is lost either way.
+/// normally empties the encoder. Larger outputs are drained in bounded pulls;
+/// the initialized buffer is reused even for single-byte input writes.
 const PULL_CHUNK: usize = 128 * 1024;
 
 /// Where a writer is in the life of its stream.
@@ -67,6 +66,8 @@ pub struct EncoderWriter<'c, 'd, W: Write> {
     outbox: Vec<u8>,
     /// How much of [`EncoderWriter::outbox`] the sink has already taken.
     head: usize,
+    /// Initialized storage is retained; only `head..end` is undelivered output.
+    end: usize,
     /// Where the stream is.
     state: State,
 }
@@ -79,7 +80,7 @@ impl<W: Write> std::fmt::Debug for EncoderWriter<'_, '_, W> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EncoderWriter")
             .field("state", &self.state)
-            .field("undelivered", &(self.outbox.len() - self.head))
+            .field("undelivered", &(self.end - self.head))
             .finish_non_exhaustive()
     }
 }
@@ -92,6 +93,7 @@ impl<'c, 'd, W: Write> EncoderWriter<'c, 'd, W> {
             sink,
             outbox: Vec::new(),
             head: 0,
+            end: 0,
             state: State::Open,
         }
     }
@@ -186,9 +188,10 @@ impl<'c, 'd, W: Write> EncoderWriter<'c, 'd, W> {
             return Ok(());
         }
         self.drain()?;
-        if self.state == State::Open {
+        while !self.session.is_finished() {
             self.pump(&[], Operation::Finish)?;
             self.state = State::Finishing;
+            self.drain()?;
         }
         self.drain()?;
         self.sink.flush()?;
@@ -237,10 +240,8 @@ impl<'c, 'd, W: Write> EncoderWriter<'c, 'd, W> {
     /// The cursor is what makes this safe to retry: a short write, an
     /// interruption or an error leaves the exact unwritten suffix in place.
     fn drain(&mut self) -> Result<()> {
-        while self.head < self.outbox.len() {
-            let Some(remaining) = self.outbox.get(self.head..) else {
-                break;
-            };
+        while self.head < self.end {
+            let remaining = &self.outbox[self.head..self.end];
             match self.sink.write(remaining) {
                 Ok(0) => {
                     return Err(Error::new(
@@ -253,44 +254,18 @@ impl<'c, 'd, W: Write> EncoderWriter<'c, 'd, W> {
                 Err(error) => return Err(error),
             }
         }
-        self.outbox.clear();
         self.head = 0;
+        self.end = 0;
         Ok(())
     }
 
-    /// Runs the session until it stops producing, collecting into the outbox.
-    ///
-    /// Returns how much of `input` was accepted.
-    fn pump(&mut self, input: &[u8], operation: Operation) -> Result<usize> {
-        let mut consumed = 0usize;
-        loop {
-            let start = self.outbox.len();
-            self.outbox.resize(start + PULL_CHUNK, 0);
-            let outcome = {
-                let Some(room) = self.outbox.get_mut(start..) else {
-                    self.outbox.truncate(start);
-                    return Err(Error::from(EncodeError::InternalInvariant {
-                        detail: "the output buffer lost the room it just reserved",
-                    }));
-                };
-                self.session
-                    .process(&input[consumed..], room, operation)
-                    .map_err(Error::from)
-            };
-            let progress = match outcome {
-                Ok(progress) => progress,
-                Err(error) => {
-                    self.outbox.truncate(start);
-                    return Err(error);
-                }
-            };
-            self.outbox.truncate(start + progress.produced);
-            consumed += progress.consumed;
-            match progress.status {
-                EncoderStatus::NeedsOutput => {}
-                EncoderStatus::NeedsInput | EncoderStatus::Finished => return Ok(consumed),
-            }
-        }
+    /// Pulls at most one bounded buffer; the caller drains before pulling again.
+    fn pump(&mut self, input: &[u8], operation: Operation) -> Result<Progress> {
+        debug_assert_eq!(self.end, 0);
+        self.outbox.resize(PULL_CHUNK, 0);
+        let progress = self.session.process(input, &mut self.outbox, operation)?;
+        self.end = progress.produced;
+        Ok(progress)
     }
 }
 
@@ -320,11 +295,18 @@ impl<W: Write> Write for EncoderWriter<'_, '_, W> {
         if buf.is_empty() {
             return Ok(0);
         }
-        let consumed = self.pump(buf, Operation::Process)?;
-        // The bytes are ours now, so a sink failure here waits for the next
-        // call rather than being reported with a count the caller would repeat.
-        drop(self.drain());
-        Ok(consumed)
+        loop {
+            let progress = self.pump(buf, Operation::Process)?;
+            if progress.consumed != 0 {
+                // Accepted bytes belong to us. A sink error must not ask the
+                // caller to repeat them; surface it on the next drain instead.
+                drop(self.drain());
+                return Ok(progress.consumed);
+            }
+            // Previously accepted input can still have pending compressed
+            // output. Drain it before trying to accept any new input.
+            self.drain()?;
+        }
     }
 
     /// Makes everything written so far decodable, without ending the stream.
@@ -345,8 +327,13 @@ impl<W: Write> Write for EncoderWriter<'_, '_, W> {
             return self.sink.flush();
         }
         self.drain()?;
-        self.pump(&[], Operation::Flush)?;
-        self.drain()?;
+        loop {
+            let progress = self.pump(&[], Operation::Flush)?;
+            self.drain()?;
+            if progress.status != EncoderStatus::NeedsOutput {
+                break;
+            }
+        }
         self.sink.flush()
     }
 }

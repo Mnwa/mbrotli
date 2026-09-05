@@ -40,6 +40,24 @@ pub(crate) struct OnePassArena {
     pub(crate) tmp_bits: [u16; 64],
 }
 
+impl OnePassArena {
+    /// Restores reference state without reallocating the Huffman node pool.
+    pub(crate) fn reset(&mut self) {
+        self.lit_depth.fill(0);
+        self.lit_bits.fill(0);
+        self.cmd_depth = DEFAULT_COMMAND_DEPTHS;
+        self.cmd_bits = DEFAULT_COMMAND_BITS;
+        self.cmd_histo.fill(0);
+        self.cmd_code.fill(0);
+        self.cmd_code[..DEFAULT_COMMAND_CODE.len()].copy_from_slice(&DEFAULT_COMMAND_CODE);
+        self.cmd_code_numbits = DEFAULT_COMMAND_CODE_NUM_BITS;
+        self.tree.fill(HuffmanNode::default());
+        self.histogram.fill(0);
+        self.tmp_depth.fill(0);
+        self.tmp_bits.fill(0);
+    }
+}
+
 impl Default for OnePassArena {
     /// Creates an arena primed with the reference first-block command code.
     fn default() -> Self {
@@ -81,6 +99,21 @@ pub(crate) struct TwoPassArena {
     pub(crate) tmp_depth: [u8; NUM_COMMAND_SYMBOLS],
     /// Scratch bit patterns for the reordered command alphabet.
     pub(crate) tmp_bits: [u16; 64],
+}
+
+impl TwoPassArena {
+    /// Resets semantic scratch while retaining the Huffman node pool.
+    pub(crate) fn reset(&mut self) {
+        self.lit_histo.fill(0);
+        self.lit_depth.fill(0);
+        self.lit_bits.fill(0);
+        self.cmd_histo.fill(0);
+        self.cmd_depth.fill(0);
+        self.cmd_bits.fill(0);
+        self.tmp_tree.fill(HuffmanNode::default());
+        self.tmp_depth.fill(0);
+        self.tmp_bits.fill(0);
+    }
 }
 
 impl Default for TwoPassArena {

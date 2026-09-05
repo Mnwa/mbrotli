@@ -546,10 +546,10 @@ stateDiagram-v2
     Q --> Low: quality below 5
     Low --> [*]: Err(EncodeError::DictionaryUnsupportedForQuality)
     Q --> Attached: quality 5 to 11
-    Attached --> Consulted: every match finder consults the prefix
+    Attached --> Consulted: nonempty input consults the prefix
     Consulted --> [*]: a stream whose distances may address the prefix
-    Q --> EmptyInput: input empty
-    EmptyInput --> [*]: one byte, 0x06
+    Attached --> EmptyInput: input empty
+    EmptyInput --> [*]: shared finish preserves configured header
 ```
 
 The order is fixed and every check runs before any input is consumed: the window
@@ -566,9 +566,10 @@ There is no empty dictionary to reason about — `DictionaryBuilder::build`
 refuses one — so a compressor either has a dictionary attached to a call or it
 does not, and the second case is byte for byte the ordinary path.
 
-An empty *input* keeps the one-shot shortcut and emits the single byte
-`BrotliEncoderCompress` emits, dictionary or not: a stream with no bytes in it
-cannot reference one. See decision D5.
+An empty *input* follows the same encoder finish path in every API shape,
+preserving the configured stream header. Dictionary validation still applies,
+although an empty stream cannot reference dictionary bytes. Native C one-shot's
+empty shortcut is deliberately omitted; see [universal-encoding.md](universal-encoding.md).
 
 Every entry point that takes a dictionary — the three one-shot forms, the
 session, the writer and the reader — reaches the same bytes for the same
@@ -601,12 +602,12 @@ stateDiagram-v2
     Ordinary --> Encode: any operation
     Large --> Encode: any operation
     Encode --> Empty: input empty
-    Empty --> [*]: one byte, 0x06
+    Empty --> [*]: shared finish preserves configured header
     Encode --> [*]: stream
 ```
 
 The check runs when the compressor is built, so a refused request never reaches
-an operation at all and cannot be dropped on the way to a one-byte stream. The
+an operation at all and cannot be silently dropped, even for empty input. The
 encoders keep their own copies of the refusal in `FastEncoder::new` and
 `GreedyParams::new`, which is now unreachable from a validated configuration and
 is reported as `EncodeError::InternalInvariant` if it ever fires.
@@ -673,7 +674,7 @@ has to prove it.
 | `core::rfc9841::context` unit tests | attachment order and per-attachment indexes; every construction limit; the allocation estimate bounding the real size; the search's longest-match, seam-crossing and longest-over-nearest behaviour |
 | `tests/dictionary.rs` | **byte identity with the C encoder** over six dictionary-and-payload shapes at qualities 5 to 11, with the same bytes prepared by `BrotliEncoderPrepareDictionary` and attached by `BrotliEncoderAttachPreparedDictionary`; a round trip through the C decoder with the same dictionaries attached; a ratio floor that fails if the dictionary were ignored; agreement between all six dictionary entry points; the refusal below quality 5 on every one of them; attachment order changing the stream and both orders matching the reference; one dictionary shared by four threads; flush with a dictionary attached; every preparation limit; reuse determinism across a failure and an abandoned session; and that a dictionary call never changes the next ordinary one |
 | `fuzz/afl/src/bin/dictionary.rs` | the same oracles driven from fuzz input: attachment counts past the format limit, impossible budgets, the addressing round trip, and the refusal below quality five |
-| `tests/differential_c.rs`, `tests/roundtrip.rs`, and the rest | unchanged, and still byte-identical to the C encoder — which is the evidence that no ordinary stream moved |
+| `tests/differential_c.rs`, `tests/roundtrip.rs`, and the rest | byte identity with equivalent C streaming FINISH settings and independent C decoding; native C one-shot rewrites are intentionally excluded |
 
 ## Known gaps
 
@@ -698,16 +699,16 @@ has to prove it.
   than 31 bits, so window and distance arithmetic is proven to fit a `usize`
   rather than carried in `u64`. Widening the history past 30 bits would make
   64-bit positions load-bearing and is a separate change. See decision D2.
-- **An empty input ignores the declared window and any attached dictionary** in
-  the one-shot entry points, matching the reference's shortcut. See decision
-  D5.
-- **The prefix path is measured but not tuned.** Consulting a prefix costs
+- **Prefix performance needs fresh measurements.** Historical measurements put
+  the cost of consulting a prefix at
   1.26x to 1.84x the time of compressing the same payload without one, for 6%
   to 9% off the output; against the reference's own compound dictionary the
   path sits at 0.69x to 0.90x, which is where the encoder around it sits
-  anyway. See [`docs/api_benchmarks.md`](../docs/api_benchmarks.md) §3. Nothing
-  in it has been optimised against that measurement: the chain walk and the
-  byte comparison are scalar, and the high-quality merge allocates a vector per
-  position that contributes a match. The ordinary path is unaffected —
+  anyway. See [`docs/api_benchmarks.md`](../docs/api_benchmarks.md) §3. These are
+  not measurements of the current universal one-shot contract. The chain walk
+  and byte comparison remain scalar, but the high-quality merge now uses a
+  retained prefix arena and in-place backward merge instead of allocating a
+  vector per matching position; see [hq-encoder.md](hq-encoder.md).
+  The ordinary path is unaffected —
   `attachment` hands the encoders `None`, and every prefix branch is behind
   that or behind `ENABLE_PREFIX`.

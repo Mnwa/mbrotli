@@ -17,6 +17,13 @@ use std::ffi::c_int;
 /// Panics when the C encoder reports failure, which would mean the harness is
 /// misconfigured rather than the encoder under test being wrong.
 pub fn c_compress(quality: c_int, lgwin: c_int, input: &[u8]) -> Vec<u8> {
+    let mut params = CParams::new(quality, lgwin);
+    params.size_hint = Some(input.len().min(u32::MAX as usize) as u32);
+    c_compress_with(params, input)
+}
+
+/// Native C one-shot behavior, including its API-specific bitstream rewrites.
+pub fn c_compress_native_one_shot(quality: c_int, lgwin: c_int, input: &[u8]) -> Vec<u8> {
     let capacity = unsafe { ffi::BrotliEncoderMaxCompressedSize(input.len()) }.max(64) + 1024;
     let mut output = vec![0u8; capacity];
     let mut size = output.len();
@@ -67,15 +74,19 @@ impl CParams {
 
 /// Compresses `input` with the pinned C encoder through its streaming API.
 ///
-/// Unlike [`c_compress`] this sets every parameter explicitly, so it can
-/// reproduce configurations the one-shot entry point does not expose.
+/// Sets every parameter explicitly and omits C's one-shot bitstream rewrites.
 ///
 /// # Panics
 ///
 /// Panics when the C encoder reports failure, which would mean the harness is
 /// misconfigured rather than the encoder under test being wrong.
 pub fn c_compress_with(params: CParams, input: &[u8]) -> Vec<u8> {
-    let capacity = unsafe { ffi::BrotliEncoderMaxCompressedSize(input.len()) }.max(64) + 4096;
+    // Native C's one-shot bound relies on a rewrite that streaming cannot use.
+    let capacity = input
+        .len()
+        .checked_mul(2)
+        .and_then(|size| size.checked_add(4096))
+        .expect("bounded corpus");
     let mut output = vec![0u8; capacity];
     unsafe {
         let state = ffi::BrotliEncoderCreateInstance(None, None, std::ptr::null_mut());
@@ -508,9 +519,9 @@ pub fn encoder(quality: Quality, lgwin: u8) -> Compressor {
 /// # Panics
 ///
 /// Panics when the configuration is one no compressor can be built for.
-pub fn encoder_on(level: fearless_simd::Level, quality: Quality, lgwin: u8) -> Compressor {
+pub fn encoder_on(level: mbrotli::Backend, quality: Quality, lgwin: u8) -> Compressor {
     Compressor::builder(config(quality, lgwin))
-        .with_level(level)
+        .with_backend(level)
         .build()
         .expect("a legal configuration")
 }
@@ -739,42 +750,11 @@ pub fn boundary_corpora() -> Vec<Corpus> {
 ///
 /// Higher tokens are downgraded through the `as_*` accessors, so an AVX2
 /// machine also exercises SSE4.2 and SSE2 without any unsafe code.
-pub fn host_levels() -> Vec<(&'static str, fearless_simd::Level)> {
-    use fearless_simd::Level;
-
-    let detected = Level::new();
-    let mut levels: Vec<(&'static str, Level)> = vec![("detected", detected)];
-    levels.push(("baseline", Level::baseline()));
-    levels.push(("fallback", Level::fallback()));
-
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    {
-        if let Some(token) = detected.as_sse2() {
-            levels.push(("sse2", Level::Sse2(token)));
-        }
-        if let Some(token) = detected.as_sse4_2() {
-            levels.push(("sse4.2", Level::Sse4_2(token)));
-        }
-        if let Some(token) = detected.as_avx2() {
-            levels.push(("avx2", Level::Avx2(token)));
-        }
-        if let Some(token) = detected.as_avx512() {
-            levels.push(("avx512", Level::Avx512(token)));
-        }
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        if let Some(token) = detected.as_neon() {
-            levels.push(("neon", Level::Neon(token)));
-        }
-    }
-    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
-    {
-        if let Some(token) = detected.as_wasm_simd128() {
-            levels.push(("wasm-simd128", Level::WasmSimd128(token)));
-        }
-    }
-    levels
+pub fn host_levels() -> Vec<(&'static str, mbrotli::Backend)> {
+    mbrotli::Backend::available()
+        .into_iter()
+        .map(|backend| (backend.name(), backend))
+        .collect()
 }
 
 /// Path of Google Brotli's own test data, from the vendored submodule.

@@ -136,19 +136,13 @@ fn assert_matches_c(name: &str, data: &[u8], case: Case) {
     }
 
     // A case that declares the true length is also what the one-shot path
-    // declares for itself, so the two have to agree as well. The one-shot path
-    // keeps the reference's two shortcuts — an empty input, and a stream that
-    // grew — which a session deliberately does not, so those are left out.
-    if case.size_hint.is_none() && !data.is_empty() {
+    // declares for itself, so the two have to agree, including empty input.
+    if case.size_hint.is_none() {
         let one_shot = compress_one_shot(case, data);
-        if one_shot != expected {
-            assert_eq!(
-                one_shot.len().min(expected.len()),
-                expected.len(),
-                "case {name}: the one-shot path took the uncompressed fallback"
-            );
-            panic!("case {name} {case:?}: the one-shot path left the reference");
-        }
+        assert_eq!(
+            one_shot, expected,
+            "case {name} {case:?}: API shapes differ"
+        );
     }
 
     assert_eq!(

@@ -194,16 +194,20 @@ only matchers where the difference is observable.
 The reference builds `H58` and `H68` in place of `H5` and `H6` whenever
 `BROTLI_MAX_SIMD_QUALITY` is defined, which on GCC and Clang covers quality six.
 Those variants store a one-byte tag beside every position and iterate only the
-slots whose tag matches. This port does not build them, because they cannot
-produce a different stream:
+slots whose tag matches. The bucket matcher now keeps these tags in compact
+parallel storage for q5/q6, matching the pinned C build's tag quality ceiling.
+`tags::Candidates` loads in-bounds groups of sixteen tags with
+safe `fearless_simd` vectors and visits matching initialized slots newest first.
+The scalar backend deliberately retains the unfiltered scan as an independent
+oracle. Filtering preserves the accepted-match sequence:
 
 - They select the same bucket. The tagged `HashBytes` keeps eight more low bits,
   which the key shifts straight back off.
 - They walk the bucket newest to oldest, as the untagged loop does.
-- A tag is a function of the hashed bytes, so two positions whose first four
-  bytes agree always share a tag. A slot the tag mask drops therefore differs in
-  those four bytes — and a candidate that differs there can never reach the
-  reference's `len >= 4` acceptance test.
+- H5 tags depend on the first four bytes. H6 hashes five bytes; within an equal
+  bucket, equal first-four-byte prefixes force the fifth byte to agree (the odd
+  multiplier maps its contribution injectively into the high eight bits).
+  Tag rejection therefore cannot discard a candidate accepted at length four.
 - Both stop at the first candidate beyond `max_backward`, and positions grow
   monotonically along the ring, so both stop having seen the same prefix.
 
@@ -211,7 +215,31 @@ The accepted-match sets coincide. `tests/differential_c.rs` checks the
 consequence directly: qualities six and seven are compared against a C library
 that really is using the tagged matchers.
 
-### 2.3. The distance cache
+### 2.3. Cold storage and reset
+
+Bucket counters and encoded offsets are allocated first. Position/tag payloads
+are materialized one bucket at a time in retained compact vectors. Deep q7–q9
+buckets start with four positions; requesting a fifth promotes once to the full
+reference depth, preserving slot numbers and recent positions. The old four-slot
+starter stays allocated, adding at most four positions per promoted bucket.
+H42 similarly
+materializes one 512-slot chain bank at a time. Encoded offsets are stable across
+reset; counters and chain addresses alone determine which entries can be read.
+No stale payload is valid merely because its allocation survived.
+
+```mermaid
+flowchart LR
+    hash[hash key] --> directory[counter and encoded offset]
+    directory -->|first touch| activate[append initialized bucket or bank]
+    directory -->|already allocated| payload[retained compact payload]
+    activate --> payload
+    payload --> tags[16-byte tag mask, initialized slots only]
+    tags --> candidates[newest-to-oldest candidates]
+    reset[reset stream] --> validity[clear counters / chain addresses]
+    validity -.->|payload remains allocated but invalid| payload
+```
+
+### 2.4. The distance cache
 
 Qualities seven and above probe more than the four remembered distances. The
 extra entries are near misses derived from the two freshest ones — one, two and
@@ -478,8 +506,8 @@ halves so the "already lapped" property survives the truncation.
 ```mermaid
 graph TD
     A["Compressor::new()"] -->|"Level::try_detect()"| B["Level stored in the Compressor"]
-    B --> C["GreedyEncoder { level }"]
-    C -->|"once per encode_block"| D["dispatch!(level, simd => match matcher)"]
+    B -->|"new encoder"| C["core::dispatch::select(level)"]
+    C --> D["retained Selected&lt;S&gt; kernel"]
     D --> E["create_backward_references::&lt;S, M&gt;"]
     E --> F["Matcher::find_longest_match(simd, ...)"]
     F --> G["find_match_length(simd, ...)"]
@@ -488,10 +516,10 @@ graph TD
     class D once;
 ```
 
-There is exactly one `dispatch!` per public call. Inside it the `MatchFinder`
-enum is matched once, which monomorphises the whole search on the concrete
-matcher, and the SIMD token is passed by value down to the only kernel that
-uses it: the exact match-length scan in `core::shared::match_len`.
+The backend is selected once when the retained encoder is created. A virtual
+call at the outer `core::dispatch` boundary enters `S::vectorize`; the
+`MatchFinder` enum is matched once per scan, and the concrete token reaches
+both tag filtering and exact match-length comparison without inner dispatch.
 
 Everything else — bucket stores, distance-cache transitions, the greedy and
 lazy decisions, Huffman construction, bit writing — is scalar, because the
@@ -549,13 +577,6 @@ sized by the same `2 * bytes + 503` reservation the reference uses.
   `H35`, `H55` and `H65` composite match finders are selected only above that
   cap, so they are never built. See [shared-brotli.md](shared-brotli.md)
   decision D2.
-- **The tagged `H58` and `H68` match finders are not built.** They are
-  byte-for-byte equivalent to `H5` and `H6` — see
-  [§2.2](#22-the-tagged-matchers) — so building them would add a second code
-  path that cannot produce a different stream. The one thing this gives up is
-  the tag mask itself, which is the reference's main SIMD opportunity on this
-  path and would be worth revisiting if profiling shows the candidate loop
-  dominating.
 - **An attached prefix reaches only qualities five and above.** The reference
   compiles its compound-dictionary search for `H5`, `H6`, `H40`, `H41`, `H42`,
   `H55` and `H65` only, so `H2`, `H3`, `H4` and `H54` have nowhere to put a
@@ -565,26 +586,11 @@ sized by the same `2 * bytes + 503` reservation the reference uses.
   UTF-8 context combination replaces the implicit built-in probe; headerless
   continuations poison the distance cache and shift dictionary placement without
   inventing history. See [rfc9841-encoding.md](rfc9841-encoding.md).
-- **No SIMD beyond the match-length scan.** Tag masks, histogram accumulation
-  and context sampling are still scalar.
-- **The throughput gate is not met, and the reason splits in two.** Geometric
-  means against the reference on an Apple M5 Pro, emitting identical bytes:
-  0.774x at quality two, 0.795x at three, down to 0.748x at six — then 0.612x,
-  0.536x and 0.377x at seven, eight and nine.
-
-  Qualities two to six are search-bound. The largest known cause is
-  initialisation the reference skips: the block splitters allocate and clear one
-  histogram per possible block type per meta-block, where the reference clears
-  only the one it is about to use, and the Huffman node pool is initialised on
-  first use. See [`docs/q3_q5_benchmarks.md`](../docs/q3_q5_benchmarks.md).
-
-  Qualities seven to nine are **setup-bound**, which the measurement of these
-  qualities was missing until now. Quality nine costs a flat 146 microseconds
-  per call before it looks at a byte — the same for sixteen input bytes as for
-  a thousand — against the reference's 2.9. It selects the largest tables the
-  crate builds, and `MatchFinder::prepare` wipes them in full because its
-  partial sweep only applies below a threshold those tables rarely reach. On a
-  mebibyte of text quality nine runs at 0.791x, in line with the rest; the gap
-  is entirely the floor. Reusing a `Compressor` removes it and takes
-  quality nine to 0.892x on a 256-byte payload, a 16.6x speed-up. See
-  [`docs/all_qualities_benchmarks.md`](../docs/all_qualities_benchmarks.md).
+- **Histogram accumulation and context sampling remain scalar.** Match-length
+  scans and bucket tag filtering have SIMD implementations.
+- **The full throughput gate remains open.** Historical baseline ratios in
+  [`docs/all_qualities_benchmarks.md`](../docs/all_qualities_benchmarks.md) predate
+  retained split/histogram storage, sparse bucket promotion and pinned kernels.
+  Current measurements and their limitations are recorded in
+  [encoder-workspace.md](encoder-workspace.md); historical setup costs must not
+  be read as measurements of the new representation.

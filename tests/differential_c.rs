@@ -1,8 +1,8 @@
 //! Byte-for-byte differential tests against the pinned C encoder.
 //!
 //! Every quality is a port of `google/brotli` v1.2.0 (commit `028fb5a`), so
-//! with identical input, quality, window size and mode the two encoders must
-//! emit identical bytes. Anything else is a porting bug.
+//! with identical settings the Rust APIs must match C streaming FINISH. Native
+//! C one-shot empty/fallback rewrites are deliberately not part of this oracle.
 
 mod support;
 

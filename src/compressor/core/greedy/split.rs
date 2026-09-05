@@ -42,25 +42,47 @@ impl<const N: usize> BlockSplitter<N> {
     ///
     /// `min_block_size` is the smallest block the splitter will emit and
     /// `split_threshold` how much entropy a new block type has to save.
+    #[cfg(test)]
     pub(crate) fn new(
         alphabet_size: usize,
         min_block_size: usize,
         split_threshold: f64,
         num_symbols: usize,
     ) -> Self {
+        Self::with_storage(
+            alphabet_size,
+            min_block_size,
+            split_threshold,
+            num_symbols,
+            BlockSplit::default(),
+            Vec::new(),
+        )
+    }
+
+    /// Initializes a splitter using the previous meta-block's backing buffers.
+    pub(crate) fn with_storage(
+        alphabet_size: usize,
+        min_block_size: usize,
+        split_threshold: f64,
+        num_symbols: usize,
+        mut split: BlockSplit,
+        mut histograms: Vec<Histogram<N>>,
+    ) -> Self {
         let max_num_blocks = num_symbols / min_block_size + 1;
         // One more than the maximum number of block types, for the histogram
         // still being gathered when a meta-block runs out of types.
         let max_num_types = max_num_blocks.min(MAX_NUMBER_OF_BLOCK_TYPES + 1);
-        let mut split = BlockSplit::default();
         split.reserve(max_num_blocks);
+        split.num_types = 0;
+        histograms.clear();
+        histograms.resize(max_num_types + 1, Histogram::default());
         Self {
             alphabet_size,
             min_block_size,
             split_threshold,
             num_blocks: 0,
             split,
-            histograms: vec![Histogram::default(); max_num_types + 1],
+            histograms,
             histograms_size: max_num_types,
             combined: [Histogram::default(), Histogram::default()],
             target_block_size: min_block_size,
@@ -215,6 +237,7 @@ impl ContextBlockSplitter {
     /// Creates a splitter over `num_contexts` contexts.
     ///
     /// Mirrors `InitContextBlockSplitter`.
+    #[cfg(test)]
     pub(crate) fn new(
         alphabet_size: usize,
         num_contexts: usize,
@@ -222,12 +245,35 @@ impl ContextBlockSplitter {
         split_threshold: f64,
         num_symbols: usize,
     ) -> Self {
+        Self::with_storage(
+            alphabet_size,
+            num_contexts,
+            min_block_size,
+            split_threshold,
+            num_symbols,
+            BlockSplit::default(),
+            Vec::new(),
+        )
+    }
+
+    /// Initializes context splitting with retained output storage.
+    pub(crate) fn with_storage(
+        alphabet_size: usize,
+        num_contexts: usize,
+        min_block_size: usize,
+        split_threshold: f64,
+        num_symbols: usize,
+        mut split: BlockSplit,
+        mut histograms: Vec<HistogramLiteral>,
+    ) -> Self {
         let max_num_blocks = num_symbols / min_block_size + 1;
         let max_block_types = MAX_NUMBER_OF_BLOCK_TYPES / num_contexts;
         let max_num_types = max_num_blocks.min(max_block_types + 1);
-        let mut split = BlockSplit::default();
         split.reserve(max_num_blocks);
+        split.num_types = 0;
         let histograms_size = max_num_types * num_contexts;
+        histograms.clear();
+        histograms.resize(histograms_size + num_contexts, HistogramLiteral::default());
         Self {
             alphabet_size,
             num_contexts,
@@ -236,7 +282,7 @@ impl ContextBlockSplitter {
             split_threshold,
             num_blocks: 0,
             split,
-            histograms: vec![HistogramLiteral::default(); histograms_size + num_contexts],
+            histograms,
             histograms_size,
             target_block_size: min_block_size,
             block_size: 0,
@@ -291,7 +337,9 @@ impl ContextBlockSplitter {
             self.block_size = 0;
         } else if self.block_size > 0 {
             let mut entropy = [0.0f64; MAX_STATIC_CONTEXTS];
-            let mut combined = vec![HistogramLiteral::default(); 2 * contexts];
+            let mut combined = core::array::from_fn::<_, { 2 * MAX_STATIC_CONTEXTS }, _>(|_| {
+                HistogramLiteral::default()
+            });
             let mut combined_entropy = [0.0f64; 2 * MAX_STATIC_CONTEXTS];
             let mut diff = [0.0f64; 2];
             for (index, entropy) in entropy.iter_mut().enumerate().take(contexts) {

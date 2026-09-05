@@ -15,6 +15,7 @@
 //! [`EncoderSession`] is the state machine underneath all of it, and the
 //! [`io`] adapters are conveniences over that.
 
+mod backend;
 mod config;
 mod core;
 mod encoder;
@@ -28,6 +29,7 @@ pub mod dictionary;
 pub mod framing;
 pub mod io;
 
+pub use backend::Backend;
 pub use config::{
     BlockBits, BlockSize, CompressionMode, ConfigError, DistanceParams, EncoderConfig,
     LiteralContextMode, Quality, SizeOverflow, Window, WindowEncoding,

@@ -159,14 +159,9 @@ pub fn simd_equivalence(ctx: &Context, input: &[u8]) {
     }
 }
 
-/// The encoder must stay byte identical to the pinned C reference.
+/// The encoder must match the pinned C streaming reference with equivalent settings.
 pub fn differential_c(ctx: &Context, input: &[u8]) {
     let case = decode_case(input);
-    // The empty input takes the one-shot shortcut in this crate and in the C
-    // one-shot API, but not in the C streaming API this oracle uses.
-    if case.data.is_empty() {
-        return;
-    }
     let expected = c_compress_with(&case.config, case.data);
     let actual = ctx
         .encoder(case.config)
@@ -214,20 +209,24 @@ pub fn streaming_equivalence(ctx: &Context, input: &[u8]) {
     assert_round_trip(case.data, &written);
 
     // The stream declares the payload's true length, so it has to reach the
-    // bytes the one-shot path produces — except where that path applies the
-    // reference's own one-shot shortcuts.
-    if !case.data.is_empty() {
-        let one_shot = encoder.compress(case.data).expect("compression failed");
-        if one_shot.len() <= written.len() {
-            // A stream that grew is rewritten as uncompressed meta-blocks by the
-            // one-shot path alone; anything else has to agree exactly.
-            let fallback = one_shot.len() < written.len();
-            assert!(
-                fallback || one_shot == written,
-                "the one-shot and streaming paths disagree"
-            );
-        }
-    }
+    // bytes the one-shot paths produce, with no empty or size-based exclusions.
+    let one_shot = encoder.compress(case.data).expect("compression failed");
+    assert_eq!(
+        one_shot, written,
+        "the one-shot and streaming paths disagree"
+    );
+    let mut appended = b"prefix".to_vec();
+    let range = encoder
+        .compress_into(case.data, &mut appended)
+        .expect("append failed");
+    assert_eq!(&appended[..range.start], b"prefix");
+    assert_eq!(&appended[range], written);
+    let mut exact = vec![0; written.len()];
+    let size = encoder
+        .compress_to_slice(case.data, &mut exact)
+        .expect("exact slice failed");
+    assert_eq!(size, written.len());
+    assert_eq!(exact, written);
 }
 
 /// Drives `data` through a session in `chunk` sized steps.
@@ -492,13 +491,6 @@ pub fn large_window(ctx: &Context, input: &[u8]) {
             .compress(case.data)
             .expect("compression failed");
         assert_eq!(actual, compressed, "backends disagree");
-    }
-
-    if case.data.is_empty() {
-        // The one-shot shortcut answers an empty input with an ordinary
-        // one-byte stream, exactly as the reference does.
-        assert_eq!(compressed, vec![6], "an empty input must stay one byte");
-        return;
     }
 
     if requested <= C_DECODER_MAX_WINDOW_BITS {
