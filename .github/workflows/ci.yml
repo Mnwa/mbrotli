@@ -89,6 +89,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: fuzz/afl
+          # cargo-afl uses target-cpu=native, including for build scripts.
+          # Hosted runners can have different CPUs; never reuse these artifacts.
+          cache-targets: false
+          prefix-key: v1-afl-no-targets
       # A cached executable may refer to bundled sources absent from this runner.
       # Reinstall to restore its dependencies and rebuild against local paths.
       - name: install cargo-afl

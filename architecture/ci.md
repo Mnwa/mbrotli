@@ -9,9 +9,9 @@ flowchart TD
     fast --> check["Formatting, Clippy, docs and packaging"]
     fast --> semver["Default public API semver compatibility<br/>Against the latest crates.io release"]
     fast --> tests["Release tests: default, all features and experimental<br/>Linux x86-64, Linux ARM64, macOS and MSRV"]
-    fast --> replaySetup["Restore cache, force reinstall cargo-afl<br/>Build runtime for active Rust toolchain"]
+    fast --> replaySetup["Restore Cargo cache without target artifacts<br/>Force reinstall cargo-afl and build runtime"]
     replaySetup --> replay["AFL formatting, Clippy and regression replay"]
-    manual["Independent workflow_dispatch triggers"] --> fuzzSetup["ci-fuzz.yml: restore cache, force reinstall cargo-afl<br/>Build runtime for active Rust toolchain"]
+    manual["Independent workflow_dispatch triggers"] --> fuzzSetup["ci-fuzz.yml: restore Cargo cache without target artifacts<br/>Force reinstall cargo-afl and build runtime"]
     fuzzSetup --> fuzz["Seven ten-minute AFL campaigns"]
     manual --> bench["ci-benchmarks.yml<br/>Criterion validation and timing<br/>Linux x86-64 and ARM64"]
     manual --> coverage["ci-coverage.yml<br/>100% function coverage gate"]
@@ -31,6 +31,13 @@ contract without imposing it on experimental APIs, which may change in patch
 releases. The development-only C FFI crate is excluded by selecting `mbrotli`.
 Semver violations fail the job when the package version does not include the
 required bump. The action installs the checker and manages its baseline cache.
+
+Both AFL jobs disable workspace target caching with `cache-targets: false`.
+`cargo-afl` 0.18.2 adds `-C target-cpu=native`, including to build scripts, so
+compiled artifacts can require instructions absent from a later hosted runner.
+The `v1-afl-no-targets` cache prefix excludes older archives containing these
+artifacts; registry and installed-tool caching remain enabled. Every job builds
+the fuzz package and its dependencies for its current CPU.
 
 Both AFL jobs force reinstall the pinned runner with
 `cargo install cargo-afl --version 0.18.2 --locked --force`. The Cargo cache can
