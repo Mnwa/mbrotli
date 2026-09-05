@@ -1,4 +1,4 @@
-//! Immutable borrowed/owned bytes and positional regular-file access.
+//! Immutable bytes, synchronized seekable readers, and positional file access.
 use std::{
     fs::{File, Metadata},
     io,
@@ -31,7 +31,7 @@ pub trait RandomAccessSource: Send + Sync + 'static {
     fn is_empty(&self) -> io::Result<bool> {
         self.len().map(|n| n == 0)
     }
-    /// Fills exactly `dst` from an absolute offset, without a shared cursor.
+    /// Fills exactly `dst` from an absolute offset, safely under concurrent calls.
     /// # Errors
     /// Returns an error for an unavailable or truncated range.
     fn read_exact_at(&self, offset: u64, dst: &mut [u8]) -> io::Result<()>;
@@ -71,6 +71,36 @@ impl RandomAccessSource for ArcBytesSource {
         Ok(())
     }
 }
+/// Adapts an owned `Read + Seek + Send` reader to shared random-access input.
+/// Each seek-and-read holds one mutex; reads are serialized, while compression
+/// runs outside the lock. The reader need not implement `Sync`.
+///
+/// Length is queried by seeking to the end. Every read seeks to an absolute
+/// offset, so the original cursor position is ignored. The underlying bytes
+/// must remain immutable; this adapter provides length checks, but no identity
+/// token. A panic while accessing the reader poisons it and later I/O fails.
+/// Use [`FileSource`] for concurrent positional reads of regular files.
+#[derive(Debug)]
+pub struct SeekSource<R> {
+    inner: super::core::source::SeekReader<R>,
+}
+impl<R> From<R> for SeekSource<R> {
+    /// Takes exclusive ownership without reading or seeking.
+    fn from(reader: R) -> Self {
+        Self {
+            inner: super::core::source::SeekReader::from(reader),
+        }
+    }
+}
+impl<R: io::Read + io::Seek + Send + 'static> RandomAccessSource for SeekSource<R> {
+    fn len(&self) -> io::Result<u64> {
+        self.inner.len()
+    }
+    fn read_exact_at(&self, offset: u64, dst: &mut [u8]) -> io::Result<()> {
+        self.inner.read_exact_at(offset, dst)
+    }
+}
+
 /// Stable open regular-file handle; positional reads never modify its cursor.
 #[derive(Debug)]
 pub struct FileSource {

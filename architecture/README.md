@@ -10,7 +10,7 @@ error propagation, with Mermaid diagrams for the mechanics it describes.
 | Specification | Summary |
 | --- | --- |
 | [ci.md](ci.md) | Automatic tests, lints and checks; manually dispatched coverage, Miri, sanitizer, fuzz campaigns and benchmarks. |
-| [parallel-compression.md](parallel-compression.md) | Caller-scheduled independent segments, q0–q11 aligned fragments, completion lifecycle, bounded staging, writer output and release gates. |
+| [parallel-compression.md](parallel-compression.md) | Caller-scheduled independent segments, q0–q11 aligned fragments, completion lifecycle, bounded staging, generic seekable/positional sources, writer output and release gates. |
 | [compressor.md](compressor.md) | Compressor subsystem: the five layers of the public API, where each configuration value is validated, how it lowers into the encoders' own parameters, the stateful compressor and its retained workspace, the one-shot paths, the session state machine, the transactional writer and the cursor-based reader, the split error model, SIMD dispatch, verification topology, and current implementation gaps. |
 | [encoder-workspace.md](encoder-workspace.md) | Retained allocation ownership, sparse matcher promotion, pinned backend kernels, session completion and bounded writer backpressure, with Track A verification evidence and open gates. |
 | [universal-encoding.md](universal-encoding.md) | Universal cross-API byte identity, equivalent stream settings, deliberate native C differences, exact slice capacity and canonical differential oracles. |
@@ -71,6 +71,7 @@ graph TD
 
     lib --> parallel
     parallel --> parallelcore["parallel::core<br/>(planner, task slots, artifacts, assembly)"]
+    parallelcore --> sourcecore["parallel::core::source<br/>(type erasure, locked seek/read)"]
     parallelcore --> fragment["compressor::core::fragment<br/>(aligned independent parts)"]
     fragment --> driver
     lib --> cfg

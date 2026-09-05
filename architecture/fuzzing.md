@@ -299,3 +299,7 @@ flowchart LR
     Reverse --> Equal
     Equal --> C[C decoder: one stream round trip]
 ```
+
+The parallel target also compares borrowed slice input with an owned
+`SeekSource<Cursor<Vec<u8>>>` through the generic `prepare_source` API, exercising
+absolute offsets and length checks under the same decode/determinism oracle.

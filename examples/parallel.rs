@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         EncoderConfig::default().with_quality(Quality::Q5),
         ParallelConfig::default(),
     )?;
-    let mut batch = compressor.prepare_file(
+    let mut batch = compressor.prepare_source(
         FileSource::open(&arguments[1])?,
         BatchConfig::directory(TaskCount::available()?, scratch),
     )?;

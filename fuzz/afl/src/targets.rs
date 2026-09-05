@@ -1070,7 +1070,14 @@ pub fn parallel(ctx: &Context, data: &[u8]) {
             ParallelCompressor::with_backend(encoder, parallel.clone(), backend).unwrap();
         for count in [1, 3] {
             let config = BatchConfig::memory(TaskCount::try_from(count).unwrap(), 1 << 20);
-            let mut batch = compressor.prepare_slice(&input, config).unwrap();
+            let mut batch = if count == 1 {
+                compressor.prepare_slice(&input, config).unwrap()
+            } else {
+                let source = mbrotli::compressor::parallel::SeekSource::from(std::io::Cursor::new(
+                    input.clone(),
+                ));
+                compressor.prepare_source(source, config).unwrap()
+            };
             for task in batch.take_tasks().unwrap().into_iter().rev() {
                 task.run();
             }

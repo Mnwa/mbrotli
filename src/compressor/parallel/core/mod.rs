@@ -1,6 +1,7 @@
 //! Checked planning, exclusive workers, completion slots, and ordered assembly.
 mod artifact;
 mod batch;
+pub(in crate::compressor::parallel) mod source;
 mod task;
 use super::*;
 use crate::compressor::core::fragment::FragmentEncoder;

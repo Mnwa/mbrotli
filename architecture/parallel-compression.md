@@ -11,7 +11,8 @@ RFC 9841 framing/dictionary and global-context extensions are not implemented.
 
 `compressor::parallel` exposes `ParallelCompressor`, `ParallelConfig`,
 `BatchConfig`, validated `SegmentSize` and `TaskCount`, memory/directory staging,
-source wrappers, task/batch types, polling, statistics, retention, and errors.
+source wrappers (including `SeekSource<R>`), task/batch types, polling, statistics,
+retention, and errors.
 The previously private `compressor` module is now public; its `core` remains
 private. Existing crate-root serial exports remain available.
 
@@ -28,7 +29,7 @@ graph TD
     Public[compressor::parallel public wrappers] --> Planner[parallel::core::Compressor and Plan]
     Public --> Batch[parallel::core::batch]
     Public --> Task[parallel::core::task]
-    Public --> Source[RandomAccessSource / FileSource / ArcBytesSource]
+    Public --> Source[RandomAccessSource / SeekSource / FileSource / ArcBytesSource]
     Planner --> Reservoir[exclusive idle Workers]
     Task --> Worker[owned Worker: fragment codec, serial codec, input buffer]
     Worker --> Fragment[compressor::core::fragment]
@@ -80,6 +81,57 @@ for q0/q1, 64 MiB + 128 times segment size for q2–q4, and 256 MiB + 256 times
 segment size above q4. These ceilings are not measured RSS. File staging keeps
 payload RAM proportional to active workers and segment size; descriptor memory
 is proportional to segment count and included in the aggregate ceiling.
+
+## Generic source entry point and seekable readers
+
+`prepare_source<S, T>` accepts `S: RandomAccessSource + ?Sized` and
+`T: Into<Arc<S>>`. Owned sources, shared concrete sources, custom conversions, and
+`Arc<dyn RandomAccessSource>` use this single entry point. `prepare_file` has
+been removed; `FileSource` is an ordinary source adapter. `Arc` and custom
+conversion arguments may need explicit source types due to `Into` ambiguity:
+`prepare_source::<FileSource, _>(shared_file, config)` or
+`prepare_source::<dyn RandomAccessSource, _>(erased_source, config)`.
+
+The conversion occurs once before planning. A private sized `SharedSource<S>`
+bridge lets both sized and unsized sources enter the existing erased core path.
+It forwards length, identity and reads. Tasks clone the outer shared handle;
+source bytes are never copied by this bridge. The bridge adds one small shared
+allocation per prepared batch, not per task or segment.
+
+`SeekSource<R>` takes ownership through `From<R>`. For `R: Read + Seek + Send +
+'static`, it implements `RandomAccessSource` without requiring `R: Sync`.
+The public wrapper delegates all locking and I/O to `parallel::core::source`.
+Each length query holds the mutex while seeking to the end. Each range read
+holds that same mutex for its absolute seek and the entire `read_exact` call.
+The reader's original cursor is ignored; all future reads seek explicitly.
+A short read or interruption is handled by `Read::read_exact`; seek/read errors
+propagate as I/O errors into existing batch metadata/read errors. A reader panic
+poisons the mutex and subsequent access returns an I/O error. Worker panic
+handling continues to discard the affected codec workspace.
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Public as prepare_source / SeekSource
+    participant Core as core::source
+    participant Reader as R: Read + Seek + Send
+    participant Task
+    Caller->>Public: source.into() to Arc<S>
+    Public->>Core: wrap shared source for type erasure
+    Core->>Reader: lock, seek End(0), unlock
+    Note over Core,Reader: planning snapshots current length
+    Task->>Core: read_exact_at(offset, segment buffer)
+    Core->>Reader: lock, seek Start(offset)
+    Core->>Reader: read_exact (retry interrupted/short reads)
+    Core-->>Task: unlock, bytes or I/O error
+    Task->>Task: compress without the reader lock
+```
+
+Seekable input reads are serialized; task compression still overlaps. No
+metadata identity can be inferred from the generic traits, so this adapter
+provides live length checks only and callers must keep bytes immutable.
+`FileSource` retains positional reads and file identity verification; it remains
+the preferred file adapter when concurrent input reads are desired.
 
 ## Fragment format and encoder-state audit
 
@@ -213,12 +265,14 @@ Host: Apple M5 Pro, aarch64 macOS; Rust 1.98.1. The workspace test profile used
 
 - `cargo fmt --all -- --check` and workspace all-target/all-feature Clippy with
   `--locked -- -D warnings` pass; rustdoc also passes with warnings denied.
-- `cargo test --workspace --all-features --locked`: 976 passing tests, including
-  162 doctests and 13 parallel integration tests.
-- Clean `cargo llvm-cov --workspace --all-features --locked --json`: 2,070/2,070
-  reported repository functions covered (100%). Every new parallel source file
-  and the private fragment adapter have 100% function coverage; this is not a
-  claim of 100% branch coverage. Report: `target/parallel-coverage-clean.json`.
+- `cargo test --workspace --all-features --locked`: 981 passing tests, including
+  163 doctests and 15 parallel integration tests.
+- The initial threaded implementation's clean full-workspace coverage reported
+  2,070/2,070 functions (100%): `target/parallel-coverage-clean.json`.
+  After the generic-source extension, a clean `--lib --test parallel` coverage
+  run reaches every changed function, including 13/13 in `core/source.rs`, 19/19
+  in public source adapters, and 34/34 in the public parallel module. Report:
+  `target/seek-source-coverage.json`. This is not a claim of 100% branch coverage.
 - The separate AFL package passes formatting, Clippy, and `cargo afl test`.
   All 49 saved q1 crash inputs replay successfully after the two minimized
   regressions. A fresh 60-second parallel campaign completed 45,486 executions,
@@ -255,6 +309,37 @@ account for most instrumented time, with match finding the largest named inner
 operation. Sampling was unavailable because `samply` was not installed; the
 profile provides instrumented function timings only. Log:
 `target/parallel-hotpath-cpu-verified.log`.
+
+### Generic-source verification
+
+The source extension adds concurrent range tests using a `Send` but non-`Sync`
+reader, short reads, interruptions, EOF, seek/read errors, panic poisoning, owned
+sources, shared handles, custom `Into<Arc<S>>` conversions, and erased sources.
+File consistency and greater-than-4-GiB tests now use `prepare_source` too.
+The public file example runs successfully through that entry point.
+
+The AFL regression suite passes with a slice-versus-seek-source oracle. Its
+fresh 60-second campaign completed 57,847 executions with zero saved crashes or
+hangs: `target/seek-source-afl-campaign.log`.
+
+An isolated follow-up run on the same host and 16 MiB text corpus compared source
+adapters using four tasks, q5, 4 MiB segments, memory staging and retained workers:
+
+```sh
+cargo bench --bench parallel --locked -- 'parallel/q5/text-16MiB' --sample-size 10 --warm-up-time 0.2 --measurement-time 0.5
+```
+
+| Source | Time | Output bytes |
+| --- | --- | --- |
+| `SeekSource<Cursor<Vec<u8>>>` | 5.189 ms | 207,239 |
+| `SeekSource<File>` | 5.725 ms | 207,239 |
+| `FileSource` (positional) | 5.317 ms | 207,239 |
+
+Files are precreated and cached; this measures end-to-end source/planning,
+compression and assembly, not cold-disk throughput. Every source result is
+validated against the slice result before timing. Source setup and corpus copies
+occur outside the timed region. The benchmark also retains the serial C/Rust
+comparisons above. Log: `target/seek-source-bench.log`.
 
 Known gaps / release gates (not claimed complete):
 

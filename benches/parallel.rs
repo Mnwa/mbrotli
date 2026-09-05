@@ -5,7 +5,8 @@
 mod support;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mbrotli::compressor::parallel::{
-    BatchConfig, ParallelCompressor, ParallelConfig, SegmentSize, TaskCount,
+    BatchConfig, FileSource, ParallelCompressor, ParallelConfig, RandomAccessSource, SeekSource,
+    SegmentSize, TaskCount,
 };
 use mbrotli::{Compressor, EncoderConfig, Quality};
 use std::hint::black_box;
@@ -38,6 +39,29 @@ fn encode(
     }
     out.clear();
     batch.finish_into(out).unwrap();
+}
+fn encode_source(
+    compressor: &mut ParallelCompressor,
+    pool: &rayon::ThreadPool,
+    source: &std::sync::Arc<dyn RandomAccessSource>,
+    input_len: usize,
+    out: &mut Vec<u8>,
+) {
+    let mut batch = compressor
+        .prepare_source::<dyn RandomAccessSource, _>(
+            std::sync::Arc::clone(source),
+            BatchConfig::memory(TaskCount::try_from(4).unwrap(), input_len * 3),
+        )
+        .unwrap();
+    let tasks = batch.take_tasks().unwrap();
+    pool.scope(|scope| {
+        for task in tasks {
+            scope.spawn(move |_| task.run());
+        }
+    });
+    out.clear();
+    batch.finish_into(out).unwrap();
+    black_box(out);
 }
 fn benchmarks(c: &mut Criterion) {
     let pool = rayon::ThreadPoolBuilder::new()
@@ -125,6 +149,32 @@ fn benchmarks(c: &mut Criterion) {
                     )
                 })
             });
+            if q == 5 && *name == "text-16MiB" {
+                use std::{
+                    io::{Cursor, Write},
+                    sync::Arc,
+                };
+                let mut file = tempfile::tempfile().unwrap();
+                file.write_all(input).unwrap();
+                let positional = FileSource::try_from(file.try_clone().unwrap()).unwrap();
+                let sources: [(&str, Arc<dyn RandomAccessSource>); 3] = [
+                    (
+                        "seek-cursor",
+                        Arc::new(SeekSource::from(Cursor::new(input.clone()))),
+                    ),
+                    ("seek-file", Arc::new(SeekSource::from(file))),
+                    ("positional-file", Arc::new(positional)),
+                ];
+                for (label, source) in sources {
+                    encode_source(&mut compressor, &pool, &source, input.len(), &mut out);
+                    assert_eq!(out, expected);
+                    group.bench_function(label, |b| {
+                        b.iter(|| {
+                            encode_source(&mut compressor, &pool, &source, input.len(), &mut out);
+                        })
+                    });
+                }
+            }
             group.finish();
         }
     }

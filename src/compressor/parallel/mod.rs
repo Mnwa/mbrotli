@@ -34,7 +34,7 @@ pub use config::{
     SegmentSize, SourceConsistency, Staging, TaskCount,
 };
 pub use error::{ParallelConfigError, ParallelEncodeError, ParallelFinishError};
-pub use source::{ArcBytesSource, FileSource, RandomAccessSource, SourceIdentity};
+pub use source::{ArcBytesSource, FileSource, RandomAccessSource, SeekSource, SourceIdentity};
 use std::{io::Write, ops::Range, sync::Arc, time::Duration};
 
 /// Input-order identifier of a fixed segment.
@@ -205,26 +205,44 @@ impl ParallelCompressor {
         core::Batch::prepare(&mut self.inner, core::Input::Slice(input), config)
             .map(|inner| ScopedParallelBatch { inner })
     }
-    /// Prepares detached tasks owning a shared random-access source handle.
+    /// Prepares detached tasks from an owned source or shared source handle.
+    /// Conversion into `Arc<S>` happens once, before task planning. Concrete
+    /// sources and `Arc<dyn RandomAccessSource>` both use this entry point.
+    /// Existing `Arc` handles and custom conversions may need explicit `S`, for
+    /// example `prepare_source::<FileSource, _>(shared_file, config)`, because
+    /// `Into<Arc<S>>` admits more than one conversion target.
+    ///
+    /// # Examples
+    /// ```
+    /// use std::io::Cursor;
+    /// use mbrotli::EncoderConfig;
+    /// use mbrotli::compressor::parallel::{
+    ///     BatchConfig, ParallelCompressor, ParallelConfig, SeekSource, TaskCount,
+    /// };
+    /// let mut compressor = ParallelCompressor::new(
+    ///     EncoderConfig::default(), ParallelConfig::default())?;
+    /// let source = SeekSource::from(Cursor::new(b"generic input".to_vec()));
+    /// let mut batch = compressor.prepare_source(source,
+    ///     BatchConfig::memory(TaskCount::ONE, 4096))?;
+    /// batch.run_inline()?;
+    /// let (output, _) = batch.finish_to_writer(Vec::new())?;
+    /// assert!(!output.is_empty());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     /// # Errors
     /// Returns source metadata, planning, allocation, or staging errors.
-    pub fn prepare_source(
+    pub fn prepare_source<S, T>(
         &mut self,
-        source: Arc<dyn RandomAccessSource>,
+        source: T,
         config: BatchConfig,
-    ) -> Result<OwnedParallelBatch<'_>, ParallelEncodeError> {
+    ) -> Result<OwnedParallelBatch<'_>, ParallelEncodeError>
+    where
+        S: RandomAccessSource + ?Sized,
+        T: Into<Arc<S>>,
+    {
+        let source = Arc::new(core::source::SharedSource(source.into()));
         core::Batch::prepare(&mut self.inner, core::Input::Source(source), config)
             .map(|inner| ScopedParallelBatch { inner })
-    }
-    /// Prepares detached tasks from a stable regular-file handle.
-    /// # Errors
-    /// Returns source metadata, planning, allocation, or staging errors.
-    pub fn prepare_file(
-        &mut self,
-        source: FileSource,
-        config: BatchConfig,
-    ) -> Result<OwnedParallelBatch<'_>, ParallelEncodeError> {
-        self.prepare_source(Arc::new(source), config)
     }
 }
 

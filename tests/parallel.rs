@@ -34,6 +34,114 @@ fn data() -> Vec<u8> {
     v.resize(3 * (64 << 10) + 1, 0);
     v
 }
+
+#[test]
+fn generic_sources_accept_owned_shared_custom_conversion_and_erased_handles() {
+    use std::io::Cursor;
+    struct IntoSource(Vec<u8>);
+    impl From<IntoSource> for Arc<SeekSource<Cursor<Vec<u8>>>> {
+        fn from(value: IntoSource) -> Self {
+            Arc::new(SeekSource::from(Cursor::new(value.0)))
+        }
+    }
+    let input = data();
+    let mut c = compressor(5);
+    let expected = inline(&mut c, &input, 1);
+    let source = SeekSource::from(Cursor::new(input.clone()));
+    assert_eq!(source.len().unwrap(), input.len() as u64);
+    assert!(source.identity().is_none());
+    let mut b = c.prepare_source(source, batch(4)).unwrap();
+    b.run_inline().unwrap();
+    assert_eq!(b.finish_to_writer(Vec::new()).unwrap().0, expected);
+
+    let mut b = c
+        .prepare_source::<SeekSource<Cursor<Vec<u8>>>, _>(IntoSource(input.clone()), batch(4))
+        .unwrap();
+    b.run_inline().unwrap();
+    assert_eq!(b.finish_to_writer(Vec::new()).unwrap().0, expected);
+
+    let source = Arc::new(SeekSource::from(Cursor::new(input)));
+    let mut b = c
+        .prepare_source::<SeekSource<Cursor<Vec<u8>>>, _>(Arc::clone(&source), batch(4))
+        .unwrap();
+    let handles: Vec<_> = b
+        .take_tasks()
+        .unwrap()
+        .into_iter()
+        .rev()
+        .map(|task| std::thread::spawn(move || task.run()))
+        .collect();
+    assert_eq!(b.finish_to_writer(Vec::new()).unwrap().0, expected);
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    assert_eq!(Arc::strong_count(&source), 1);
+
+    let erased: Arc<dyn RandomAccessSource> = source;
+    let mut b = c
+        .prepare_source::<dyn RandomAccessSource, _>(erased, batch(4))
+        .unwrap();
+    b.run_inline().unwrap();
+    assert_eq!(b.finish_to_writer(Vec::new()).unwrap().0, expected);
+    let empty = SeekSource::from(Cursor::new(Vec::<u8>::new()));
+    assert!(empty.is_empty().unwrap());
+    empty.read_exact_at(0, &mut []).unwrap();
+    let mut b = c.prepare_source(empty, batch(2)).unwrap();
+    b.run_inline().unwrap();
+    assert_eq!(
+        support::c_decompress(&b.finish_to_writer(Vec::new()).unwrap().0, 0).unwrap(),
+        b""
+    );
+}
+
+#[test]
+fn seek_source_keeps_seek_and_short_reads_together_for_non_sync_readers() {
+    use std::{
+        cell::Cell,
+        io::{Cursor, Read, Seek, SeekFrom},
+    };
+    struct Reader {
+        cursor: Cursor<Vec<u8>>,
+        reads: Cell<usize>,
+    }
+    impl Read for Reader {
+        fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
+            self.reads.set(self.reads.get() + 1);
+            std::thread::yield_now();
+            let len = dst.len().min(3);
+            self.cursor.read(&mut dst[..len])
+        }
+    }
+    impl Seek for Reader {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            let result = self.cursor.seek(pos);
+            std::thread::yield_now();
+            result
+        }
+    }
+    let bytes: Vec<u8> = (0..4096).map(|n| (n % 251) as u8).collect();
+    let mut cursor = Cursor::new(bytes.clone());
+    cursor.set_position(13);
+    let source = SeekSource::from(Reader {
+        cursor,
+        reads: Cell::new(0),
+    });
+    std::thread::scope(|scope| {
+        for task in 0..8 {
+            let source = &source;
+            let bytes = &bytes;
+            scope.spawn(move || {
+                for i in 0..64 {
+                    let offset = (task * 61 + i * 37) % (bytes.len() - 43);
+                    assert_eq!(source.len().unwrap(), bytes.len() as u64);
+                    let mut output = [0; 43];
+                    source.read_exact_at(offset as u64, &mut output).unwrap();
+                    assert_eq!(output, bytes[offset..offset + 43]);
+                }
+            });
+        }
+    });
+}
 fn inline(c: &mut ParallelCompressor, input: &[u8], n: usize) -> Vec<u8> {
     let mut b = c.prepare_slice(input, batch(n)).unwrap();
     b.run_inline().unwrap();
@@ -99,7 +207,9 @@ fn detached_and_single_thread_rayon_schedulers_need_no_coordinator_drain() {
             .num_threads(1)
             .build()
             .unwrap();
-        let mut b = c.prepare_source(source.clone(), batch(3)).unwrap();
+        let mut b = c
+            .prepare_source::<ArcBytesSource, _>(source.clone(), batch(3))
+            .unwrap();
         let jobs = b.take_tasks().unwrap();
         for job in jobs.into_iter().rev() {
             if rayon {
@@ -278,7 +388,7 @@ fn files_directory_spools_and_file_writer_match_memory_and_cleanup() {
     assert!(FileSource::open(dir.path()).is_err());
     let file = FileSource::try_from(std::fs::File::open(&source).unwrap()).unwrap();
     let mut b = c
-        .prepare_file(
+        .prepare_source(
             file,
             BatchConfig::directory(TaskCount::try_from(3).unwrap(), dir.path()),
         )
@@ -295,7 +405,7 @@ fn files_directory_spools_and_file_writer_match_memory_and_cleanup() {
     assert_eq!(std::fs::read(&dest).unwrap(), expected);
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
     let b = c
-        .prepare_file(
+        .prepare_source(
             FileSource::open(&source).unwrap(),
             BatchConfig::directory(TaskCount::ONE, dir.path()),
         )
@@ -310,7 +420,7 @@ fn files_directory_spools_and_file_writer_match_memory_and_cleanup() {
         .is_err()
     );
     let mut b = c
-        .prepare_file(FileSource::open(&source).unwrap(), batch(1))
+        .prepare_source(FileSource::open(&source).unwrap(), batch(1))
         .unwrap();
     b.run_inline().unwrap();
     std::fs::write(&source, vec![1; input.len()]).unwrap();
@@ -409,7 +519,9 @@ fn source_errors_panics_and_length_changes_never_mutate_destination() {
             panic,
             fail: !panic,
         });
-        let mut b = c.prepare_source(source, batch(2)).unwrap();
+        let mut b = c
+            .prepare_source::<FaultSource, _>(source, batch(2))
+            .unwrap();
         for t in b.take_tasks().unwrap() {
             t.run();
         }
@@ -432,7 +544,9 @@ fn source_errors_panics_and_length_changes_never_mutate_destination() {
             panic: false,
             fail: false,
         });
-        let mut b = c.prepare_source(source.clone(), batch(2)).unwrap();
+        let mut b = c
+            .prepare_source::<FaultSource, _>(source.clone(), batch(2))
+            .unwrap();
         b.run_inline().unwrap();
         source.length.store(1, Ordering::Relaxed);
         let result = b.finish_into(&mut Vec::new());
@@ -507,7 +621,7 @@ fn directory_staging_processes_more_than_four_gib_with_bounded_reads() {
     )
     .unwrap();
     let mut b = c
-        .prepare_source(
+        .prepare_source::<ZeroSource, _>(
             source.clone(),
             BatchConfig::directory(TaskCount::try_from(4).unwrap(), dir.path()),
         )

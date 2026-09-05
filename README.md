@@ -278,6 +278,12 @@ let mut output = Vec::new();
 batch.finish_into(&mut output)?;
 ```
 
+Use `prepare_source(FileSource::open(path)?, config)` for positional file reads,
+or `prepare_source(SeekSource::from(reader), config)` for an owned
+`Read + Seek + Send` reader. `SeekSource` serializes reads while compression
+runs concurrently. Existing `Arc` handles may need explicit source types:
+`prepare_source::<FileSource, _>(shared_file, config)`.
+
 Files use `batch.finish_to_writer(file)`; the caller controls creation, flushing,
 and publication. For a complete example, run
 `cargo run --release --example parallel -- INPUT OUTPUT`.
