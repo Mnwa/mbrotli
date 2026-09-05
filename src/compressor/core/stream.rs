@@ -108,6 +108,14 @@ impl Delivery<'_, '_> {
                 return Ok(());
             }
         }
+        if operation != Operation::Flush
+            && let Encoder::Fast(fast) = encoder
+            && let Destination::Append(output) = &mut self.output.destination
+        {
+            self.output.produced +=
+                fast.encode_block_append(input, operation == Operation::Finish, output)?;
+            return Ok(());
+        }
         let bytes = match operation {
             Operation::Flush => encoder.flush_block(input, attached)?,
             _ => encoder.encode_block_with(input, operation == Operation::Finish, attached)?,

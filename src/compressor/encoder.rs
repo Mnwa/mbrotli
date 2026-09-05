@@ -145,6 +145,7 @@ impl Compressor {
     /// ));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
+    #[inline]
     pub fn new(config: EncoderConfig) -> Result<Self, ConfigError> {
         Self::builder(config).build()
     }
@@ -310,6 +311,7 @@ impl Compressor {
     /// assert_eq!(compressed.len(), 41);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
+    #[inline]
     pub fn compress(&mut self, src: &[u8]) -> Result<Vec<u8>, EncodeError> {
         let mut output = Vec::new();
         self.compress_into(src, &mut output)?;
@@ -348,6 +350,7 @@ impl Compressor {
     /// assert_eq!(&output[..start], b"a prefix the caller already had");
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
+    #[inline]
     pub fn compress_into(
         &mut self,
         src: &[u8],
@@ -386,6 +389,7 @@ impl Compressor {
     /// ));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
+    #[inline]
     pub fn compress_to_slice(&mut self, src: &[u8], dst: &mut [u8]) -> Result<usize, EncodeError> {
         self.compress_attached_to_slice(None, src, dst)
     }
@@ -921,6 +925,7 @@ impl CompressorBuilder {
     /// assert_eq!(encoder.retained_bytes(), 0);
     /// # Ok::<(), mbrotli::ConfigError>(())
     /// ```
+    #[inline]
     pub fn build(self) -> Result<Compressor, ConfigError> {
         self.config.validate()?;
         Ok(Compressor {

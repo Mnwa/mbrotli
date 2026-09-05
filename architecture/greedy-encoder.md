@@ -6,9 +6,10 @@ stands; the [Known gaps](#known-gaps) section lists what is not implemented.
 The reference this port follows is `google/brotli` v1.2.0, commit `028fb5a`.
 On the platforms this crate targets that build defines `BROTLI_MAX_SIMD_QUALITY`
 and therefore selects the *tagged* `H58` and `H68` match finders at qualities
-five and six. This port builds only the untagged `H5` and `H6`, because the two
-pairs are byte-for-byte equivalent — see [§2.2](#22-the-tagged-matchers) — and
-the differential tests check that equivalence against the real library.
+five and six. This port keeps `H5`/`H6` logical match order, with tag filtering
+on SIMD backends and an unfiltered scalar oracle. These paths are byte-for-byte
+equivalent — see [§2.2](#22-the-tagged-matchers) — and differential tests check
+that equivalence against the real library.
 
 ## 1. Core mechanics
 
@@ -167,7 +168,7 @@ matchers take `block_bits = quality - 1`, and the chain matchers take
 | `H6` | 8 | 15 | `1 << (quality - 1)` | yes |
 
 Each plan is a distinct Rust type — `QuickMatcher<BUCKET_BITS, SWEEP_BITS,
-HASH_LEN, USE_DICTIONARY>`, `BucketMatcher<HASH64, BUCKET_BITS>` or
+HASH_LEN, USE_DICTIONARY, COMPACT>`, `BucketMatcher<HASH64, BUCKET_BITS>` or
 `ChainMatcher<NUM_BANKS, BANK_BITS>` — so the hash width and the table size are
 compile-time constants inside the probe loop. The `MatchFinder` enum that
 selects between them is matched once per input block, never per candidate.
@@ -189,8 +190,9 @@ The reference builds `H58` and `H68` in place of `H5` and `H6` whenever
 Those variants store a one-byte tag beside every position and iterate only the
 slots whose tag matches. The bucket matcher keeps these tags in compact
 parallel storage for q5/q6, matching the pinned C build's tag quality ceiling.
-`tags::Candidates` loads in-bounds groups of sixteen tags with
-safe `fearless_simd` vectors and visits matching initialized slots newest first.
+`tags::Candidates` compares a complete 16- or 32-slot shallow bucket once with
+safe `fearless_simd` vectors, rotates its mask into newest-first order, and masks
+unwritten slots. Deeper test configurations retain 16-tag group traversal.
 The scalar backend deliberately retains the unfiltered scan as an independent
 oracle. Filtering preserves the accepted-match sequence:
 
@@ -210,15 +212,29 @@ that really is using the tagged matchers.
 
 ### 2.3. Cold storage and reset
 
+Quick H2/H3/H4 matchers with size hints of 1–2048 bytes select compact logical-slot
+storage before the scan. The packed open-addressed map returns zero for absent
+keys, and stores exactly the same slot values as the full table. It grows when a
+hint underestimates input. The full-table specialization stays unchanged for other
+hints. See [encoder workspace](encoder-workspace.md#cold-matcher-allocation-and-simd)
+for the map's occupancy, growth and reset invariants.
+
 Bucket counters and encoded offsets are allocated first. Position/tag payloads
 are materialized one bucket at a time in retained compact vectors. Deep q7–q9
 buckets start with four positions; requesting a fifth promotes once to the full
 reference depth, preserving slot numbers and recent positions. The old four-slot
 starter stays allocated, adding at most four positions per promoted bucket.
-H42 similarly
-materializes one 512-slot chain bank at a time. Encoded offsets are stable across
+At q5/q6, activating a new bucket after half the directory is occupied converts
+the table into direct arrays: existing positions and tags move to `key * depth`,
+and the offset vector is cleared while retaining its capacity. Future lookups
+use that empty directory as the dense-layout marker. This avoids offset loads on
+inputs that occupy most buckets while retaining compact storage for sparse ones.
+H42 similarly materializes one 512-slot chain bank at a time. Encoded offsets are stable across
 reset; counters and chain addresses alone determine which entries can be read.
 No stale payload is valid merely because its allocation survived.
+Preparation skips clearing when the encoder proves all entries are already empty
+from construction or its previous reset sweep. It still computes the partial-sweep
+classification needed by the next reset. `matcher_dirty` carries that invariant.
 
 ```mermaid
 flowchart LR
@@ -226,7 +242,10 @@ flowchart LR
     directory -->|first touch| activate[append initialized bucket or bank]
     directory -->|already allocated| payload[retained compact payload]
     activate --> payload
-    payload --> tags[16-byte tag mask, initialized slots only]
+    activate --> occupied{Half of shallow buckets occupied?}
+    occupied -->|yes| dense[Copy slots and tags to direct arrays]
+    dense --> tags[Rotate 16- or 32-byte tag mask, mask initialized slots]
+    payload --> tags
     tags --> candidates[newest-to-oldest candidates]
     reset[reset stream] --> validity[clear counters / chain addresses]
     validity -.->|payload remains allocated but invalid| payload
@@ -473,12 +492,29 @@ graph LR
     head --- window --- tail --- slack
 ```
 
-- A short first write allocates only the bytes it holds, because neither the
-  tail nor the rest of the window can be read yet.
-- The first full allocation zeroes the last two window bytes and leaves the
-  sentinel `241` at the first tail byte, until a lap writes over it.
+- Until the first wrap approaches, storage grows with the written prefix and
+  seven lookahead bytes. The configured logical window mask never changes.
+- A write ending within eight bytes of the window end materializes the full
+  layout before copying input. The last two window bytes are initialized to
+  zero, and deferred tail copies are replayed from the existing prefix.
+- The reference skips tail copying for a short first write. `tail_start` records
+  that skipped range, preserving its first-byte sentinel `241` until a later
+  write overwrites it.
 - After every write the seven bytes past the data are cleared, so hashing never
-  depends on memory the encoder did not write.
+  depends on memory the encoder did not write. Reset retains allocation capacity
+  and clears the prefix position, allocation state and skipped-tail boundary.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Empty
+    Empty --> Prefix: write ending before window end minus eight
+    Prefix --> Prefix: grow initialized prefix and lookahead
+    Empty --> Full: write reaches window end region
+    Prefix --> Full: initialize tail and replay deferred copies
+    Full --> Full: circular writes with immediate tail mirroring
+    Prefix --> Empty: reset, retain capacity
+    Full --> Empty: reset, retain capacity
+```
 
 Absolute positions are wrapped into 32 bits by `wrap_position`, which keeps the
 first three gibibytes contiguous and then alternates between two gibibyte-wide
@@ -491,8 +527,9 @@ graph TD
     A["Compressor::new()"] -->|"Level::try_detect()"| B["Level stored in the Compressor"]
     B -->|"new encoder"| C["core::dispatch::select(level)"]
     C --> D["retained Selected&lt;S&gt; kernel"]
-    D --> E["create_backward_references::&lt;S, M&gt;"]
-    E --> F["Matcher::find_longest_match(simd, ...)"]
+    D --> E["select concrete matcher once per block"]
+    E --> V["create_backward_references::&lt;S, M&gt;<br/>S::vectorize over specialized search body"]
+    V --> F["Matcher::find_longest_match(simd, ...)"]
     F --> G["find_match_length(simd, ...)"]
 
     classDef once fill:#d9ead3,stroke:#38761d;
@@ -503,6 +540,21 @@ The backend is selected once when the retained encoder is created. A virtual
 call at the outer `core::dispatch` boundary enters `S::vectorize`; the
 `MatchFinder` enum is matched once per scan, and the concrete token reaches
 both tag filtering and exact match-length comparison without inner dispatch.
+
+`create_backward_references` enters `S::vectorize` around its specialized search
+body. Its closure is always inlined into the feature-enabled entry, letting the
+generic `fearless_simd` operations become native instructions. Passing a token
+to an out-of-line function alone does not enable its target features: a baseline
+compilation instead calls feature-enabled helpers for each vector comparison
+and mask operation. Entering the context after matcher specialization also keeps
+each search body separate, rather than forcing every matcher into one large
+outer dispatch function.
+
+The nested feature entry uses the existing token; it performs no detection or
+virtual dispatch. Both entries are outside the search loop. `S::vectorize` owns
+the feature proof; no handwritten `target_feature` or unsafe block is needed.
+Scalar and SIMD paths keep the same matcher state, candidate order, score
+arithmetic, and error propagation. The change adds no allocation or public API.
 
 Everything else — bucket stores, distance-cache transitions, the greedy and
 lazy decisions, Huffman construction, bit writing — is scalar, because the

@@ -45,6 +45,8 @@ pub(crate) struct RingBuffer {
     tail_size: usize,
     total_size: usize,
     cur_size: usize,
+    // The reference omits tail mirroring for a short first write.
+    tail_start: usize,
     pos: u32,
     data: Vec<u8>,
 }
@@ -63,6 +65,7 @@ impl RingBuffer {
             tail_size,
             total_size: size + tail_size,
             cur_size: 0,
+            tail_start: 0,
             pos: 0,
             data: Vec::new(),
         }
@@ -105,10 +108,12 @@ impl RingBuffer {
     /// saves.
     pub(crate) fn reset(&mut self) {
         self.cur_size = 0;
+        self.tail_start = 0;
         self.pos = 0;
     }
 
     /// Grows the backing storage to `buflen` bytes (`RingBufferInitBuffer`).
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn init_buffer(&mut self, buflen: usize) {
         // Previously initialized capacity remains usable after reset. History
         // outside the written range is never a valid match; write establishes
@@ -155,22 +160,43 @@ impl RingBuffer {
     }
 
     /// Appends `bytes` to the window (`RingBufferWrite`).
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) fn write(&mut self, bytes: &[u8]) {
-        if self.pos == 0 && bytes.len() < self.tail_size {
-            // First write of a short stream: the tail and the rest of the
-            // window are never read, so only the bytes themselves are kept.
-            self.pos = bytes.len() as u32;
-            self.init_buffer(bytes.len());
-            if let Some(target) = self.data.get_mut(HEAD_ROOM..HEAD_ROOM + bytes.len()) {
+        let end = self.pos as usize + bytes.len();
+        if self.cur_size < self.total_size && end < self.size.saturating_sub(8) {
+            // Before the first wrap, only the written prefix and its seven
+            // lookahead bytes can be read. Keep the logical mask unchanged.
+            // Materialize the full layout before reaching the last two bytes
+            // or reading into the tail, whose sentinel must remain exact.
+            if self.pos == 0 {
+                self.tail_start = if bytes.len() < self.tail_size {
+                    bytes.len()
+                } else {
+                    0
+                };
+            }
+            self.init_buffer(end);
+            let start = HEAD_ROOM + self.pos as usize;
+            if let Some(target) = self.data.get_mut(start..HEAD_ROOM + end) {
                 target.copy_from_slice(bytes);
             }
+            self.pos = end as u32;
             return;
         }
         if self.cur_size < self.total_size {
+            let mirrored_end = (self.pos as usize).min(self.tail_size);
             self.init_buffer(self.total_size);
             self.set(self.size - 2, 0);
             self.set(self.size - 1, 0);
             self.set(self.size, TAIL_SENTINEL);
+            // Replay the tail copies deferred while storing only a prefix.
+            // A short first write left this range untouched in the reference.
+            if self.tail_start < mirrored_end {
+                self.data.copy_within(
+                    HEAD_ROOM + self.tail_start..HEAD_ROOM + mirrored_end,
+                    HEAD_ROOM + self.size + self.tail_start,
+                );
+            }
         }
 
         let masked_pos = (self.pos as usize) & self.mask;
@@ -265,14 +291,16 @@ mod tests {
     }
 
     #[test]
-    fn a_long_first_write_allocates_the_whole_window_and_the_tail() {
+    fn writes_before_the_first_wrap_only_allocate_the_written_prefix() {
         let mut rb = ring(16, 16);
         let payload = vec![7u8; 1 << 16];
         rb.write(&payload);
-        assert_eq!(rb.cur_size, rb.total_size);
+        assert_eq!(rb.cur_size, payload.len());
         assert_eq!(rb.buffer()[0], 7);
-        // The tail mirrors the beginning of the window.
-        assert_eq!(rb.buffer()[rb.size], 7);
+        rb.write(&[8; 16]);
+        assert_eq!(rb.cur_size, payload.len() + 16);
+        assert_eq!(&rb.buffer()[payload.len()..payload.len() + 16], &[8; 16]);
+        assert_eq!(rb.mask(), rb.size - 1);
     }
 
     #[test]
@@ -281,8 +309,34 @@ mod tests {
         // A write that starts past the tail leaves the sentinel in place.
         let mut payload = vec![1u8; 1 << 16];
         payload.truncate(1 << 16);
-        rb.write(&vec![2u8; 1 << 16]);
+        rb.write(&vec![2u8; rb.size]);
         assert_eq!(rb.buffer()[rb.size], 2);
+    }
+
+    #[test]
+    fn materializing_the_tail_preserves_previous_writes_and_the_short_write_sentinel() {
+        for first in [3, 16] {
+            let mut rb = RingBuffer::new(6, 4);
+            rb.write(&vec![2; first]);
+            rb.write(&vec![3; 52 - first]);
+            rb.write(&[4; 12]);
+            assert_eq!(&rb.buffer()[..first], vec![2; first]);
+            assert_eq!(&rb.buffer()[52..64], &[4; 12]);
+            assert_eq!(&rb.data[..2], &[4; 2]);
+            assert_eq!(rb.buffer()[64], if first < 16 { TAIL_SENTINEL } else { 2 });
+            assert_eq!(
+                &rb.buffer()[64 + first.min(16)..80],
+                &rb.buffer()[first.min(16)..16]
+            );
+            rb.write(&[9; 8]);
+            assert_eq!(&rb.buffer()[..8], &[9; 8]);
+            assert_eq!(&rb.buffer()[64..72], &[9; 8]);
+            rb.reset();
+            rb.write(&[5; 16]);
+            rb.clear_margin();
+            assert_eq!(&rb.buffer()[..16], &[5; 16]);
+            assert_eq!(&rb.buffer()[16..23], &[0; 7]);
+        }
     }
 
     #[test]

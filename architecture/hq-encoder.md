@@ -294,12 +294,22 @@ pending meta-block; data that does not look like text is modelled as signed
 integers instead. The chosen mode reaches both the histogram builder and the bit
 writer, which stores its two-bit code once per literal block type.
 
+Copy-length pricing uses the shared compile-time class table for lengths 10
+through 2117. Short lengths retain direct subtraction and larger lengths use
+class 23. This preserves the reference classes and floating-point addition order
+in the Zopfli cost loop.
+
 ## 9. SIMD dispatch
 
 `core::dispatch::select` resolves a token once when `HqEncoder` is constructed.
 The retained `Selected<S>` kernel handles stitching and Zopfli reference search
 through feature-enabled `S::vectorize` calls. Each inner search is monomorphized
-on that concrete token; no block reselects the backend.
+on that concrete token; no block reselects the backend. `update_nodes` and
+`BinaryTreeMatcher::find_all_matches` also enter their specialized feature
+contexts through always-inlined closures, allowing comparisons to inline within
+these separately compiled functions. The tree traversal is always inlined into
+`find_all_matches` or the feature-enabled `store` body. Copy extension uses the shared retained
+`Kernels::extend` entry described in [encoder workspace](encoder-workspace.md).
 
 ```mermaid
 graph LR
@@ -324,6 +334,23 @@ with every other quality. Everything that makes a decision — the tree traversa
 the cost comparisons, the clustering — is scalar, because the reference's tie
 behaviour depends on evaluation order that a vector reduction would not preserve.
 `every_backend_produces_the_same_stream` checks the consequence directly.
+
+Copy-length codes below 2118 use a compile-time table derived from the format's
+copy-length bases. Lengths below ten retain their direct subtraction, and longer
+lengths retain the final unbounded code. This removes logarithms from repeated
+Zopfli length pricing without changing the order of floating-point cost sums.
+
+```mermaid
+flowchart LR
+    Length[Candidate copy length] --> Small{Below ten?}
+    Small -->|yes| Direct[Length minus two]
+    Small -->|no| Bounded{Below 2118?}
+    Bounded -->|yes| Table[Compile-time copy-code table]
+    Bounded -->|no| Final[Code 23]
+    Direct --> Price[Existing command and distance pricing]
+    Table --> Price
+    Final --> Price
+```
 
 ## 10. Verification
 

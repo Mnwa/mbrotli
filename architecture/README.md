@@ -9,12 +9,13 @@ and known gaps. For usage examples, start with the [user guide](../docs/README.m
 | Specification | Scope |
 | --- | --- |
 | [Compressor](compressor.md) | Configuration, serial APIs, sessions, I/O adapters, and errors. |
-| [Encoder workspace](encoder-workspace.md) | Retained allocations, reset, SIMD kernels, and writer backpressure. |
-| [Serial output identity](universal-encoding.md) | Equivalent stream settings, shared scheduling, and C compatibility. |
+| [Encoder workspace](encoder-workspace.md) | Retained allocations, incremental ring storage, copy-extension SIMD kernels, reset, and writer backpressure. |
+| [Bit output](bit-output.md) | Fixed and growing initialized storage, direct fast appends, bit operations, and overflow propagation. |
+| [Serial output identity](universal-encoding.md) | Equivalent stream settings, shared scheduling, allocation-free empty finalization, and C compatibility. |
 | [Parallel compression](parallel-compression.md) | Independent segments, caller-run tasks, sources, staging, and assembly. |
-| [Fast encoder](fast-encoder.md) | Quality 0–1 fragment encoding, commands, entropy codes, and SIMD scans. |
-| [Greedy encoder](greedy-encoder.md) | Quality 2–9 matchers, command generation, and meta-block construction. |
-| [High-quality encoder](hq-encoder.md) | Quality 10–11 binary-tree search, dynamic programming, and clustering. |
+| [Fast encoder](fast-encoder.md) | Quality 0–1 fragment encoding, direct appends, entropy codes, and specialized SIMD scans. |
+| [Greedy encoder](greedy-encoder.md) | Quality 2–9 matchers, specialized SIMD feature contexts, command generation, and meta-block construction. |
+| [High-quality encoder](hq-encoder.md) | Quality 10–11 binary-tree search, specialized SIMD contexts, dynamic programming, and clustering. |
 | [Shared Brotli](shared-brotli.md) | Large Window headers, retained history, and prepared prefix dictionaries. |
 | [Serialized dictionaries](serialized-dictionary.md) | Experimental parsing, serialization, transforms, and resource limits. |
 | [Custom encoding and continuations](rfc9841-encoding.md) | Experimental static indexes, context combinations, and stream offsets. |

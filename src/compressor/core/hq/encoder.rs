@@ -20,7 +20,7 @@ use super::zopfli::{ZopfliState, ZopfliWorkspace};
 use crate::compressor::core::rfc9841::context::SharedContextInner;
 use crate::compressor::core::shared::bits::{BYTE_PADDING_SLACK, BitWriter, inject_byte_padding};
 use crate::compressor::core::shared::bitstream::{MetaBlockWriter, store_uncompressed_meta_block};
-use crate::compressor::core::shared::command::{Command, extend_last_command};
+use crate::compressor::core::shared::command::{Command, CommandExtension};
 use crate::compressor::core::shared::constants::{OUTPUT_RESERVE_CONST, OUTPUT_SLACK};
 use crate::compressor::core::shared::distance::DistanceParams;
 use crate::compressor::core::shared::format::ContextMode;
@@ -441,6 +441,7 @@ impl HqEncoder {
         // this one; growing that command is cheaper than starting a new one.
         if !self.commands.is_empty() && self.references.last_insert_len == 0 {
             let Self {
+                kernels,
                 params,
                 ringbuffer,
                 references,
@@ -449,17 +450,19 @@ impl HqEncoder {
                 ..
             } = self;
             if let Some(command) = commands.last_mut() {
-                extend_last_command(
+                kernels.extend(CommandExtension {
                     command,
-                    params.lgwin,
-                    &params.dist,
-                    references.dist_cache[0],
-                    ringbuffer.buffer(),
-                    ringbuffer.mask(),
-                    *last_processed_pos,
+                    lgwin: params.lgwin,
+                    dist: &params.dist,
+                    last_distance: references.dist_cache[0],
+                    window: Window {
+                        data: ringbuffer.buffer(),
+                        mask: ringbuffer.mask(),
+                    },
+                    last_processed_pos: *last_processed_pos,
                     attached,
-                    &mut span,
-                );
+                    span: &mut span,
+                });
             }
         }
 

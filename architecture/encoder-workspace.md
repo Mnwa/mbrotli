@@ -66,8 +66,10 @@ flowchart TD
 
 One-shot calls need no staging or pending allocation: all input and its finality
 are known, and the output is an append destination or a non-resumable slice. Fast
-encoders write directly to slices with enough fragment reservation; otherwise
-completed bytes come from retained encoder scratch. Slice overflow returns a
+encoders write directly to slices with enough fragment reservation and into
+append destinations through a statically specialized growing bit writer. Other
+output paths use retained encoder scratch. [Bit output](bit-output.md) describes
+the storage and partial-byte invariants. Slice overflow returns a
 private output-capacity error; sessions retain the suffix and report `NeedsOutput`.
 
 ```mermaid
@@ -99,12 +101,45 @@ The one-shot driver shares the streaming finish path described in
 the same stream, or an output-capacity error. Vector appends roll back on failure.
 Slice contents may be partially written on failure, as documented.
 
+## Extending copies across input blocks
+
+Greedy and HQ encoders pass a borrowed `CommandExtension` to their retained
+`Kernels::extend` entry. Its feature-enabled closure calls the shared exact
+match-length scan. Each scan is bounded by both physical wrap points and the
+remaining input; a fully matching chunk advances the command and repeats after
+wrapping either index. The dictionary-prefix branch retains its existing seam
+handling. No public API or error variant changes.
+
+```mermaid
+flowchart TD
+    Block[Next input block] --> Eligible{Last copy can continue?}
+    Eligible -->|yes| Kernel[Selected S: extend]
+    Kernel --> Source{Distance addresses ring?}
+    Source -->|yes| Bound[Bound both slices at wrap and input end]
+    Bound --> Scan[Exact scalar or SIMD match length]
+    Scan --> Advance[Advance command length and block span]
+    Advance --> More{Whole chunk matched and input remains?}
+    More -->|yes| Bound
+    More -->|no| Symbol[Recompute command symbol]
+    Source -->|no| Prefix[Existing prefix seam extension]
+    Prefix --> Symbol
+```
+
 ## Reusable entropy and search storage
 
 Fast arena resets clear fixed tables in place while retaining command, literal
-and tree vectors. Ring-buffer initialization resizes its existing allocation.
-The shared meta-block writer retains tree/context-map scratch and all depth/bit
-tables; block encoders borrow those tables. Move-to-front uses bounded stack
+and tree vectors. Before its first wrap, the ring buffer allocates only the
+written prefix plus seven lookahead bytes. Its logical size and mask remain fixed.
+Before reaching the last two window bytes or reading into the tail, it allocates
+the complete layout and replays deferred tail copies. A short first write retains
+the reference's omitted tail range and sentinel. Reset retains capacity and
+restores the prefix-growth state; subsequent writes restore head and margin bytes.
+The shared meta-block writer starts with empty vectors and no context-map arena.
+It materializes scratch only when an entropy code needs it, then retains it. A q2
+block using static command/distance codes allocates only literal depths/bits and
+a tree bounded by its literal count. Full and trivial codes prepare their larger
+tables; the context-map arena is initialized on first use. Block encoders borrow
+the retained tables. Move-to-front uses bounded stack
 scratch. Greedy splitters accept their previous split and histogram storage.
 HQ retains split/cluster/literal-cost storage and the full meta-block shape.
 
@@ -127,6 +162,33 @@ flowchart LR
 
 ## Cold matcher allocation and SIMD
 
+Quick H2/H3/H4 matchers use `SmallSlots` when the resolved size hint is between
+1 and 2048 bytes. It stores packed logical hash keys and positions in one open
+addressed vector; a missing key reads as position zero, exactly like a fresh full
+table. Keys are bounded by the quick matcher's logical bucket range, so the
+all-ones packed value is an unambiguous empty marker even for a `u32::MAX`
+position. Linear probing and growth never change the logical slot or candidate order.
+The vector starts at 32 entries on first insertion, doubles before exceeding half
+occupancy, and retains capacity across clearing. A small hint may underestimate
+the stream: growth preserves correctness. Other hints use the full quick table.
+The matcher variant is selected before scanning, so large-input scans have no
+compact-map branch inside their loops.
+
+```mermaid
+flowchart TD
+    Hint[Resolved quick-matcher size hint] --> Small{1 to 2048 bytes?}
+    Small -->|no| Full[Full logical slot array]
+    Small -->|yes| Map[SmallSlots: packed key and position]
+    Map --> Read{Logical key present?}
+    Read -->|no| Zero[Read position zero]
+    Read -->|yes| Position[Read stored position]
+    Map --> Insert[Insert or overwrite same logical key]
+    Insert --> Capacity{Next insertion fits half occupancy?}
+    Capacity -->|no| Grow[Double capacity and rehash entries]
+    Capacity -->|yes| Store[Store key and position]
+    Grow --> Store
+```
+
 Bucket matchers retain counters and encoded offsets. q7–q9 allocate four starter
 positions on first touch and promote a bucket once to its full reference depth
 when a fifth slot is needed. Promotion copies the four valid positions in place
@@ -134,12 +196,22 @@ and keeps the old starter region allocated. The high offset bit marks sparse
 storage; low bits encode base plus one. Counters determine validity, not stale
 payload bytes. Reset preserves allocations and clears validity; it never demotes
 a promoted bucket. Worst-case abandoned starters add four positions per bucket.
+A fresh matcher's arrays are already initialized. The encoder passes `clear =
+false` to preparation in that state, and after a reset sweep that restored the
+same invariant. Preparation still reports which partial sweep the next reset
+needs. Dirty tables retain the existing full or partial clearing behavior.
+
 Forgetful-chain matchers materialize banks on first touch rather than allocating
 every bank's slots up front. Their heads/counters likewise govern validity.
 
-q5/q6 use parallel byte tags. A 16-byte `fearless_simd` comparison produces a
-candidate mask; inactive circular slots are masked out and surviving slots are
-visited newest first. The scalar backend deliberately scans without filtering as
+q5/q6 use parallel byte tags. One `fearless_simd` comparison covers the complete
+16- or 32-position bucket. Rotating its mask puts the newest position at the
+highest bit; masking unwritten positions and taking the highest remaining bit
+preserves search order. Once half the shallow buckets are occupied, the next
+activation copies positions and tags into arrays indexed directly by hash key.
+The emptied offset directory marks that representation and retains its capacity.
+Counters, slot numbers and candidate order survive the conversion; reset keeps
+the dense representation. The scalar backend deliberately scans without filtering as
 an independent oracle. q7–q9 use untagged bucket scans.
 
 Selection dispatch runs when an encoder is created. Its `Box<dyn Kernels>` stores
@@ -147,6 +219,12 @@ the selected proof token; current tokens are zero-sized. Each outer kernel call
 enters the selected feature-enabled body and passes the token to generic inner
 loops. There is no per-candidate feature detection or virtual call. Cache reuse
 checks the backend discriminant and resolved parameter shape before reset.
+
+After matcher specialization, greedy reference generation enters `S::vectorize`
+around its search body, keeping tag and match-length operations in the selected
+feature context. This static entry stays outside the loop and uses the existing
+token. An out-of-line baseline compilation would require a feature-enabled helper
+call per SIMD operation even though the correct token had already been selected.
 
 ```mermaid
 sequenceDiagram
@@ -159,6 +237,9 @@ sequenceDiagram
     loop blocks and reused streams
         Cache->>Selected: outer kernel call
         Selected->>Inner: vectorize body, pass S
+        opt greedy reference generation
+            Inner->>Inner: specialize matcher, vectorize search body with S
+        end
         Inner-->>Cache: reference-ordered results
     end
 ```

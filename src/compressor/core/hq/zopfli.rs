@@ -277,174 +277,183 @@ fn update_nodes<S: Simd, const INDEPENDENT: bool>(
     queue: &mut StartPosQueue,
     nodes: &mut [ZopfliNode],
 ) -> usize {
-    let cur_ix = ctx.block_start + pos;
-    let cur_ix_masked = cur_ix & ctx.ringbuffer_mask;
-    let max_distance = cur_ix.min(ctx.max_backward_limit);
-    let gap = ctx.gap;
-    let dictionary_start = ctx
-        .params
-        .logical_position(cur_ix)
-        .min(ctx.max_backward_limit);
-    let max_len = ctx.num_bytes - pos;
-    let max_zopfli_len = ctx.params.max_zopfli_len();
-    let max_iters = ctx.params.max_zopfli_candidates();
-    let mut result = 0usize;
+    simd.vectorize(
+        #[inline(always)]
+        || {
+            let cur_ix = ctx.block_start + pos;
+            let cur_ix_masked = cur_ix & ctx.ringbuffer_mask;
+            let max_distance = cur_ix.min(ctx.max_backward_limit);
+            let gap = ctx.gap;
+            let dictionary_start = ctx
+                .params
+                .logical_position(cur_ix)
+                .min(ctx.max_backward_limit);
+            let max_len = ctx.num_bytes - pos;
+            let max_zopfli_len = ctx.params.max_zopfli_len();
+            let max_iters = ctx.params.max_zopfli_candidates();
+            let mut result = 0usize;
 
-    evaluate_node(
-        ctx.params.logical_position(ctx.block_start),
-        pos,
-        ctx.max_backward_limit,
-        gap,
-        ctx.starting_dist_cache,
-        model,
-        queue,
-        nodes,
-    );
+            evaluate_node(
+                ctx.params.logical_position(ctx.block_start),
+                pos,
+                ctx.max_backward_limit,
+                gap,
+                ctx.starting_dist_cache,
+                model,
+                queue,
+                nodes,
+            );
 
-    let min_len = {
-        let posdata = queue.at(0);
-        let min_cost = posdata.cost + model.min_cost_cmd() + model.literal_costs(posdata.pos, pos);
-        compute_minimum_copy_length(min_cost, nodes, ctx.num_bytes, pos)
-    };
-
-    // Command starts in order of increasing cost difference.
-    for k in 0..max_iters.min(queue.len()) {
-        let (start, start_costdiff, cache) = {
-            let posdata = queue.at(k);
-            (posdata.pos, posdata.costdiff, posdata.distance_cache)
-        };
-        let inscode = insert_length_code(pos - start);
-        let base_cost =
-            start_costdiff + INS_EXTRA[usize::from(inscode)] as f32 + model.literal_costs(0, pos);
-
-        // Copies reachable through this start position's distance cache.
-        let mut best_len = min_len - 1;
-        for j in 0..if INDEPENDENT {
-            0
-        } else {
-            NUM_DISTANCE_SHORT_CODES as usize
-        } {
-            if best_len >= max_len {
-                break;
-            }
-            let idx = DISTANCE_CACHE_INDEX[j];
-            let backward = (cache[idx] + DISTANCE_CACHE_OFFSET[j]) as usize;
-            let prev_ix = cur_ix.wrapping_sub(backward);
-            if cur_ix_masked + best_len > ctx.ringbuffer_mask {
-                break;
-            }
-            let continuation = ctx.ringbuffer[cur_ix_masked + best_len];
-            if backward > dictionary_start + gap {
-                // A static-dictionary distance: the matches list covers those.
-                continue;
-            }
-            let len = if backward <= max_distance {
-                // An ordinary backward reference into the window.
-                if prev_ix >= cur_ix {
-                    continue;
-                }
-                let prev_ix = prev_ix & ctx.ringbuffer_mask;
-                if prev_ix + best_len > ctx.ringbuffer_mask
-                    || continuation != ctx.ringbuffer[prev_ix + best_len]
-                {
-                    continue;
-                }
-                find_match_length(simd, ctx.ringbuffer, prev_ix, cur_ix_masked, max_len)
-            } else if backward > dictionary_start {
-                // Past the window and inside the attached prefix.
-                let Some(context) = ctx.attached else {
-                    continue;
-                };
-                let sources = context.dictionaries().prefix();
-                let logical = (dictionary_start + gap - backward) as u64;
-                let Some((segment, offset)) = sources.locate(logical) else {
-                    continue;
-                };
-                let source = sources.segment(segment);
-                let Some(candidate) = source.get(offset..) else {
-                    continue;
-                };
-                // The match stops at the end of the attachment it started in,
-                // exactly as the reference's `limit` does.
-                let limit = candidate.len().min(max_len);
-                if best_len >= limit || candidate.get(best_len) != Some(&continuation) {
-                    continue;
-                }
-                let Some(target) = ctx.ringbuffer.get(cur_ix_masked..) else {
-                    continue;
-                };
-                prefix_match_length(candidate, target, limit)
-            } else {
-                // "Gray" area: a decoder could address it, but this encoder
-                // does not hold those bytes, so it must not look at them.
-                continue;
+            let min_len = {
+                let posdata = queue.at(0);
+                let min_cost =
+                    posdata.cost + model.min_cost_cmd() + model.literal_costs(posdata.pos, pos);
+                compute_minimum_copy_length(min_cost, nodes, ctx.num_bytes, pos)
             };
 
-            let dist_cost = base_cost + model.distance_cost(j);
-            for l in best_len + 1..=len {
-                let copycode = copy_length_code(l);
-                let cmdcode = combine_length_codes(inscode, copycode, j == 0);
-                let cost = if cmdcode < 128 { base_cost } else { dist_cost }
-                    + COPY_EXTRA[usize::from(copycode)] as f32
-                    + model.command_cost(cmdcode);
-                if cost < nodes[pos + l].cost() {
-                    ZopfliNode::update(nodes, pos, start, l, l, backward, j + 1, cost);
-                    result = result.max(l);
-                }
-                best_len = l;
-            }
-        }
-
-        // Beyond the second start position only new cached distances help, and
-        // those have just been tried.
-        if k >= 2 {
-            continue;
-        }
-
-        let mut len = min_len;
-        for m in matches {
-            let dist = m.distance as usize;
-            let is_dictionary_match = dist > dictionary_start + gap;
-            // Every cached distance has been tried already, so these are always
-            // written with a full distance code.
-            let dist_code = dist + NUM_DISTANCE_SHORT_CODES as usize - 1;
-            let (dist_symbol, _) = prefix_encode_copy_distance(
-                dist_code,
-                ctx.params.dist.num_direct,
-                ctx.params.dist.postfix_bits,
-            );
-            let distnumextra = u32::from(dist_symbol >> 10);
-            let dist_cost = base_cost
-                + distnumextra as f32
-                + model.distance_cost(usize::from(dist_symbol & 0x3FF));
-
-            // Try every copy length up to this match's. A dictionary word has
-            // only one meaningful length, and a very long copy is not worth
-            // examining shorter prefixes of.
-            let max_match_len = m.length();
-            if len < max_match_len && (is_dictionary_match || max_match_len > max_zopfli_len) {
-                len = max_match_len;
-            }
-            while len <= max_match_len {
-                let len_code = if is_dictionary_match {
-                    m.length_code()
-                } else {
-                    len
+            // Command starts in order of increasing cost difference.
+            for k in 0..max_iters.min(queue.len()) {
+                let (start, start_costdiff, cache) = {
+                    let posdata = queue.at(k);
+                    (posdata.pos, posdata.costdiff, posdata.distance_cache)
                 };
-                let copycode = copy_length_code(len_code);
-                let cmdcode = combine_length_codes(inscode, copycode, false);
-                let cost = dist_cost
-                    + COPY_EXTRA[usize::from(copycode)] as f32
-                    + model.command_cost(cmdcode);
-                if cost < nodes[pos + len].cost() {
-                    ZopfliNode::update(nodes, pos, start, len, len_code, dist, 0, cost);
-                    result = result.max(len);
+                let inscode = insert_length_code(pos - start);
+                let base_cost = start_costdiff
+                    + INS_EXTRA[usize::from(inscode)] as f32
+                    + model.literal_costs(0, pos);
+
+                // Copies reachable through this start position's distance cache.
+                let mut best_len = min_len - 1;
+                for j in 0..if INDEPENDENT {
+                    0
+                } else {
+                    NUM_DISTANCE_SHORT_CODES as usize
+                } {
+                    if best_len >= max_len {
+                        break;
+                    }
+                    let idx = DISTANCE_CACHE_INDEX[j];
+                    let backward = (cache[idx] + DISTANCE_CACHE_OFFSET[j]) as usize;
+                    let prev_ix = cur_ix.wrapping_sub(backward);
+                    if cur_ix_masked + best_len > ctx.ringbuffer_mask {
+                        break;
+                    }
+                    let continuation = ctx.ringbuffer[cur_ix_masked + best_len];
+                    if backward > dictionary_start + gap {
+                        // A static-dictionary distance: the matches list covers those.
+                        continue;
+                    }
+                    let len = if backward <= max_distance {
+                        // An ordinary backward reference into the window.
+                        if prev_ix >= cur_ix {
+                            continue;
+                        }
+                        let prev_ix = prev_ix & ctx.ringbuffer_mask;
+                        if prev_ix + best_len > ctx.ringbuffer_mask
+                            || continuation != ctx.ringbuffer[prev_ix + best_len]
+                        {
+                            continue;
+                        }
+                        find_match_length(simd, ctx.ringbuffer, prev_ix, cur_ix_masked, max_len)
+                    } else if backward > dictionary_start {
+                        // Past the window and inside the attached prefix.
+                        let Some(context) = ctx.attached else {
+                            continue;
+                        };
+                        let sources = context.dictionaries().prefix();
+                        let logical = (dictionary_start + gap - backward) as u64;
+                        let Some((segment, offset)) = sources.locate(logical) else {
+                            continue;
+                        };
+                        let source = sources.segment(segment);
+                        let Some(candidate) = source.get(offset..) else {
+                            continue;
+                        };
+                        // The match stops at the end of the attachment it started in,
+                        // exactly as the reference's `limit` does.
+                        let limit = candidate.len().min(max_len);
+                        if best_len >= limit || candidate.get(best_len) != Some(&continuation) {
+                            continue;
+                        }
+                        let Some(target) = ctx.ringbuffer.get(cur_ix_masked..) else {
+                            continue;
+                        };
+                        prefix_match_length(candidate, target, limit)
+                    } else {
+                        // "Gray" area: a decoder could address it, but this encoder
+                        // does not hold those bytes, so it must not look at them.
+                        continue;
+                    };
+
+                    let dist_cost = base_cost + model.distance_cost(j);
+                    for l in best_len + 1..=len {
+                        let copycode = copy_length_code(l);
+                        let cmdcode = combine_length_codes(inscode, copycode, j == 0);
+                        let cost = if cmdcode < 128 { base_cost } else { dist_cost }
+                            + COPY_EXTRA[usize::from(copycode)] as f32
+                            + model.command_cost(cmdcode);
+                        if cost < nodes[pos + l].cost() {
+                            ZopfliNode::update(nodes, pos, start, l, l, backward, j + 1, cost);
+                            result = result.max(l);
+                        }
+                        best_len = l;
+                    }
                 }
-                len += 1;
+
+                // Beyond the second start position only new cached distances help, and
+                // those have just been tried.
+                if k >= 2 {
+                    continue;
+                }
+
+                let mut len = min_len;
+                for m in matches {
+                    let dist = m.distance as usize;
+                    let is_dictionary_match = dist > dictionary_start + gap;
+                    // Every cached distance has been tried already, so these are always
+                    // written with a full distance code.
+                    let dist_code = dist + NUM_DISTANCE_SHORT_CODES as usize - 1;
+                    let (dist_symbol, _) = prefix_encode_copy_distance(
+                        dist_code,
+                        ctx.params.dist.num_direct,
+                        ctx.params.dist.postfix_bits,
+                    );
+                    let distnumextra = u32::from(dist_symbol >> 10);
+                    let dist_cost = base_cost
+                        + distnumextra as f32
+                        + model.distance_cost(usize::from(dist_symbol & 0x3FF));
+
+                    // Try every copy length up to this match's. A dictionary word has
+                    // only one meaningful length, and a very long copy is not worth
+                    // examining shorter prefixes of.
+                    let max_match_len = m.length();
+                    if len < max_match_len
+                        && (is_dictionary_match || max_match_len > max_zopfli_len)
+                    {
+                        len = max_match_len;
+                    }
+                    while len <= max_match_len {
+                        let len_code = if is_dictionary_match {
+                            m.length_code()
+                        } else {
+                            len
+                        };
+                        let copycode = copy_length_code(len_code);
+                        let cmdcode = combine_length_codes(inscode, copycode, false);
+                        let cost = dist_cost
+                            + COPY_EXTRA[usize::from(copycode)] as f32
+                            + model.command_cost(cmdcode);
+                        if cost < nodes[pos + len].cost() {
+                            ZopfliNode::update(nodes, pos, start, len, len_code, dist, 0, cost);
+                            result = result.max(len);
+                        }
+                        len += 1;
+                    }
+                }
             }
-        }
-    }
-    result
+            result
+        },
+    )
 }
 
 /// Turns the finished node array into a forward chain of commands.
@@ -537,6 +546,7 @@ fn create_commands(
     clippy::too_many_arguments,
     reason = "mirrors ZopfliIterate, whose parameters are all needed"
 )]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn zopfli_iterate<S: Simd, const INDEPENDENT: bool>(
     simd: S,
     num_bytes: usize,
@@ -693,6 +703,7 @@ fn merge_prefix_matches(prefix: &[(usize, usize)], tree: &mut Vec<BackwardMatch>
     clippy::too_many_arguments,
     reason = "mirrors BrotliZopfliComputeShortestPath, whose parameters are all needed"
 )]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn zopfli_compute_shortest_path<S: Simd, const INDEPENDENT: bool>(
     simd: S,
     num_bytes: usize,
@@ -919,6 +930,7 @@ pub(crate) fn create_zopfli_backward_references<S: Simd, const INDEPENDENT: bool
     clippy::too_many_arguments,
     reason = "mirrors BrotliCreateHqZopfliBackwardReferences, whose parameters are all needed"
 )]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn create_hq_zopfli_backward_references<S: Simd, const INDEPENDENT: bool>(
     simd: S,
     num_bytes: usize,

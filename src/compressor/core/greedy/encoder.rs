@@ -22,7 +22,7 @@ use crate::compressor::core::rfc9841::context::SharedContextInner;
 use crate::compressor::core::shared::bits::{BYTE_PADDING_SLACK, BitWriter, inject_byte_padding};
 use crate::compressor::core::shared::bitstream::{MetaBlockWriter, store_uncompressed_meta_block};
 use crate::compressor::core::shared::command::Command;
-use crate::compressor::core::shared::command::extend_last_command;
+use crate::compressor::core::shared::command::CommandExtension;
 use crate::compressor::core::shared::constants::{OUTPUT_RESERVE_CONST, OUTPUT_SLACK};
 use crate::compressor::core::shared::format::ContextMode;
 use crate::compressor::core::shared::histogram::{HistogramLiteral, bits_entropy};
@@ -132,7 +132,7 @@ impl GreedyEncoder {
             kernels: dispatch::select(level),
             params: resolved,
             ringbuffer: RingBuffer::new(resolved.rb_bits(), resolved.lgblock),
-            matcher: MatchFinder::from(resolved.hasher),
+            matcher: MatchFinder::for_input(resolved.hasher, size_hint),
             is_prepared: false,
             matcher_dirty: false,
             last_partial_prepare: None,
@@ -199,7 +199,7 @@ impl GreedyEncoder {
         match self.last_partial_prepare.take() {
             Some(input_size) => {
                 self.matcher
-                    .prepare(true, input_size, self.ringbuffer.buffer());
+                    .prepare(true, input_size, self.ringbuffer.buffer(), true);
                 self.matcher_dirty = false;
             }
             // The last stream swept the whole table, so it is dirty in places
@@ -462,6 +462,7 @@ impl GreedyEncoder {
 
         if !self.commands.is_empty() && self.references.last_insert_len == 0 {
             let Self {
+                kernels,
                 params,
                 ringbuffer,
                 references,
@@ -470,21 +471,19 @@ impl GreedyEncoder {
                 ..
             } = self;
             if let Some(command) = commands.last_mut() {
-                let window = Window {
-                    data: ringbuffer.buffer(),
-                    mask: ringbuffer.mask(),
-                };
-                extend_last_command(
+                kernels.extend(CommandExtension {
                     command,
-                    params.lgwin,
-                    &params.dist,
-                    references.dist_cache[0],
-                    window.data,
-                    window.mask,
-                    *last_processed_pos,
+                    lgwin: params.lgwin,
+                    dist: &params.dist,
+                    last_distance: references.dist_cache[0],
+                    window: Window {
+                        data: ringbuffer.buffer(),
+                        mask: ringbuffer.mask(),
+                    },
+                    last_processed_pos: *last_processed_pos,
                     attached,
-                    &mut span,
-                );
+                    span: &mut span,
+                });
             }
         }
 
@@ -570,12 +569,15 @@ impl GreedyEncoder {
     /// Sets the matcher up and hands it the block boundary positions.
     ///
     /// Mirrors `InitOrStitchToPreviousBlock`.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn prepare_matcher(&mut self, position: usize, input_size: usize, is_last: bool) {
         let data = self.ringbuffer.buffer();
         let mask = self.ringbuffer.mask();
         if !self.is_prepared {
             let one_shot = position == 0 && is_last && !self.matcher_dirty;
-            let partial = self.matcher.prepare(one_shot, input_size, data);
+            let partial = self
+                .matcher
+                .prepare(one_shot, input_size, data, self.matcher_dirty);
             self.last_partial_prepare = partial.then_some(input_size);
             self.matcher_dirty = true;
             self.is_prepared = true;

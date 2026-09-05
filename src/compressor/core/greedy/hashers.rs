@@ -175,6 +175,10 @@ pub(crate) trait Matcher {
 
     /// Clears the table before the first block (`Prepare`).
     ///
+    /// `clear` may be false only when construction or a previous reset sweep
+    /// already left every reachable entry empty. Sweep selection still returns
+    /// the information needed to clear the next stream.
+    ///
     /// Returns whether the partial sweep was used — that is, whether only the
     /// slots the first `input_size` positions hash to were cleared, rather
     /// than the whole table. A caller that wants to reuse the matcher for
@@ -182,7 +186,7 @@ pub(crate) trait Matcher {
     /// clears exactly the slots that stream could have dirtied, which is far
     /// cheaper than wiping the table, while a full sweep leaves the table
     /// dirty enough that the next stream has to take the full path.
-    fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8]) -> bool;
+    fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8], clear: bool) -> bool;
 
     /// Records the position `ix` in the table (`Store`).
     fn store(&mut self, data: &[u8], mask: usize, ix: usize);
@@ -226,6 +230,94 @@ pub(crate) trait Matcher {
     );
 }
 
+/// Sparse logical slots for short streams. Missing keys have the same zero
+/// position as a freshly initialized full quick-matcher table.
+#[derive(Default)]
+struct SmallSlots {
+    entries: Vec<u64>,
+    count: usize,
+}
+
+impl SmallSlots {
+    const EMPTY: u64 = u64::MAX;
+
+    #[inline(always)]
+    fn read(&self, key: usize) -> u32 {
+        if self.entries.is_empty() {
+            return 0;
+        }
+        let mask = self.entries.len() - 1;
+        let mut slot = key & mask;
+        loop {
+            let entry = self.entries[slot];
+            if entry == Self::EMPTY {
+                return 0;
+            }
+            if (entry >> 32) as usize == key {
+                return entry as u32;
+            }
+            slot = (slot + 1) & mask;
+        }
+    }
+
+    #[inline(always)]
+    fn write(&mut self, key: usize, value: u32) {
+        if 2 * (self.count + 1) > self.entries.len() {
+            self.grow();
+        }
+        let mask = self.entries.len() - 1;
+        let mut slot = key & mask;
+        loop {
+            let entry = self.entries[slot];
+            if entry == Self::EMPTY || (entry >> 32) as usize == key {
+                self.count += usize::from(entry == Self::EMPTY);
+                self.entries[slot] = ((key as u64) << 32) | u64::from(value);
+                return;
+            }
+            slot = (slot + 1) & mask;
+        }
+    }
+
+    fn grow(&mut self) {
+        let size = (self.entries.len() * 2).max(32);
+        let previous = std::mem::replace(&mut self.entries, vec![Self::EMPTY; size]);
+        self.count = 0;
+        for entry in previous {
+            if entry != Self::EMPTY {
+                self.write((entry >> 32) as usize, entry as u32);
+            }
+        }
+    }
+
+    fn clear(&mut self) {
+        self.entries.fill(Self::EMPTY);
+        self.count = 0;
+    }
+}
+
+#[inline(always)]
+fn quick_read<const COMPACT: bool>(buckets: &[u32], compact: &SmallSlots, key: usize) -> u32 {
+    if COMPACT {
+        compact.read(key)
+    } else {
+        buckets[key]
+    }
+}
+
+#[inline(always)]
+fn quick_write<const COMPACT: bool>(
+    buckets: &mut [u32],
+    compact: &mut SmallSlots,
+    key: usize,
+    value: u32,
+) {
+    if COMPACT {
+        compact.write(key, value);
+    } else {
+        buckets[key] = value;
+    }
+}
+
 /// Quick match finder with one hash bucket sweep (`HashLongestMatchQuickly`).
 ///
 /// `BUCKET_BITS` sizes the table, `SWEEP_BITS` says how many neighbouring slots
@@ -236,12 +328,19 @@ pub(crate) struct QuickMatcher<
     const SWEEP_BITS: u32,
     const HASH_LEN: u32,
     const USE_DICTIONARY: bool,
+    const COMPACT: bool = false,
 > {
     buckets: Vec<u32>,
+    compact: SmallSlots,
 }
 
-impl<const BUCKET_BITS: u32, const SWEEP_BITS: u32, const HASH_LEN: u32, const USE_DICTIONARY: bool>
-    QuickMatcher<BUCKET_BITS, SWEEP_BITS, HASH_LEN, USE_DICTIONARY>
+impl<
+    const BUCKET_BITS: u32,
+    const SWEEP_BITS: u32,
+    const HASH_LEN: u32,
+    const USE_DICTIONARY: bool,
+    const COMPACT: bool,
+> QuickMatcher<BUCKET_BITS, SWEEP_BITS, HASH_LEN, USE_DICTIONARY, COMPACT>
 {
     /// Number of slots in the table.
     const BUCKET_SIZE: usize = 1usize << BUCKET_BITS;
@@ -259,11 +358,17 @@ impl<const BUCKET_BITS: u32, const SWEEP_BITS: u32, const HASH_LEN: u32, const U
     /// Returns the bytes this match finder keeps allocated.
     pub(crate) fn retained_bytes(&self) -> usize {
         self.buckets.capacity() * size_of::<u32>()
+            + self.compact.entries.capacity() * size_of::<u64>()
     }
 
     pub(crate) fn new() -> Self {
         Self {
-            buckets: vec![0u32; Self::BUCKET_SIZE],
+            buckets: if COMPACT {
+                Vec::new()
+            } else {
+                vec![0u32; Self::BUCKET_SIZE]
+            },
+            compact: SmallSlots::default(),
         }
     }
 
@@ -275,18 +380,30 @@ impl<const BUCKET_BITS: u32, const SWEEP_BITS: u32, const HASH_LEN: u32, const U
     }
 }
 
-impl<const BUCKET_BITS: u32, const SWEEP_BITS: u32, const HASH_LEN: u32, const USE_DICTIONARY: bool>
-    Matcher for QuickMatcher<BUCKET_BITS, SWEEP_BITS, HASH_LEN, USE_DICTIONARY>
+impl<
+    const BUCKET_BITS: u32,
+    const SWEEP_BITS: u32,
+    const HASH_LEN: u32,
+    const USE_DICTIONARY: bool,
+    const COMPACT: bool,
+> Matcher for QuickMatcher<BUCKET_BITS, SWEEP_BITS, HASH_LEN, USE_DICTIONARY, COMPACT>
 {
     const HASH_TYPE_LENGTH: usize = 8;
     const STORE_LOOKAHEAD: usize = 8;
 
-    fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8]) -> bool {
+    fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8], clear: bool) -> bool {
         // Clearing only the slots a short input can reach is far cheaper than
         // wiping the whole table, and reaches exactly the same slots the
         // search will later look at.
         let partial_prepare_threshold = Self::BUCKET_SIZE >> 5;
         let partial = one_shot && input_size <= partial_prepare_threshold;
+        if !clear {
+            return partial;
+        }
+        if COMPACT {
+            self.compact.clear();
+            return partial;
+        }
         if partial {
             for offset in 0..input_size {
                 let key = Self::hash(data, offset);
@@ -319,7 +436,9 @@ impl<const BUCKET_BITS: u32, const SWEEP_BITS: u32, const HASH_LEN: u32, const U
         } else {
             (key + (ix & Self::SWEEP_MASK)) & Self::BUCKET_MASK
         };
-        if let Some(entry) = self.buckets.get_mut(slot) {
+        if COMPACT {
+            self.compact.write(slot, ix as u32);
+        } else if let Some(entry) = self.buckets.get_mut(slot) {
             *entry = ix as u32;
         }
     }
@@ -333,7 +452,9 @@ impl<const BUCKET_BITS: u32, const SWEEP_BITS: u32, const HASH_LEN: u32, const U
         out: &mut SearchResult,
     ) {
         let data = query.data;
-        let Some(buckets) = self.buckets.get_mut(..Self::BUCKET_SIZE) else {
+        let compact = &mut self.compact;
+        let size = if COMPACT { 0 } else { Self::BUCKET_SIZE };
+        let Some(buckets) = self.buckets.get_mut(..size) else {
             return;
         };
         let cur_ix_masked = query.cur_ix & query.mask;
@@ -359,7 +480,12 @@ impl<const BUCKET_BITS: u32, const SWEEP_BITS: u32, const HASH_LEN: u32, const U
                         out.distance = cached_backward;
                         out.score = score;
                         if Self::SWEEP == 1 {
-                            buckets[key & Self::BUCKET_MASK] = query.cur_ix as u32;
+                            quick_write::<COMPACT>(
+                                buckets,
+                                compact,
+                                key & Self::BUCKET_MASK,
+                                query.cur_ix as u32,
+                            );
                             return;
                         }
                         best_len = len;
@@ -378,8 +504,13 @@ impl<const BUCKET_BITS: u32, const SWEEP_BITS: u32, const HASH_LEN: u32, const U
         if Self::SWEEP == 1 {
             // Only one candidate: the store happens before the comparison, so
             // the slot always ends up holding the current position.
-            let prev_ix = buckets[key & Self::BUCKET_MASK] as usize;
-            buckets[key & Self::BUCKET_MASK] = query.cur_ix as u32;
+            let prev_ix = quick_read::<COMPACT>(buckets, compact, key & Self::BUCKET_MASK) as usize;
+            quick_write::<COMPACT>(
+                buckets,
+                compact,
+                key & Self::BUCKET_MASK,
+                query.cur_ix as u32,
+            );
             let backward = query.cur_ix - prev_ix;
             let prev_ix = prev_ix & query.mask;
             if compare_char != read_u8(data, prev_ix + best_len_in) {
@@ -410,7 +541,8 @@ impl<const BUCKET_BITS: u32, const SWEEP_BITS: u32, const HASH_LEN: u32, const U
             }
             key_out = Some(keys[(query.cur_ix & Self::SWEEP_MASK) >> 3]);
             for &slot in keys.iter().take(Self::SWEEP) {
-                let prev_ix = buckets[slot & Self::BUCKET_MASK] as usize;
+                let prev_ix =
+                    quick_read::<COMPACT>(buckets, compact, slot & Self::BUCKET_MASK) as usize;
                 let backward = query.cur_ix - prev_ix;
                 let prev_ix = prev_ix & query.mask;
                 if compare_char != read_u8(data, prev_ix + best_len) {
@@ -438,7 +570,12 @@ impl<const BUCKET_BITS: u32, const SWEEP_BITS: u32, const HASH_LEN: u32, const U
             query.search_dictionary(stats, out, true);
         }
         if let Some(slot) = key_out {
-            buckets[slot & Self::BUCKET_MASK] = query.cur_ix as u32;
+            quick_write::<COMPACT>(
+                buckets,
+                compact,
+                slot & Self::BUCKET_MASK,
+                query.cur_ix as u32,
+            );
         }
     }
 }
@@ -530,6 +667,9 @@ impl<const HASH64: bool, const BUCKET_BITS: u32> BucketMatcher<HASH64, BUCKET_BI
     /// survive reset; counters alone govern which payload entries are valid.
     #[inline(always)]
     fn activate_bucket(&mut self, key: usize) -> usize {
+        if self.offsets.is_empty() {
+            return key * self.block_size;
+        }
         let offset = self.offsets[key];
         if offset != 0 {
             let old = ((offset & !Self::SPARSE) - 1) as usize;
@@ -541,6 +681,10 @@ impl<const HASH64: bool, const BUCKET_BITS: u32> BucketMatcher<HASH64, BUCKET_BI
             self.buckets.copy_within(old..old + 4, start);
             self.offsets[key] = start as u32 + 1;
             return start;
+        }
+        if self.block_size <= 32 && self.buckets.len() >= Self::BUCKET_SIZE / 2 * self.block_size {
+            self.promote_dense();
+            return key * self.block_size;
         }
         let start = self.buckets.len();
         let sparse = self.block_size > 32;
@@ -555,6 +699,25 @@ impl<const HASH64: bool, const BUCKET_BITS: u32> BucketMatcher<HASH64, BUCKET_BI
         self.offsets[key] = (start as u32 + 1) | if sparse { Self::SPARSE } else { 0 };
         start
     }
+    /// Switches a mostly occupied shallow table to direct bucket indexing.
+    fn promote_dense(&mut self) {
+        let mut buckets = vec![0; Self::BUCKET_SIZE * self.block_size];
+        let mut tags = vec![0; buckets.len()];
+        for (key, &offset) in self.offsets.iter().enumerate() {
+            if offset == 0 {
+                continue;
+            }
+            let old = (offset - 1) as usize;
+            let new = key * self.block_size;
+            buckets[new..new + self.block_size]
+                .copy_from_slice(&self.buckets[old..old + self.block_size]);
+            tags[new..new + self.block_size]
+                .copy_from_slice(&self.tags[old..old + self.block_size]);
+        }
+        self.buckets = buckets;
+        self.tags = tags;
+        self.offsets.clear();
+    }
 }
 
 impl<const HASH64: bool, const BUCKET_BITS: u32> Matcher for BucketMatcher<HASH64, BUCKET_BITS> {
@@ -565,9 +728,12 @@ impl<const HASH64: bool, const BUCKET_BITS: u32> Matcher for BucketMatcher<HASH6
         self.last_distances
     }
 
-    fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8]) -> bool {
+    fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8], clear: bool) -> bool {
         let partial_prepare_threshold = Self::BUCKET_SIZE >> 6;
         let partial = one_shot && input_size <= partial_prepare_threshold;
+        if !clear {
+            return partial;
+        }
         if partial {
             for offset in 0..input_size {
                 let key = Self::hash(data, offset);
@@ -664,11 +830,12 @@ impl<const HASH64: bool, const BUCKET_BITS: u32> Matcher for BucketMatcher<HASH6
         }
 
         let count = self.num.get(key).copied().unwrap_or(0);
-        let mut candidates = super::tags::Candidates::new(count, self.block_size);
         let tags = self
             .tags
             .get(bucket_base..bucket_base + self.block_size)
             .unwrap_or_default();
+        let mut candidates =
+            super::tags::Candidates::new(simd, count, self.block_size, tags, hash as u8);
         while let Some(index) = candidates.next(simd, tags, hash as u8) {
             let slot = bucket_base + index;
             let prev_ix = self.buckets.get(slot).copied().unwrap_or(0) as usize;
@@ -842,9 +1009,12 @@ impl<const NUM_BANKS: usize, const BANK_BITS: u32> Matcher for ChainMatcher<NUM_
         self.last_distances
     }
 
-    fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8]) -> bool {
+    fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8], clear: bool) -> bool {
         let partial_prepare_threshold = CHAIN_BUCKET_SIZE >> 6;
         let partial = one_shot && input_size <= partial_prepare_threshold;
+        if !clear {
+            return partial;
+        }
         if partial {
             for offset in 0..input_size {
                 let bucket = Self::hash(data, offset);
@@ -1010,6 +1180,13 @@ impl<const NUM_BANKS: usize, const BANK_BITS: u32> Matcher for ChainMatcher<NUM_
 /// they are byte-for-byte equivalent to `H5` and `H6`, as argued on
 /// [`BucketMatcher`].
 pub(crate) enum MatchFinder {
+    /// Short-input storage with the H2 hash and candidate order.
+    H2Small(QuickMatcher<16, 0, 5, true, true>),
+    /// Short-input storage with the H3 hash and candidate order.
+    H3Small(QuickMatcher<16, 1, 5, false, true>),
+    /// Short-input storage with the H4 hash and candidate order.
+    H4Small(QuickMatcher<17, 2, 5, true, true>),
+
     /// Quality 2: one candidate slot per bucket, with a dictionary probe.
     H2(QuickMatcher<16, 0, 5, true>),
     /// Quality 3.
@@ -1064,6 +1241,9 @@ impl From<HasherPlan> for MatchFinder {
 macro_rules! with_matcher {
     ($finder:expr, |$matcher:ident| $body:expr) => {
         match $finder {
+            MatchFinder::H2Small($matcher) => $body,
+            MatchFinder::H3Small($matcher) => $body,
+            MatchFinder::H4Small($matcher) => $body,
             MatchFinder::H2($matcher) => $body,
             MatchFinder::H3($matcher) => $body,
             MatchFinder::H4($matcher) => $body,
@@ -1080,12 +1260,33 @@ macro_rules! with_matcher {
 pub(crate) use with_matcher;
 
 impl MatchFinder {
+    /// Selects compact physical storage for an expected short input. Hashes,
+    /// logical slots and match order are unchanged; the map grows if needed.
+    pub(crate) fn for_input(plan: HasherPlan, size_hint: usize) -> Self {
+        if size_hint > 0 && size_hint <= 2048 {
+            match plan {
+                HasherPlan::H2 => return Self::H2Small(QuickMatcher::new()),
+                HasherPlan::H3 => return Self::H3Small(QuickMatcher::new()),
+                HasherPlan::H4 => return Self::H4Small(QuickMatcher::new()),
+                _ => {}
+            }
+        }
+        Self::from(plan)
+    }
+
     /// Clears the table before the first block of a stream (`Prepare`).
     ///
     /// Returns whether only the slots the input reaches were cleared; see
     /// [`Matcher::prepare`].
-    pub(crate) fn prepare(&mut self, one_shot: bool, input_size: usize, data: &[u8]) -> bool {
-        with_matcher!(self, |matcher| matcher.prepare(one_shot, input_size, data))
+    pub(crate) fn prepare(
+        &mut self,
+        one_shot: bool,
+        input_size: usize,
+        data: &[u8],
+        clear: bool,
+    ) -> bool {
+        with_matcher!(self, |matcher| matcher
+            .prepare(one_shot, input_size, data, clear))
     }
 
     /// Returns the bytes the chosen match finder keeps allocated.
@@ -1111,6 +1312,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn compact_slots_preserve_colliding_keys_through_growth_overwrites_and_reset() {
+        let mut slots = SmallSlots::default();
+        assert_eq!(slots.read(3), 0);
+        for key in 0..1024 {
+            slots.write(key * 32 + 3, key as u32 + 1);
+        }
+        for key in 0..1024 {
+            assert_eq!(slots.read(key * 32 + 3), key as u32 + 1);
+            slots.write(key * 32 + 3, u32::MAX);
+            assert_eq!(slots.read(key * 32 + 3), u32::MAX);
+        }
+        assert_eq!(slots.count, 1024);
+        assert_eq!(slots.read(4), 0);
+        let capacity = slots.entries.capacity();
+        slots.clear();
+        assert_eq!(slots.entries.capacity(), capacity);
+        assert_eq!(slots.read(3), 0);
+        slots.write(3, 7);
+        assert_eq!(slots.read(3), 7);
+    }
+
+    #[test]
+    fn compact_quick_matchers_preserve_the_full_tables_results_on_every_backend() {
+        let data = repeated();
+        for plan in [HasherPlan::H2, HasherPlan::H3, HasherPlan::H4] {
+            for backend in crate::compressor::Backend::available() {
+                let expected = with_matcher!(MatchFinder::from(plan), |matcher| {
+                    let mut matcher = primed(matcher, &data);
+                    search_with(backend.0, &mut matcher, &data, REPEAT_AT)
+                });
+                let actual = with_matcher!(MatchFinder::for_input(plan, 16), |matcher| {
+                    let mut matcher = primed(matcher, &data);
+                    search_with(backend.0, &mut matcher, &data, REPEAT_AT)
+                });
+                assert_eq!(actual, expected, "{backend:?}, {plan:?}");
+            }
+        }
+    }
+
+    #[test]
     fn a_cold_q9_chain_allocates_only_the_bank_it_uses() {
         let mut matcher = ChainMatcher::<512, 9>::new(Q9_CHAIN);
         assert!(matcher.slots.is_empty());
@@ -1120,7 +1361,7 @@ mod tests {
         matcher.store(&data, usize::MAX, 1);
         assert_eq!(matcher.slots.len(), 512);
         let retained = matcher.retained_bytes();
-        matcher.prepare(false, data.len(), &data);
+        matcher.prepare(false, data.len(), &data, true);
         matcher.store(&data, usize::MAX, 0);
         assert_eq!(matcher.retained_bytes(), retained);
     }
@@ -1146,7 +1387,7 @@ mod tests {
         let base = matcher.activate_bucket(BucketMatcher::<false, 15>::hash(&data, 0));
         assert_eq!(&matcher.buckets[base..base + 5], &[0, 1, 2, 3, 4]);
         let capacity = matcher.buckets.capacity();
-        matcher.prepare(false, data.len(), &data);
+        matcher.prepare(false, data.len(), &data, true);
         matcher.store(&data, usize::MAX, 0);
         assert_eq!(matcher.buckets.capacity(), capacity);
     }
@@ -1203,7 +1444,7 @@ mod tests {
 
     /// Fills a matcher with the first `REPEAT_AT` positions of `data`.
     fn primed<M: Matcher>(mut matcher: M, data: &[u8]) -> M {
-        matcher.prepare(true, data.len(), data);
+        matcher.prepare(true, data.len(), data, true);
         matcher.store_range(data, usize::MAX, 0, REPEAT_AT);
         matcher
     }
@@ -1285,6 +1526,24 @@ mod tests {
     }
 
     #[test]
+    fn densifying_a_shallow_table_preserves_matches_and_reset() {
+        let data = repeated();
+        for backend in crate::compressor::Backend::available() {
+            let mut sparse = primed(BucketMatcher::<false, 14>::new(Q5_BUCKET), &data);
+            let mut dense = primed(BucketMatcher::<false, 14>::new(Q5_BUCKET), &data);
+            dense.promote_dense();
+            let expected = search_with(backend.0, &mut sparse, &data, REPEAT_AT);
+            let actual = search_with(backend.0, &mut dense, &data, REPEAT_AT);
+            assert_eq!(
+                (actual.distance, actual.len),
+                (expected.distance, expected.len)
+            );
+            dense.prepare(false, 0, &data, true);
+            assert!(!search_with(backend.0, &mut dense, &data, REPEAT_AT).is_match());
+        }
+    }
+
+    #[test]
     fn the_chain_matchers_find_a_repeat_they_have_stored() {
         let data = repeated();
         let mut h40 = primed(ChainMatcher::<1, 16>::new(Q5_CHAIN), &data);
@@ -1322,7 +1581,7 @@ mod tests {
                 bucket_bits: 15,
                 ..shape
             });
-            matcher.prepare(true, data.len(), &data);
+            matcher.prepare(true, data.len(), &data, true);
             matcher.store_range(&data, usize::MAX, 0, 512);
             let found = search_at(&mut matcher, &data, 512);
             assert!(found.is_match());
@@ -1340,7 +1599,7 @@ mod tests {
         // sixteenth has to push the oldest one out.
         let data = vec![b'a'; 256];
         let mut matcher = BucketMatcher::<false, 14>::new(Q5_BUCKET);
-        matcher.prepare(true, data.len(), &data);
+        matcher.prepare(true, data.len(), &data, true);
         matcher.store_range(&data, usize::MAX, 0, 100);
         let found = search_at(&mut matcher, &data, 100);
         assert!(found.is_match());
@@ -1351,15 +1610,15 @@ mod tests {
     fn nothing_is_found_when_the_table_holds_no_candidate() {
         let data = repeated();
         let mut matcher = QuickMatcher::<16, 1, 5, false>::new();
-        matcher.prepare(true, data.len(), &data);
+        matcher.prepare(true, data.len(), &data, true);
         assert!(!search_at(&mut matcher, &data, REPEAT_AT).is_match());
 
         let mut chain = ChainMatcher::<1, 16>::new(Q5_CHAIN);
-        chain.prepare(true, data.len(), &data);
+        chain.prepare(true, data.len(), &data, true);
         assert!(!search_at(&mut chain, &data, REPEAT_AT).is_match());
 
         let mut bucket = BucketMatcher::<false, 14>::new(Q5_BUCKET);
-        bucket.prepare(true, data.len(), &data);
+        bucket.prepare(true, data.len(), &data, true);
         assert!(!search_at(&mut bucket, &data, REPEAT_AT).is_match());
     }
 
@@ -1368,29 +1627,49 @@ mod tests {
         let data = repeated();
         let mut matcher = primed(QuickMatcher::<16, 1, 5, false>::new(), &data);
         assert!(search_at(&mut matcher, &data, REPEAT_AT).is_match());
-        matcher.prepare(false, 0, &data);
+        matcher.prepare(false, 0, &data, true);
         assert!(!search_at(&mut matcher, &data, REPEAT_AT).is_match());
 
         let mut chain = primed(ChainMatcher::<1, 16>::new(Q5_CHAIN), &data);
         assert!(search_at(&mut chain, &data, REPEAT_AT).is_match());
-        chain.prepare(false, 0, &data);
+        chain.prepare(false, 0, &data, true);
         assert!(!search_at(&mut chain, &data, REPEAT_AT).is_match());
 
         let mut bucket = primed(BucketMatcher::<false, 14>::new(Q5_BUCKET), &data);
         assert!(search_at(&mut bucket, &data, REPEAT_AT).is_match());
-        bucket.prepare(false, 0, &data);
+        bucket.prepare(false, 0, &data, true);
         assert!(!search_at(&mut bucket, &data, REPEAT_AT).is_match());
     }
 
     #[test]
     fn every_backend_agrees_on_the_match_it_finds() {
         let data = repeated();
-        let mut results = Vec::new();
-        for level in [Level::new(), Level::baseline(), Level::fallback()] {
-            let mut matcher = primed(BucketMatcher::<false, 14>::new(Q5_BUCKET), &data);
-            results.push(search_with(level, &mut matcher, &data, REPEAT_AT));
+        for block_bits in 4..=8 {
+            let shape = BucketShape {
+                bucket_bits: if block_bits <= 5 { 14 } else { 15 },
+                block_bits,
+                last_distances: 4,
+            };
+            for plan in [
+                HasherPlan::H5(shape),
+                HasherPlan::H6(BucketShape {
+                    bucket_bits: 15,
+                    ..shape
+                }),
+            ] {
+                let mut results = Vec::new();
+                for backend in crate::compressor::Backend::available() {
+                    let finder = MatchFinder::from(plan);
+                    let found = with_matcher!(finder, |matcher| {
+                        let mut matcher = primed(matcher, &data);
+                        search_with(backend.0, &mut matcher, &data, REPEAT_AT)
+                    });
+                    assert_eq!((found.distance, found.len), (64, 64));
+                    results.push(found);
+                }
+                assert!(results.windows(2).all(|pair| pair[0] == pair[1]));
+            }
         }
-        assert!(results.windows(2).all(|pair| pair[0] == pair[1]));
     }
 
     /// A payload with three copies of the body, for the stitching tests.
@@ -1407,7 +1686,7 @@ mod tests {
     fn stitching_stores_the_three_positions_before_the_boundary() {
         let data = thrice_repeated();
         let mut matcher = QuickMatcher::<16, 1, 5, false>::new();
-        matcher.prepare(true, data.len(), &data);
+        matcher.prepare(true, data.len(), &data, true);
         matcher.stitch_to_previous_block(64, REPEAT_AT, &data, usize::MAX);
         // Position 125 was stored, so the position 64 further on repeats it.
         let found = search_at(&mut matcher, &data, REPEAT_AT + 61);
@@ -1419,7 +1698,7 @@ mod tests {
     fn stitching_does_nothing_at_the_start_of_a_stream() {
         let data = thrice_repeated();
         let mut matcher = QuickMatcher::<16, 1, 5, false>::new();
-        matcher.prepare(true, data.len(), &data);
+        matcher.prepare(true, data.len(), &data, true);
         matcher.stitch_to_previous_block(64, 2, &data, usize::MAX);
         matcher.stitch_to_previous_block(1, REPEAT_AT, &data, usize::MAX);
         assert!(!search_at(&mut matcher, &data, REPEAT_AT + 61).is_match());

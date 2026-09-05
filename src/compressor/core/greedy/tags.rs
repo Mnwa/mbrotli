@@ -1,6 +1,6 @@
 //! In-bounds tag filtering, preserving the bucket's newest-to-oldest order.
 
-use fearless_simd::{Level, Simd, SimdBase, SimdMask, u8x16};
+use fearless_simd::{Level, Simd, SimdBase, SimdMask, u8x16, u8x32};
 
 /// One bit per equal byte, least significant bit for the first slot.
 #[inline(always)]
@@ -15,21 +15,47 @@ pub(super) struct Candidates {
     upper: usize,
     lower: usize,
     group: usize,
-    matches: u16,
+    matches: u32,
     slot_mask: usize,
 }
 
 impl Candidates {
     /// `count` retains the reference's wrapping u16 counter semantics.
-    pub(super) const fn new(count: u16, capacity: usize) -> Self {
+    #[inline(always)]
+    pub(super) fn new<S: Simd>(simd: S, count: u16, capacity: usize, tags: &[u8], tag: u8) -> Self {
         let upper = count as usize;
-        Self {
+        let mut result = Self {
             upper,
             lower: upper.saturating_sub(capacity),
             group: 0,
             matches: 0,
             slot_mask: capacity - 1,
+        };
+        if !matches!(simd.level(), Level::Fallback(_)) && !tags.is_empty() {
+            let mask = match capacity {
+                16 => tags.first_chunk::<16>().map(|bytes| {
+                    u32::from(matching_mask(simd, bytes, tag).rotate_right(count as u32 & 15)) << 16
+                }),
+                32 => tags.first_chunk::<32>().map(|bytes| {
+                    (u8x32::load_array_ref(simd, bytes)
+                        .simd_eq(u8x32::splat(simd, tag))
+                        .to_bitmask() as u32)
+                        .rotate_right(count as u32 & 31)
+                }),
+                _ => None,
+            };
+            if let Some(mask) = mask {
+                // Rotate newest to the highest bit, then discard unwritten slots.
+                // One vector comparison covers a complete q5/q6 bucket.
+                let active = u32::MAX
+                    .checked_shl(32 - upper.min(capacity) as u32)
+                    .unwrap_or(0);
+                result.matches = mask & active;
+                result.group = upper;
+                result.upper = result.lower;
+            }
         }
+        result
     }
 
     /// Returns a physical slot; empty tags select the unfiltered scan.
@@ -45,9 +71,9 @@ impl Candidates {
         }
         loop {
             if self.matches != 0 {
-                let lane = 15 - self.matches.leading_zeros() as usize;
+                let lane = 31 - self.matches.leading_zeros() as usize;
                 self.matches &= !(1 << lane);
-                return Some(self.group + lane);
+                return Some((self.group + lane) & self.slot_mask);
             }
             if self.upper == self.lower {
                 return None;
@@ -61,7 +87,7 @@ impl Candidates {
             // an array reference keeps vector loads bounded, even at its end.
             let bytes = tags[self.group..self.group + 16].first_chunk::<16>()?;
             let active = ((1u32 << end) - 1) ^ ((1u32 << (end - count)) - 1);
-            self.matches = matching_mask(simd, bytes, tag) & active as u16;
+            self.matches = u32::from(matching_mask(simd, bytes, tag)) & active;
         }
     }
 }
@@ -104,7 +130,7 @@ mod tests {
                             .map(|index| index & (capacity - 1))
                             .filter(|&slot| backend == Backend::SCALAR || tags[slot] == tag)
                             .collect();
-                        let mut candidates = Candidates::new(count, capacity);
+                        let mut candidates = dispatch!(backend.0, simd => Candidates::new(simd, count, capacity, &tags, tag));
                         let mut actual = Vec::new();
                         while let Some(slot) =
                             dispatch!(backend.0, simd => candidates.next(simd, &tags, tag))

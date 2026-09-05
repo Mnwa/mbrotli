@@ -23,7 +23,7 @@ pub(crate) use crate::compressor::core::shared::{bits, huffman, match_len};
 use super::dispatch::{self, Kernels};
 use fearless_simd::{Level, Simd};
 
-use self::bits::{BYTE_PADDING_SLACK, BitWriter, inject_byte_padding};
+use self::bits::{BYTE_PADDING_SLACK, BitWriter, ByteBuffer, inject_byte_padding};
 use self::constants::{OUTPUT_RESERVE_CONST, OUTPUT_SLACK, WINDOW_BITS_FAST};
 use self::q1::TwoPassState;
 use self::workspace::OnePassArena;
@@ -137,7 +137,7 @@ pub(crate) fn encode_fragment<S: Simd, const INDEPENDENT: bool>(
     input: &[u8],
     is_last: bool,
     table: &mut [i32],
-    w: &mut BitWriter,
+    w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
 ) {
     match core {
         FastCore::OnePass { arena } => q0::compress_fragment::<_, INDEPENDENT>(
@@ -351,6 +351,40 @@ impl FastEncoder {
         Ok(complete)
     }
 
+    /// Encodes directly into an append destination, initializing only output.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    pub(crate) fn encode_block_append(
+        &mut self,
+        input: &[u8],
+        is_last: bool,
+        output: &mut Vec<u8>,
+    ) -> BrotliResult<usize> {
+        debug_assert!(!self.finished);
+        debug_assert!(input.len() <= self.block_size_limit);
+        let start = output.len();
+        let position = start
+            .checked_mul(8)
+            .and_then(|bits| bits.checked_add(self.last_bytes_bits as usize))
+            .ok_or(BrotliCompressError::BufferOverflow)?;
+        output.extend_from_slice(&self.last_bytes.to_le_bytes());
+        let entries = self.prepare_table(input.len());
+        let mut writer = BitWriter::append(output, position);
+        self.kernels.fast_append(
+            &mut self.core,
+            input,
+            is_last,
+            &mut self.table[..entries],
+            &mut writer,
+        );
+        let position = writer.position();
+        let complete = position >> 3;
+        self.last_bytes = u16::from(writer.byte(complete));
+        self.last_bytes_bits = (position & 7) as u32;
+        self.finished = is_last;
+        output.truncate(complete);
+        Ok(complete - start)
+    }
+
     /// Compresses one fragment and returns the bytes it completed.
     ///
     /// A fragment shorter than [`FastEncoder::block_size_limit`] is allowed
@@ -472,6 +506,35 @@ impl FastEncoder {
 mod tests {
     use super::*;
     use crate::compressor::WindowBits;
+
+    #[test]
+    fn direct_appends_preserve_prefixes_and_partial_bytes_on_every_backend() {
+        for backend in crate::compressor::Backend::available() {
+            for quality in [QualityLevel::Q0, QualityLevel::Q1] {
+                for independent in [false, true] {
+                    let params =
+                        CompressParams::new(quality, WindowBits::standard(10).expect("window"));
+                    let mut fixed = FastEncoder::new(backend.0, &params).expect("encoder");
+                    let mut append = FastEncoder::new(backend.0, &params).expect("encoder");
+                    if independent {
+                        fixed.select_fragment_kernels(backend.0);
+                        append.select_fragment_kernels(backend.0);
+                    }
+                    let mut expected = b"existing prefix".to_vec();
+                    let mut actual = expected.clone();
+                    for (data, last) in [(&[b'a'; 1024][..], false), (&[b'b'; 17][..], true)] {
+                        let encoded = fixed.encode_block(data, last).expect("encode");
+                        expected.extend_from_slice(encoded);
+                        let written = append
+                            .encode_block_append(data, last, &mut actual)
+                            .expect("append");
+                        assert_eq!(written, encoded.len());
+                        assert_eq!(actual, expected, "{backend:?}, {quality:?}, {independent}");
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn window_header_matches_the_reference_encoding() {

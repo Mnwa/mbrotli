@@ -2,9 +2,8 @@
 //!
 //! Every case feeds identical bytes, quality, window size, and encoder mode to
 //! this crate and to Google's C Brotli exposed by the `google-brotli-ffi`
-//! workspace crate, so the two measurements are directly comparable. Both
-//! sides measure the same end-to-end shape: allocate an output buffer sized by
-//! the compressed-size bound, then compress the whole input in one shot.
+//! workspace crate. Each group documents whether compressor construction,
+//! output allocation, and streaming delivery are inside its timed operation.
 //!
 //! Corpora are generated deterministically at startup, or read from Google
 //! Brotli's own test data in `brotli-ffi/vendor/brotli/tests/testdata`, and
@@ -17,19 +16,20 @@
 //! stateful encoder makes them genuinely different work:
 //!
 //! * `cold` — build the compressor, allocate the output, compress once. This is
-//!   what a caller who compresses one thing pays, and the only shape where
-//!   construction is inside the timed region.
-//! * `first-use` — a preconstructed compressor's first encode, so construction
-//!   is out and the workspace is still cold.
+//!   what a caller who compresses one thing pays. Construction is also timed
+//!   in the cold tiny-input cases.
 //! * `reused` — repeated `compress_into` into a destination that is already big
-//!   enough. After warm-up this allocates nothing on either side.
+//!   enough. Rust retains encoder workspace; C constructs state for each stream.
 //! * `presized` — `compress_to_slice` into a caller-owned buffer.
 //! * `writer`, `reader`, `session` — the three streaming shapes, in large
 //!   chunks.
 //! * `tiny` — per-call overhead on payloads where it dominates.
 //!
-//! The C side of every shape does the equivalent work, including creating and
-//! destroying its own encoder state where the Rust side builds a compressor.
+//! Both sides reuse output storage in the reused and presized groups. C still
+//! creates and destroys encoder state for every independent stream.
+//!
+//! A full corpus checkout provides 658 paired Rust/C cases.
+//! Tiny payloads are validated at each quality before their timing begins.
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mbrotli::dictionary::DictionaryBuilder;
@@ -796,6 +796,7 @@ fn bench_tiny(criterion: &mut Criterion) {
 
         for size in TINY_SIZES {
             let data = &payload[..size];
+            validate(quality, &Corpus::new(format!("tiny-{size}"), data.to_vec()));
             group.throughput(Throughput::Bytes(size as u64));
 
             group.bench_with_input(

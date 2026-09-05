@@ -6,7 +6,7 @@
 //! ports of `EmitInsertLen`, `EmitCopyLen`, `EmitCopyLenLastDistance` and
 //! `EmitDistance` from the pinned reference.
 
-use super::bits::{BitWriter, MAX_BITS_PER_WRITE};
+use super::bits::{BitWriter, ByteBuffer, MAX_BITS_PER_WRITE};
 use super::constants::{LONG_INSERT_LIMIT, SHORT_INSERT_LIMIT};
 
 pub(crate) use crate::compressor::core::shared::fast_log::{fast_log2, log2_floor_non_zero};
@@ -14,7 +14,11 @@ pub(crate) use crate::compressor::core::shared::fast_log::{fast_log2, log2_floor
 /// Writes the meta-block header for `len` bytes.
 ///
 /// `len` must be in `1..=1 << 24`.
-pub(crate) fn store_meta_block_header(len: usize, is_uncompressed: bool, w: &mut BitWriter) {
+pub(crate) fn store_meta_block_header(
+    len: usize,
+    is_uncompressed: bool,
+    w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
+) {
     debug_assert!((1..=1 << 24).contains(&len));
     let nibbles: u32 = if len <= 1 << 16 {
         4
@@ -31,7 +35,9 @@ pub(crate) fn store_meta_block_header(len: usize, is_uncompressed: bool, w: &mut
 
 /// Quality 0 command emitters, writing prefix codes directly to the stream.
 pub(crate) mod one_pass {
-    use super::{BitWriter, LONG_INSERT_LIMIT, MAX_BITS_PER_WRITE, log2_floor_non_zero};
+    use super::{
+        BitWriter, ByteBuffer, LONG_INSERT_LIMIT, MAX_BITS_PER_WRITE, log2_floor_non_zero,
+    };
 
     /// Writes a prefix code and its extra bits as one call.
     ///
@@ -40,7 +46,13 @@ pub(crate) mod one_pass {
     /// Fusing them halves the number of stores on command-heavy data without
     /// changing a single emitted bit.
     #[inline(always)]
-    fn write_code_and_extra(depth: u8, bits: u16, extra_bits: u32, extra: u64, w: &mut BitWriter) {
+    fn write_code_and_extra(
+        depth: u8,
+        bits: u16,
+        extra_bits: u32,
+        extra: u64,
+        w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
+    ) {
         let width = u32::from(depth);
         w.write(width + extra_bits, u64::from(bits) | (extra << width));
     }
@@ -57,7 +69,7 @@ pub(crate) mod one_pass {
         code: usize,
         extra_bits: u32,
         extra: u64,
-        w: &mut BitWriter,
+        w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
     ) {
         let width = u32::from(depth[code]);
         let with_extra = u64::from(bits[code]) | (extra << width);
@@ -85,7 +97,7 @@ pub(crate) mod one_pass {
         depth: &[u8; 128],
         bits: &[u16; 128],
         histo: &mut [u32; 128],
-        w: &mut BitWriter,
+        w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
     ) {
         if insertlen < 6 {
             let code = symbol(insertlen + 40);
@@ -129,7 +141,7 @@ pub(crate) mod one_pass {
         depth: &[u8; 128],
         bits: &[u16; 128],
         histo: &mut [u32; 128],
-        w: &mut BitWriter,
+        w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
     ) {
         if insertlen < LONG_INSERT_LIMIT {
             write_code_and_extra(depth[62], bits[62], 14, (insertlen - 6210) as u64, w);
@@ -153,7 +165,7 @@ pub(crate) mod one_pass {
         depth: &[u8; 128],
         bits: &[u16; 128],
         histo: &mut [u32; 128],
-        w: &mut BitWriter,
+        w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
     ) {
         if copylen < 10 {
             let code = symbol(copylen + 14);
@@ -197,7 +209,7 @@ pub(crate) mod one_pass {
         depth: &[u8; 128],
         bits: &[u16; 128],
         histo: &mut [u32; 128],
-        w: &mut BitWriter,
+        w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
     ) {
         if copylen < 12 {
             let code = symbol(copylen - 4);
@@ -250,7 +262,7 @@ pub(crate) mod one_pass {
         depth: &[u8; 128],
         bits: &[u16; 128],
         histo: &mut [u32; 128],
-        w: &mut BitWriter,
+        w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
     ) {
         let d = distance + 3;
         let nbits = log2_floor_non_zero(d) - 1;
@@ -281,7 +293,7 @@ pub(crate) mod one_pass {
         len: usize,
         depth: &[u8; 256],
         bits: &[u16; 256],
-        w: &mut BitWriter,
+        w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
     ) {
         let Some(literals) = data.get(start..start + len) else {
             return;
@@ -342,7 +354,7 @@ pub(crate) mod one_pass {
         literals: &[u8],
         depth: &[u8; 256],
         bits: &[u16; 256],
-        w: &mut BitWriter,
+        w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
     ) {
         let mut value = 0u64;
         let mut width = 0u32;

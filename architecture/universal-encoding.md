@@ -1,5 +1,22 @@
 # Universal compression API identity
 
+Empty one-shot inputs bypass encoder allocation after the usual large-window
+validation. The private driver emits the resolved window header followed by
+`ISLAST` and `ISEMPTY`, using the fast qualities' minimum advertised window and
+omitting the window for supported experimental continuations. Tests compare this
+path directly with scheduler finalization. Existing cached encoder state remains
+available for the next non-empty call, and the public retention policy still
+applies. Non-empty streams continue through the shared scheduler.
+
+```mermaid
+flowchart LR
+    Input[One-shot input] --> Validate[Validate window support]
+    Validate --> Empty{Empty?}
+    Empty -->|yes| Header[Resolve window and terminal bits]
+    Header --> Deliver[Append or capacity-checked slice copy]
+    Empty -->|no| Encoder[Acquire encoder and run shared scheduler]
+```
+
 ## Scope
 
 For equivalent stream settings, `compress`, `compress_into`, `compress_to_slice`,
@@ -22,7 +39,8 @@ These are different compression jobs, not exceptions based on API shape.
 `core::session::SessionCore` owns session borrows, logical-position validation
 and cleanup. Encoder families retain their selected SIMD kernels.
 
-Empty input uses the configured encoder's finish path. Expanded output keeps
+Empty one-shot input emits the configured encoder's finish bits directly; sessions
+use the encoder finish path. Expanded output keeps
 its per-meta-block compressed/uncompressed choices; there is no whole-stream
 replacement based on final size. The same rules apply to all serial APIs.
 
@@ -33,6 +51,8 @@ graph TD
     Reader[EncoderReader] --> Session[EncoderSession / private SessionCore]
     Writer[EncoderWriter] --> Session
     Direct[direct session calls] --> Session
+    Driver --> Empty[empty input: resolved header and terminal bits]
+    Empty --> Bytes
     Driver --> State[private StreamState: one block schedule]
     Session --> State
     State --> Encoder[retained encoder and pinned Kernels]
@@ -42,8 +62,8 @@ graph TD
     Bytes --> Pending[bounded incremental delivery]
 ```
 
-One-shot input remains borrowed and needs no staging/pending allocation. Even
-empty input passes through the shared encoder finish path. Empty standard streams
+One-shot input remains borrowed and needs no staging/pending allocation. Empty
+one-shot input also avoids encoder allocation. Empty standard streams
 retain the resolved window header; empty Large Window streams retain the explicit
 marker and declared bits. Unsupported configurations/dictionaries are still
 rejected before compression, including for empty input.
@@ -55,6 +75,7 @@ sequenceDiagram
     participant Cache
     participant State as StreamState
     Caller->>Driver: input and append/slice destination
+    Note over Driver, State: Non-empty one-shot flow
     Driver->>Cache: acquire backend and resolved parameters
     Cache-->>Driver: reset or fresh encoder
     Driver->>State: process(input, destination, Finish)

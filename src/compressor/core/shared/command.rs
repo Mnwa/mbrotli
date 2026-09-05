@@ -37,16 +37,29 @@ pub(crate) const fn insert_length_code(insertlen: usize) -> u16 {
     }
 }
 
+/// Copy-length classes below the final unbounded code. The table removes
+/// logarithms from the repeated length-pricing loop in the Zopfli search.
+const COPY_LENGTH_CODES: [u8; 2118] = {
+    let mut codes = [0; 2118];
+    let mut length = 2;
+    let mut code = 0;
+    while length < codes.len() {
+        if length >= COPY_BASE[code + 1] as usize {
+            code += 1;
+        }
+        codes[length] = code as u8;
+        length += 1;
+    }
+    codes
+};
+
 /// Returns the prefix code of a copy length (`GetCopyLengthCode`).
 #[inline(always)]
 pub(crate) const fn copy_length_code(copylen: usize) -> u16 {
     if copylen < 10 {
         (copylen - 2) as u16
-    } else if copylen < 134 {
-        let nbits = log2_floor_non_zero(copylen - 6) - 1;
-        ((nbits << 1) + ((copylen as u32 - 6) >> nbits) + 4) as u16
-    } else if copylen < 2118 {
-        (log2_floor_non_zero(copylen - 70) + 12) as u16
+    } else if copylen < COPY_LENGTH_CODES.len() {
+        COPY_LENGTH_CODES[copylen] as u16
     } else {
         23
     }
@@ -286,21 +299,35 @@ impl Command {
 ///
 /// `span` is the stretch the search is about to process; the bytes absorbed
 /// here are removed from its front.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "mirrors ExtendLastCommand, whose parameters are all needed"
-)]
-pub(crate) fn extend_last_command(
-    command: &mut Command,
-    lgwin: usize,
-    dist: &DistanceParams,
-    last_distance: i32,
-    ringbuffer: &[u8],
-    mask: usize,
-    last_processed_pos: u64,
-    attached: Option<&crate::compressor::core::rfc9841::context::SharedContextInner>,
-    span: &mut super::ringbuffer::BlockSpan,
-) {
+pub(crate) struct CommandExtension<'a> {
+    pub(crate) command: &'a mut Command,
+    pub(crate) lgwin: usize,
+    pub(crate) dist: &'a DistanceParams,
+    pub(crate) last_distance: i32,
+    pub(crate) window: super::ringbuffer::Window<'a>,
+    pub(crate) last_processed_pos: u64,
+    pub(crate) attached: Option<&'a crate::compressor::core::rfc9841::context::SharedContextInner>,
+    pub(crate) span: &'a mut super::ringbuffer::BlockSpan,
+}
+
+/// Extends a copy with the retained encoder's selected comparison kernel.
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
+#[inline(always)]
+pub(crate) fn extend_last_command<S: fearless_simd::Simd>(simd: S, input: CommandExtension<'_>) {
+    let CommandExtension {
+        command,
+        lgwin,
+        dist,
+        last_distance,
+        window,
+        last_processed_pos,
+        attached,
+        span,
+    } = input;
+    let super::ringbuffer::Window {
+        data: ringbuffer,
+        mask,
+    } = window;
     let max_backward_distance = (1u64 << lgwin) - 16;
     let last_copy_len = u64::from(command.copy_len());
     let last_processed_pos = last_processed_pos - last_copy_len;
@@ -313,20 +340,22 @@ pub(crate) fn extend_last_command(
     {
         if cmd_dist <= max_distance {
             while span.bytes != 0 {
-                let here = usize::try_from(u64::from(span.position)).unwrap_or(0);
-                let there = usize::try_from(u64::from(span.position) - cmd_dist).unwrap_or(0);
-                let Some(&current) = ringbuffer.get(here & mask) else {
-                    break;
-                };
-                let Some(&previous) = ringbuffer.get(there & mask) else {
-                    break;
-                };
-                if current != previous {
+                let here = span.position as usize & mask;
+                let there = (u64::from(span.position) - cmd_dist) as usize & mask;
+                // Bound both contiguous slices at the physical wrap point.
+                // Re-entering the loop handles either side wrapping first.
+                let count = (span.bytes as usize)
+                    .min(mask - here + 1)
+                    .min(mask - there + 1);
+                let matched =
+                    super::match_len::find_match_length(simd, ringbuffer, here, there, count)
+                        as u32;
+                command.copy_len += matched;
+                span.bytes -= matched;
+                span.position += matched;
+                if matched as usize != count {
                     break;
                 }
-                command.copy_len += 1;
-                span.bytes -= 1;
-                span.position += 1;
             }
         } else {
             extend_into_prefix(
@@ -414,6 +443,52 @@ fn extend_into_prefix(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extending_a_copy_matches_the_byte_scan_across_both_wrap_points() {
+        use crate::compressor::Backend;
+        use crate::compressor::core::dispatch;
+        use crate::compressor::core::shared::ringbuffer::{BlockSpan, Window};
+
+        let dist = DistanceParams::default();
+        for backend in Backend::available() {
+            let kernels = dispatch::select(backend.0);
+            for position in [256, 257, 319, 383, 447, 510, 511] {
+                for distance in [1, 4, 17, 63, 128] {
+                    for mismatch in [0, 1, 7, 15, 16, 31, 32, 63, 127, 255] {
+                        let mut data = [7; 256];
+                        data[(position + mismatch) & 255] = 8;
+                        let matched = (0..192)
+                            .take_while(|&i| {
+                                data[(position + i) & 255] == data[(position + i - distance) & 255]
+                            })
+                            .count();
+                        let mut command = Command::new(&dist, 0, 4, 0, 0);
+                        let mut span = BlockSpan {
+                            position: position as u32,
+                            bytes: 192,
+                        };
+                        kernels.extend(CommandExtension {
+                            command: &mut command,
+                            lgwin: 10,
+                            dist: &dist,
+                            last_distance: distance as i32,
+                            window: Window {
+                                data: &data,
+                                mask: 255,
+                            },
+                            last_processed_pos: position as u64,
+                            attached: None,
+                            span: &mut span,
+                        });
+                        assert_eq!(command.copy_len(), 4 + matched as u32, "{backend:?}");
+                        assert_eq!(span.bytes, 192 - matched as u32);
+                        assert_eq!(span.position, (position + matched) as u32);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn insert_length_codes_cover_every_range() {

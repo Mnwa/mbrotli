@@ -5,9 +5,9 @@
 //!
 //! Three encoder families live below this module: the fast one for qualities
 //! zero and one, the greedy one for qualities two to nine, and the
-//! high-quality one for qualities ten and eleven. Empty inputs and incompressible
-//! streams follow the same scheduler as incremental calls; there are no outer
-//! one-shot bitstream rewrites.
+//! high-quality one for qualities ten and eleven. Empty one-shot inputs emit the
+//! same header and terminal bits without allocating an unused encoder. Other
+//! streams follow the incremental scheduler; no path rewrites the encoding.
 
 use fearless_simd::Level;
 
@@ -302,6 +302,26 @@ pub(crate) const fn quality_reads_a_prefix(quality: QualityLevel) -> bool {
     )
 }
 
+/// The regular window header followed by ISLAST and ISEMPTY, without allocating
+/// a matcher that cannot be consulted. This is identical to scheduler Finish
+/// on an empty first block, including the fast window floor and continuations.
+const fn empty_stream(params: &CompressParams) -> ([u8; 2], usize) {
+    let window = super::rfc9841::window::ResolvedWindow::new(params);
+    let fast = matches!(params.quality(), QualityLevel::Q0 | QualityLevel::Q1);
+    #[cfg(feature = "experimental")]
+    if !fast && params.stream_offset != 0 {
+        return ([3, 0], 1);
+    }
+    let window = if fast {
+        window.at_least(super::fast::constants::WINDOW_BITS_FAST)
+    } else {
+        window
+    };
+    let (header, bits) = window.header();
+    let complete = header | (3 << bits);
+    (complete.to_le_bytes(), ((bits + 9) >> 3) as usize)
+}
+
 /// Compresses `src` into `out`, reusing `cache` and consulting `attached`.
 ///
 /// # Errors
@@ -317,6 +337,12 @@ pub(crate) fn compress_to_vec_attached(
     out: &mut Vec<u8>,
 ) -> BrotliResult<()> {
     check_large_window(params)?;
+    if src.is_empty() {
+        let (bytes, length) = empty_stream(params);
+        out.extend_from_slice(&bytes[..length]);
+        return Ok(());
+    }
+
     let start = out.len();
     let encoder = match cache.acquire(level, params, src.len()) {
         Ok(encoder) => encoder,
@@ -351,6 +377,15 @@ pub(crate) fn compress_to_slice_attached(
     dst: &mut [u8],
 ) -> BrotliResult<usize> {
     check_large_window(params)?;
+    if src.is_empty() {
+        let (bytes, length) = empty_stream(params);
+        let Some(destination) = dst.get_mut(..length) else {
+            cache.invalidate();
+            return Err(BrotliCompressError::OutputTooSmall);
+        };
+        destination.copy_from_slice(&bytes[..length]);
+        return Ok(length);
+    }
 
     let encoder = match cache.acquire(level, params, src.len()) {
         Ok(encoder) => encoder,
@@ -372,6 +407,83 @@ pub(crate) fn compress_to_slice_attached(
 mod tests {
     use super::*;
     use crate::compressor::{QualityLevel, WindowBits};
+
+    #[test]
+    #[cfg(feature = "experimental")]
+    fn empty_continuation_headers_match_scheduler_finalization() {
+        for quality in [QualityLevel::Q0, QualityLevel::Q2, QualityLevel::Q11] {
+            let mut params = CompressParams::new(quality, WindowBits::DEFAULT);
+            params.stream_offset = 123;
+            let mut encoder = Encoder::new(Level::fallback(), &params, 0).expect("encoder");
+            let mut expected = Vec::new();
+            finish(&mut encoder, None, &[], Destination::Append(&mut expected)).expect("finish");
+            let (bytes, length) = empty_stream(&params);
+            assert_eq!(&bytes[..length], expected);
+        }
+    }
+
+    #[test]
+    fn empty_one_shot_headers_match_the_scheduler_without_allocating_an_encoder() {
+        for quality in [
+            QualityLevel::Q0,
+            QualityLevel::Q1,
+            QualityLevel::Q2,
+            QualityLevel::Q3,
+            QualityLevel::Q4,
+            QualityLevel::Q5,
+            QualityLevel::Q6,
+            QualityLevel::Q7,
+            QualityLevel::Q8,
+            QualityLevel::Q9,
+            QualityLevel::Q10,
+            QualityLevel::Q11,
+        ] {
+            for window in [10, 16, 17, 22] {
+                let params =
+                    CompressParams::new(quality, WindowBits::standard(window).expect("window"));
+                let mut encoder = Encoder::new(Level::fallback(), &params, 0).expect("encoder");
+                let mut expected = Vec::new();
+                finish(&mut encoder, None, &[], Destination::Append(&mut expected))
+                    .expect("finish");
+                let mut cache = EncoderCache::default();
+                let mut actual = b"prefix".to_vec();
+                compress_to_vec_attached(
+                    &mut cache,
+                    Level::fallback(),
+                    &params,
+                    None,
+                    &[],
+                    &mut actual,
+                )
+                .expect("append");
+                assert_eq!(&actual[..6], b"prefix");
+                assert_eq!(&actual[6..], expected);
+                assert_eq!(cache.retained_bytes(), 0);
+                let mut destination = [0; 2];
+                let written = compress_to_slice_attached(
+                    &mut cache,
+                    Level::fallback(),
+                    &params,
+                    None,
+                    &[],
+                    &mut destination,
+                )
+                .expect("slice");
+                assert_eq!(&destination[..written], expected);
+                assert!(
+                    compress_to_slice_attached(
+                        &mut cache,
+                        Level::fallback(),
+                        &params,
+                        None,
+                        &[],
+                        &mut destination[..written - 1]
+                    )
+                    .is_err()
+                );
+            }
+        }
+    }
 
     /// Compresses `src` through a throwaway workspace, as the tests need.
     fn compress_to_vec(

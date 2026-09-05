@@ -581,9 +581,11 @@ impl<'a> BlockEncoder<'a> {
 }
 
 /// Scratch state the meta-block writer reuses between blocks.
+/// Default construction defers allocation until a code needs its buffers.
+#[derive(Default)]
 pub(crate) struct MetaBlockWriter {
     tree: Vec<HuffmanNode>,
-    arena: ContextMapArena,
+    arena: Option<ContextMapArena>,
     literal_depth: Vec<u8>,
     literal_bits: Vec<u16>,
     command_depth: Vec<u8>,
@@ -592,27 +594,37 @@ pub(crate) struct MetaBlockWriter {
     distance_bits: Vec<u16>,
 }
 
-impl Default for MetaBlockWriter {
-    /// Allocates every buffer the writer needs, once.
-    fn default() -> Self {
-        Self {
-            tree: vec![HuffmanNode::default(); MAX_HUFFMAN_TREE_SIZE],
-            arena: ContextMapArena::new(),
-            literal_depth: vec![0; NUM_LITERAL_SYMBOLS],
-            literal_bits: vec![0; NUM_LITERAL_SYMBOLS],
-            command_depth: vec![0; NUM_COMMAND_SYMBOLS],
-            command_bits: vec![0; NUM_COMMAND_SYMBOLS],
-            distance_depth: vec![0; MAX_SIMPLE_DISTANCE_ALPHABET_SIZE],
-            distance_bits: vec![0; MAX_SIMPLE_DISTANCE_ALPHABET_SIZE],
-        }
-    }
-}
-
 impl MetaBlockWriter {
+    /// Ensures room for one literal code, bounded by the number of literals.
+    fn prepare_literals(&mut self, num_literals: usize) {
+        let nodes = tree_capacity(num_literals.min(NUM_LITERAL_SYMBOLS));
+        if self.tree.len() < nodes {
+            self.tree.resize(nodes, HuffmanNode::default());
+        }
+        self.literal_depth.resize(NUM_LITERAL_SYMBOLS, 0);
+        self.literal_bits.resize(NUM_LITERAL_SYMBOLS, 0);
+    }
+
+    /// Ensures room for the three codes used without block splitting.
+    fn prepare_simple_codes(&mut self) {
+        self.prepare_literals(NUM_LITERAL_SYMBOLS);
+        self.tree
+            .resize(MAX_HUFFMAN_TREE_SIZE, HuffmanNode::default());
+        self.command_depth.resize(NUM_COMMAND_SYMBOLS, 0);
+        self.command_bits.resize(NUM_COMMAND_SYMBOLS, 0);
+        self.distance_depth
+            .resize(MAX_SIMPLE_DISTANCE_ALPHABET_SIZE, 0);
+        self.distance_bits
+            .resize(MAX_SIMPLE_DISTANCE_ALPHABET_SIZE, 0);
+    }
+
     /// Counts the retained entropy and context-map scratch buffers.
     pub(crate) fn retained_bytes(&self) -> usize {
         self.tree.capacity() * size_of::<HuffmanNode>()
-            + self.arena.rle_symbols.capacity() * size_of::<u32>()
+            + self
+                .arena
+                .as_ref()
+                .map_or(0, |arena| arena.rle_symbols.capacity() * size_of::<u32>())
             + self.literal_depth.capacity()
             + self.command_depth.capacity()
             + self.distance_depth.capacity()
@@ -645,6 +657,8 @@ impl MetaBlockWriter {
         mb: &MetaBlockSplit,
         w: &mut BitWriter,
     ) {
+        self.tree
+            .resize(MAX_HUFFMAN_TREE_SIZE, HuffmanNode::default());
         let num_distance_symbols = dist.alphabet_size_max as usize;
         let num_effective_distance_symbols = dist.alphabet_size_limit as usize;
 
@@ -681,7 +695,7 @@ impl MetaBlockWriter {
 
         if mb.literal_context_map.is_empty() {
             store_trivial_context_map(
-                &mut self.arena,
+                self.arena.get_or_insert_with(ContextMapArena::new),
                 mb.literal_histograms.len(),
                 LITERAL_CONTEXT_BITS,
                 &mut self.tree,
@@ -689,7 +703,7 @@ impl MetaBlockWriter {
             );
         } else {
             encode_context_map(
-                &mut self.arena,
+                self.arena.get_or_insert_with(ContextMapArena::new),
                 &mb.literal_context_map,
                 mb.literal_histograms.len(),
                 &mut self.tree,
@@ -698,7 +712,7 @@ impl MetaBlockWriter {
         }
         if mb.distance_context_map.is_empty() {
             store_trivial_context_map(
-                &mut self.arena,
+                self.arena.get_or_insert_with(ContextMapArena::new),
                 mb.distance_histograms.len(),
                 DISTANCE_CONTEXT_BITS,
                 &mut self.tree,
@@ -706,7 +720,7 @@ impl MetaBlockWriter {
             );
         } else {
             encode_context_map(
-                &mut self.arena,
+                self.arena.get_or_insert_with(ContextMapArena::new),
                 &mb.distance_context_map,
                 mb.distance_histograms.len(),
                 &mut self.tree,
@@ -835,6 +849,7 @@ impl MetaBlockWriter {
                 num_literals += command.insert_len as usize;
                 pos += command.copy_len() as usize;
             }
+            self.prepare_literals(num_literals);
             build_and_store_huffman_tree_fast(
                 &mut self.tree,
                 &literals,
@@ -860,6 +875,7 @@ impl MetaBlockWriter {
                 w,
             );
         } else {
+            self.prepare_simple_codes();
             let mut lit_histo = super::histogram::HistogramLiteral::default();
             let mut cmd_histo = super::histogram::HistogramCommand::default();
             let mut dist_histo = super::histogram::HistogramDistance::default();
@@ -938,6 +954,7 @@ impl MetaBlockWriter {
         commands: &[Command],
         w: &mut BitWriter,
     ) {
+        self.prepare_simple_codes();
         let num_distance_symbols = dist.alphabet_size_max as usize;
 
         store_compressed_meta_block_header(is_last, length, w);
@@ -1141,6 +1158,47 @@ pub(crate) fn store_uncompressed_meta_block(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn small_static_blocks_allocate_only_literal_scratch_and_match_preallocated_storage() {
+        let mut lazy = MetaBlockWriter::default();
+        assert_eq!(lazy.retained_bytes(), 0);
+        for length in [1, 2, 3, 4, 16, 128, 129, 256] {
+            let data: Vec<u8> = (0..length).map(|i| i as u8).collect();
+            let commands = [Command::insert_only(length)];
+            let mut preallocated = MetaBlockWriter::default();
+            preallocated.prepare_simple_codes();
+            let expected = written(|writer| {
+                preallocated.store_meta_block_fast(
+                    &data,
+                    0,
+                    length,
+                    usize::MAX,
+                    true,
+                    &DistanceParams::default(),
+                    &commands,
+                    writer,
+                );
+            });
+            let actual = written(|writer| {
+                lazy.store_meta_block_fast(
+                    &data,
+                    0,
+                    length,
+                    usize::MAX,
+                    true,
+                    &DistanceParams::default(),
+                    &commands,
+                    writer,
+                );
+            });
+            assert_eq!(actual, expected);
+            assert!(lazy.command_depth.is_empty());
+            assert!(lazy.distance_depth.is_empty());
+            assert!(lazy.arena.is_none());
+            assert!(lazy.retained_bytes() < preallocated.retained_bytes());
+        }
+    }
 
     #[test]
     fn block_length_codes_cover_their_ranges() {

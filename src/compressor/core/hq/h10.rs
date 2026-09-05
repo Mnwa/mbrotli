@@ -204,7 +204,7 @@ impl BinaryTreeMatcher {
         clippy::too_many_arguments,
         reason = "mirrors StoreAndFindMatches, whose parameters are all needed"
     )]
-    #[inline]
+    #[inline(always)]
     fn store_and_find_matches<S: Simd>(
         &mut self,
         simd: S,
@@ -322,82 +322,87 @@ impl BinaryTreeMatcher {
         short_scan: usize,
         matches: &mut Vec<BackwardMatch>,
     ) -> usize {
-        let start = matches.len();
-        let cur_ix_masked = cur_ix & ring_buffer_mask;
-        let mut best_len = 1usize;
+        simd.vectorize(
+            #[inline(always)]
+            || {
+                let start = matches.len();
+                let cur_ix_masked = cur_ix & ring_buffer_mask;
+                let mut best_len = 1usize;
 
-        // A short backward scan first: nearby two-byte repeats are cheap to
-        // find and the tree, which only indexes four-byte prefixes, misses
-        // them entirely.
-        let stop = cur_ix.saturating_sub(short_scan);
-        // At position zero `index` wraps, exactly as the reference's `size_t`
-        // does; the backward limit is zero there, so the first test breaks out
-        // before anything is read.
-        let mut index = cur_ix.wrapping_sub(1);
-        while index > stop && best_len <= 2 {
-            let backward = cur_ix.wrapping_sub(index);
-            if backward > max_backward {
-                break;
-            }
-            let prev_ix = index & ring_buffer_mask;
-            index = index.wrapping_sub(1);
-            if data.get(cur_ix_masked) != data.get(prev_ix)
-                || data.get(cur_ix_masked + 1) != data.get(prev_ix + 1)
-            {
-                continue;
-            }
-            let len = find_match_length(simd, data, prev_ix, cur_ix_masked, max_length);
-            if len > best_len {
-                best_len = len;
-                matches.push(BackwardMatch::new(backward, len));
-            }
-        }
-
-        if best_len < max_length {
-            self.store_and_find_matches(
-                simd,
-                data,
-                cur_ix,
-                ring_buffer_mask,
-                max_length,
-                max_backward,
-                &mut best_len,
-                matches,
-                true,
-            );
-        }
-
-        // Static-dictionary words, which sit past every real distance.
-        if dictionary_distance > max_distance {
-            return matches.len() - start;
-        }
-        let min_len = best_len.saturating_add(1).max(4);
-        let mut found = [INVALID_MATCH; MAX_STATIC_DICTIONARY_MATCH_LEN + 1];
-        if all_matches::find_all(
-            data.get(cur_ix_masked..).unwrap_or_default(),
-            min_len,
-            max_length,
-            &mut found,
-        ) {
-            let max_len = max_length.min(MAX_STATIC_DICTIONARY_MATCH_LEN);
-            for length in min_len..=max_len {
-                let Some(&packed) = found.get(length) else {
-                    continue;
-                };
-                if packed >= INVALID_MATCH {
-                    continue;
+                // A short backward scan first: nearby two-byte repeats are cheap to
+                // find and the tree, which only indexes four-byte prefixes, misses
+                // them entirely.
+                let stop = cur_ix.saturating_sub(short_scan);
+                // At position zero `index` wraps, exactly as the reference's `size_t`
+                // does; the backward limit is zero there, so the first test breaks out
+                // before anything is read.
+                let mut index = cur_ix.wrapping_sub(1);
+                while index > stop && best_len <= 2 {
+                    let backward = cur_ix.wrapping_sub(index);
+                    if backward > max_backward {
+                        break;
+                    }
+                    let prev_ix = index & ring_buffer_mask;
+                    index = index.wrapping_sub(1);
+                    if data.get(cur_ix_masked) != data.get(prev_ix)
+                        || data.get(cur_ix_masked + 1) != data.get(prev_ix + 1)
+                    {
+                        continue;
+                    }
+                    let len = find_match_length(simd, data, prev_ix, cur_ix_masked, max_length);
+                    if len > best_len {
+                        best_len = len;
+                        matches.push(BackwardMatch::new(backward, len));
+                    }
                 }
-                let distance = dictionary_distance + (packed >> 5) as usize + 1;
-                if distance <= max_distance {
-                    matches.push(BackwardMatch::dictionary(
-                        distance,
-                        length,
-                        (packed & 31) as usize,
-                    ));
+
+                if best_len < max_length {
+                    self.store_and_find_matches(
+                        simd,
+                        data,
+                        cur_ix,
+                        ring_buffer_mask,
+                        max_length,
+                        max_backward,
+                        &mut best_len,
+                        matches,
+                        true,
+                    );
                 }
-            }
-        }
-        matches.len() - start
+
+                // Static-dictionary words, which sit past every real distance.
+                if dictionary_distance > max_distance {
+                    return matches.len() - start;
+                }
+                let min_len = best_len.saturating_add(1).max(4);
+                let mut found = [INVALID_MATCH; MAX_STATIC_DICTIONARY_MATCH_LEN + 1];
+                if all_matches::find_all(
+                    data.get(cur_ix_masked..).unwrap_or_default(),
+                    min_len,
+                    max_length,
+                    &mut found,
+                ) {
+                    let max_len = max_length.min(MAX_STATIC_DICTIONARY_MATCH_LEN);
+                    for length in min_len..=max_len {
+                        let Some(&packed) = found.get(length) else {
+                            continue;
+                        };
+                        if packed >= INVALID_MATCH {
+                            continue;
+                        }
+                        let distance = dictionary_distance + (packed >> 5) as usize + 1;
+                        if distance <= max_distance {
+                            matches.push(BackwardMatch::dictionary(
+                                distance,
+                                length,
+                                (packed & 31) as usize,
+                            ));
+                        }
+                    }
+                }
+                matches.len() - start
+            },
+        )
     }
 
     /// Re-roots the tree at `ix` without collecting matches (`Store`).
@@ -405,19 +410,24 @@ impl BinaryTreeMatcher {
     /// Requires `ix + MAX_TREE_COMP_LENGTH` bytes of the current block to be
     /// available, which the callers guarantee through their store bounds.
     pub(crate) fn store<S: Simd>(&mut self, simd: S, data: &[u8], mask: usize, ix: usize) {
-        let max_backward = self.window_mask - WINDOW_GAP + 1;
-        let mut best_len = 0usize;
-        let mut discard = Vec::new();
-        self.store_and_find_matches(
-            simd,
-            data,
-            ix,
-            mask,
-            MAX_TREE_COMP_LENGTH,
-            max_backward,
-            &mut best_len,
-            &mut discard,
-            false,
+        simd.vectorize(
+            #[inline(always)]
+            || {
+                let max_backward = self.window_mask - WINDOW_GAP + 1;
+                let mut best_len = 0usize;
+                let mut discard = Vec::new();
+                self.store_and_find_matches(
+                    simd,
+                    data,
+                    ix,
+                    mask,
+                    MAX_TREE_COMP_LENGTH,
+                    max_backward,
+                    &mut best_len,
+                    &mut discard,
+                    false,
+                );
+            },
         );
     }
 

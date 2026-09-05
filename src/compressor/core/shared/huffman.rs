@@ -5,7 +5,7 @@
 //! Tie-breaking, sort order and the RLE representation of code lengths are all
 //! observable in the bitstream, so this module reproduces them exactly.
 
-use super::bits::BitWriter;
+use super::bits::{BitWriter, ByteBuffer};
 use super::constants::{
     CODE_LENGTH_CODES, INITIAL_REPEATED_CODE_LENGTH, NUM_COMMAND_SYMBOLS,
     REPEAT_PREVIOUS_CODE_LENGTH, REPEAT_ZERO_CODE_LENGTH,
@@ -405,7 +405,11 @@ fn write_huffman_tree(depth: &[u8], length: usize) -> CodeLengthRuns {
 }
 
 /// Stores the code that compresses the code-length alphabet itself.
-fn store_code_length_code(num_codes: i32, bitdepth: &[u8; CODE_LENGTH_CODES], w: &mut BitWriter) {
+fn store_code_length_code(
+    num_codes: i32,
+    bitdepth: &[u8; CODE_LENGTH_CODES],
+    w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
+) {
     let mut codes_to_store = CODE_LENGTH_CODES;
     if num_codes > 1 {
         while codes_to_store > 0 {
@@ -439,7 +443,7 @@ pub(crate) fn store_huffman_tree(
     depths: &[u8],
     num: usize,
     tree: &mut [HuffmanNode],
-    w: &mut BitWriter,
+    w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
 ) {
     debug_assert!(num <= NUM_COMMAND_SYMBOLS);
     let runs = write_huffman_tree(depths, num);
@@ -491,7 +495,7 @@ fn store_simple_code(
     symbols: &mut [usize; 4],
     count: usize,
     max_bits: u32,
-    w: &mut BitWriter,
+    w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
 ) {
     w.write(2, 1);
     w.write(2, (count - 1) as u64);
@@ -523,7 +527,7 @@ pub(crate) fn build_and_store_huffman_tree_fast(
     max_bits: u32,
     depth: &mut [u8],
     bits: &mut [u16],
-    w: &mut BitWriter,
+    w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
 ) {
     let mut count = 0usize;
     let mut symbols = [0usize; 4];
@@ -629,7 +633,7 @@ pub(crate) fn build_and_store_huffman_tree(
     tree: &mut [HuffmanNode],
     depth: &mut [u8],
     bits: &mut [u16],
-    w: &mut BitWriter,
+    w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
 ) {
     let mut count = 0usize;
     let mut symbols = [0usize; 4];

@@ -122,235 +122,247 @@ pub(crate) fn create_backward_references<
     state: &mut ReferenceState,
     commands: &mut Vec<Command>,
 ) {
-    let Window {
-        data: ringbuffer,
-        mask,
-    } = window;
-    let num_bytes = span.bytes as usize;
-    let mut position = span.position as usize;
-    let max_backward_limit = params.max_backward_limit();
-    #[cfg(feature = "experimental")]
-    let position_offset = params.stream_offset;
-    #[cfg(not(feature = "experimental"))]
-    let position_offset = 0;
-    let mut insert_length = state.last_insert_len;
-    let pos_end = position + num_bytes;
-    let store_end = if num_bytes >= M::STORE_LOOKAHEAD {
-        position + num_bytes - M::STORE_LOOKAHEAD + 1
-    } else {
-        position
-    };
-
-    // Every distance that addresses the attached dictionary is shifted past
-    // the window by this much. Without `ENABLE_PREFIX` it is a compile-time
-    // zero, so every `+ gap` below folds away.
-    let gap = if ENABLE_PREFIX {
-        attached.map_or(0, SharedContextInner::total_size)
-    } else {
-        0
-    };
-    let max_distance_code = params.dist.max_distance as usize;
-
-    let window = params.random_heuristics_window_size();
-    let mut apply_random_heuristics = position + window;
-    let extensive = params.quality.extensive_reference_search();
-    // The derived cache entries are a function of the four remembered ones, so
-    // they are refreshed here and again whenever a command changes them.
-    let last_distances = matcher.last_distances_to_check();
-    prepare_distance_cache(&mut state.dist_cache, last_distances);
-
-    while position + M::HASH_TYPE_LENGTH < pos_end {
-        let mut max_length = pos_end - position;
-        let mut max_distance = position.min(max_backward_limit);
-        let mut dictionary_start = (position + position_offset).min(max_backward_limit);
-        let mut sr = SearchResult::empty();
-        matcher.find_longest_match(
-            simd,
-            &mut state.dictionary,
-            MatchQuery {
-                #[cfg(feature = "experimental")]
-                custom: if ENABLE_PREFIX {
-                    attached.and_then(|c| c.static_index.as_ref()).map(|index| {
-                        index.combination(super::context_model::context(
-                            crate::compressor::core::rfc9841::static_index::previous(
-                                ringbuffer, position, mask, 1,
-                            ),
-                            crate::compressor::core::rfc9841::static_index::previous(
-                                ringbuffer, position, mask, 2,
-                            ),
-                        ))
-                    })
-                } else {
-                    None
-                },
+    // Enter the selected feature context after specializing the matcher. This
+    // keeps vector operations inline without merging every matcher into one
+    // large feature-enabled function at the outer dispatch boundary.
+    simd.vectorize(
+        #[inline(always)]
+        || {
+            let Window {
                 data: ringbuffer,
                 mask,
-                cache: &state.dist_cache,
-                cur_ix: position,
-                max_length,
-                max_backward: max_distance,
-                dictionary_distance: dictionary_start + gap,
-                max_distance: max_distance_code,
-            },
-            &mut sr,
-        );
-        if ENABLE_PREFIX && let Some(context) = attached {
-            context.find_match(
-                ringbuffer,
-                mask,
-                &state.dist_cache,
-                position,
-                max_length,
-                dictionary_start,
-                max_distance_code,
-                &mut sr,
-            );
-        }
-
-        if !sr.is_match() {
-            insert_length += 1;
-            position += 1;
-            if position <= apply_random_heuristics {
-                continue;
-            }
-            // Nothing has matched for a long time. Storing every position of
-            // incompressible data costs time and floods the table, so the scan
-            // strides forward and only stores part of what it skips.
-            let (stride, margin_floor) = if position > apply_random_heuristics + 4 * window {
-                (4usize, 4usize)
+            } = window;
+            let num_bytes = span.bytes as usize;
+            let mut position = span.position as usize;
+            let max_backward_limit = params.max_backward_limit();
+            #[cfg(feature = "experimental")]
+            let position_offset = params.stream_offset;
+            #[cfg(not(feature = "experimental"))]
+            let position_offset = 0;
+            let mut insert_length = state.last_insert_len;
+            let pos_end = position + num_bytes;
+            let store_end = if num_bytes >= M::STORE_LOOKAHEAD {
+                position + num_bytes - M::STORE_LOOKAHEAD + 1
             } else {
-                (2usize, 2usize)
+                position
             };
-            let margin = (M::STORE_LOOKAHEAD - 1).max(margin_floor);
-            let pos_jump = (position + 4 * stride).min(pos_end.saturating_sub(margin));
-            while position < pos_jump {
-                matcher.store(ringbuffer, mask, position);
-                insert_length += stride;
-                position += stride;
-            }
-            continue;
-        }
 
-        // A match is available; look one byte ahead for a better one, up to
-        // four times in a row.
-        let mut delayed = 0usize;
-        max_length -= 1;
-        loop {
-            let mut sr2 = SearchResult {
-                // Below quality five the delayed search starts from the length
-                // it already has, which lets the matcher reject most
-                // candidates without measuring them. Quality five gives that
-                // shortcut up and searches everything again.
-                len: if extensive {
-                    0
-                } else {
-                    (sr.len - 1).min(max_length)
-                },
-                distance: 0,
-                score: MIN_SCORE,
-                len_code_delta: 0,
+            // Every distance that addresses the attached dictionary is shifted past
+            // the window by this much. Without `ENABLE_PREFIX` it is a compile-time
+            // zero, so every `+ gap` below folds away.
+            let gap = if ENABLE_PREFIX {
+                attached.map_or(0, SharedContextInner::total_size)
+            } else {
+                0
             };
-            max_distance = (position + 1).min(max_backward_limit);
-            dictionary_start = (position + 1 + position_offset).min(max_backward_limit);
-            matcher.find_longest_match(
-                simd,
-                &mut state.dictionary,
-                MatchQuery {
-                    #[cfg(feature = "experimental")]
-                    custom: if ENABLE_PREFIX {
-                        attached.and_then(|c| c.static_index.as_ref()).map(|index| {
-                            index.combination(super::context_model::context(
-                                crate::compressor::core::rfc9841::static_index::previous(
-                                    ringbuffer,
-                                    position + 1,
-                                    mask,
-                                    1,
-                                ),
-                                crate::compressor::core::rfc9841::static_index::previous(
-                                    ringbuffer,
-                                    position + 1,
-                                    mask,
-                                    2,
-                                ),
-                            ))
-                        })
-                    } else {
-                        None
+            let max_distance_code = params.dist.max_distance as usize;
+
+            let window = params.random_heuristics_window_size();
+            let mut apply_random_heuristics = position + window;
+            let extensive = params.quality.extensive_reference_search();
+            // The derived cache entries are a function of the four remembered ones, so
+            // they are refreshed here and again whenever a command changes them.
+            let last_distances = matcher.last_distances_to_check();
+            prepare_distance_cache(&mut state.dist_cache, last_distances);
+
+            while position + M::HASH_TYPE_LENGTH < pos_end {
+                let mut max_length = pos_end - position;
+                let mut max_distance = position.min(max_backward_limit);
+                let mut dictionary_start = (position + position_offset).min(max_backward_limit);
+                let mut sr = SearchResult::empty();
+                matcher.find_longest_match(
+                    simd,
+                    &mut state.dictionary,
+                    MatchQuery {
+                        #[cfg(feature = "experimental")]
+                        custom: if ENABLE_PREFIX {
+                            attached.and_then(|c| c.static_index.as_ref()).map(|index| {
+                                index.combination(super::context_model::context(
+                                    crate::compressor::core::rfc9841::static_index::previous(
+                                        ringbuffer, position, mask, 1,
+                                    ),
+                                    crate::compressor::core::rfc9841::static_index::previous(
+                                        ringbuffer, position, mask, 2,
+                                    ),
+                                ))
+                            })
+                        } else {
+                            None
+                        },
+                        data: ringbuffer,
+                        mask,
+                        cache: &state.dist_cache,
+                        cur_ix: position,
+                        max_length,
+                        max_backward: max_distance,
+                        dictionary_distance: dictionary_start + gap,
+                        max_distance: max_distance_code,
                     },
-                    data: ringbuffer,
-                    mask,
-                    cache: &state.dist_cache,
-                    cur_ix: position + 1,
-                    max_length,
-                    max_backward: max_distance,
-                    dictionary_distance: dictionary_start + gap,
-                    max_distance: max_distance_code,
-                },
-                &mut sr2,
-            );
-            if ENABLE_PREFIX && let Some(context) = attached {
-                context.find_match(
-                    ringbuffer,
-                    mask,
-                    &state.dist_cache,
-                    position + 1,
-                    max_length,
-                    dictionary_start,
-                    max_distance_code,
-                    &mut sr2,
+                    &mut sr,
                 );
-            }
-            if sr2.score >= sr.score + COST_DIFF_LAZY {
-                // Emit one more literal and start the match a byte later.
-                position += 1;
-                insert_length += 1;
-                sr = sr2;
-                delayed += 1;
-                if delayed < MAX_DELAYED_IN_A_ROW && position + M::HASH_TYPE_LENGTH < pos_end {
-                    max_length -= 1;
+                if ENABLE_PREFIX && let Some(context) = attached {
+                    context.find_match(
+                        ringbuffer,
+                        mask,
+                        &state.dist_cache,
+                        position,
+                        max_length,
+                        dictionary_start,
+                        max_distance_code,
+                        &mut sr,
+                    );
+                }
+
+                if !sr.is_match() {
+                    insert_length += 1;
+                    position += 1;
+                    if position <= apply_random_heuristics {
+                        continue;
+                    }
+                    // Nothing has matched for a long time. Storing every position of
+                    // incompressible data costs time and floods the table, so the scan
+                    // strides forward and only stores part of what it skips.
+                    let (stride, margin_floor) = if position > apply_random_heuristics + 4 * window
+                    {
+                        (4usize, 4usize)
+                    } else {
+                        (2usize, 2usize)
+                    };
+                    let margin = (M::STORE_LOOKAHEAD - 1).max(margin_floor);
+                    let pos_jump = (position + 4 * stride).min(pos_end.saturating_sub(margin));
+                    while position < pos_jump {
+                        matcher.store(ringbuffer, mask, position);
+                        insert_length += stride;
+                        position += stride;
+                    }
                     continue;
                 }
+
+                // A match is available; look one byte ahead for a better one, up to
+                // four times in a row.
+                let mut delayed = 0usize;
+                max_length -= 1;
+                loop {
+                    let mut sr2 = SearchResult {
+                        // Below quality five the delayed search starts from the length
+                        // it already has, which lets the matcher reject most
+                        // candidates without measuring them. Quality five gives that
+                        // shortcut up and searches everything again.
+                        len: if extensive {
+                            0
+                        } else {
+                            (sr.len - 1).min(max_length)
+                        },
+                        distance: 0,
+                        score: MIN_SCORE,
+                        len_code_delta: 0,
+                    };
+                    max_distance = (position + 1).min(max_backward_limit);
+                    dictionary_start = (position + 1 + position_offset).min(max_backward_limit);
+                    matcher.find_longest_match(
+                        simd,
+                        &mut state.dictionary,
+                        MatchQuery {
+                            #[cfg(feature = "experimental")]
+                            custom: if ENABLE_PREFIX {
+                                attached.and_then(|c| c.static_index.as_ref()).map(|index| {
+                                    index.combination(super::context_model::context(
+                                        crate::compressor::core::rfc9841::static_index::previous(
+                                            ringbuffer,
+                                            position + 1,
+                                            mask,
+                                            1,
+                                        ),
+                                        crate::compressor::core::rfc9841::static_index::previous(
+                                            ringbuffer,
+                                            position + 1,
+                                            mask,
+                                            2,
+                                        ),
+                                    ))
+                                })
+                            } else {
+                                None
+                            },
+                            data: ringbuffer,
+                            mask,
+                            cache: &state.dist_cache,
+                            cur_ix: position + 1,
+                            max_length,
+                            max_backward: max_distance,
+                            dictionary_distance: dictionary_start + gap,
+                            max_distance: max_distance_code,
+                        },
+                        &mut sr2,
+                    );
+                    if ENABLE_PREFIX && let Some(context) = attached {
+                        context.find_match(
+                            ringbuffer,
+                            mask,
+                            &state.dist_cache,
+                            position + 1,
+                            max_length,
+                            dictionary_start,
+                            max_distance_code,
+                            &mut sr2,
+                        );
+                    }
+                    if sr2.score >= sr.score + COST_DIFF_LAZY {
+                        // Emit one more literal and start the match a byte later.
+                        position += 1;
+                        insert_length += 1;
+                        sr = sr2;
+                        delayed += 1;
+                        if delayed < MAX_DELAYED_IN_A_ROW
+                            && position + M::HASH_TYPE_LENGTH < pos_end
+                        {
+                            max_length -= 1;
+                            continue;
+                        }
+                    }
+                    break;
+                }
+
+                apply_random_heuristics = position + 2 * sr.len + window;
+                dictionary_start = (position + position_offset).min(max_backward_limit);
+                let distance_code = if INDEPENDENT {
+                    sr.distance + NUM_DISTANCE_SHORT_CODES as usize - 1
+                } else {
+                    compute_distance_code(sr.distance, dictionary_start + gap, &state.dist_cache)
+                };
+                if sr.distance <= dictionary_start + gap && distance_code > 0 {
+                    state.dist_cache[3] = state.dist_cache[2];
+                    state.dist_cache[2] = state.dist_cache[1];
+                    state.dist_cache[1] = state.dist_cache[0];
+                    state.dist_cache[0] = sr.distance as i32;
+                    prepare_distance_cache(&mut state.dist_cache, last_distances);
+                }
+                commands.push(Command::new(
+                    &params.dist,
+                    insert_length,
+                    sr.len,
+                    sr.len_code_delta,
+                    distance_code,
+                ));
+                state.num_literals += insert_length;
+                insert_length = 0;
+
+                // Store the positions the match covered, skipping the ones a run-length
+                // repeat would only poison the table with.
+                let mut range_start = position + 2;
+                let range_end = (position + sr.len).min(store_end);
+                if sr.distance < (sr.len >> 2) {
+                    range_start =
+                        range_end.min(range_start.max(position + sr.len - (sr.distance << 2)));
+                }
+                matcher.store_range(ringbuffer, mask, range_start, range_end);
+                position += sr.len;
             }
-            break;
-        }
 
-        apply_random_heuristics = position + 2 * sr.len + window;
-        dictionary_start = (position + position_offset).min(max_backward_limit);
-        let distance_code = if INDEPENDENT {
-            sr.distance + NUM_DISTANCE_SHORT_CODES as usize - 1
-        } else {
-            compute_distance_code(sr.distance, dictionary_start + gap, &state.dist_cache)
-        };
-        if sr.distance <= dictionary_start + gap && distance_code > 0 {
-            state.dist_cache[3] = state.dist_cache[2];
-            state.dist_cache[2] = state.dist_cache[1];
-            state.dist_cache[1] = state.dist_cache[0];
-            state.dist_cache[0] = sr.distance as i32;
-            prepare_distance_cache(&mut state.dist_cache, last_distances);
-        }
-        commands.push(Command::new(
-            &params.dist,
-            insert_length,
-            sr.len,
-            sr.len_code_delta,
-            distance_code,
-        ));
-        state.num_literals += insert_length;
-        insert_length = 0;
-
-        // Store the positions the match covered, skipping the ones a run-length
-        // repeat would only poison the table with.
-        let mut range_start = position + 2;
-        let range_end = (position + sr.len).min(store_end);
-        if sr.distance < (sr.len >> 2) {
-            range_start = range_end.min(range_start.max(position + sr.len - (sr.distance << 2)));
-        }
-        matcher.store_range(ringbuffer, mask, range_start, range_end);
-        position += sr.len;
-    }
-
-    insert_length += pos_end - position;
-    state.last_insert_len = insert_length;
+            insert_length += pos_end - position;
+            state.last_insert_len = insert_length;
+        },
+    );
 }
 
 #[cfg(test)]
@@ -371,7 +383,7 @@ mod tests {
     fn run(quality: QualityLevel, data: &[u8]) -> (Vec<Command>, ReferenceState) {
         let params = params(quality);
         let mut matcher = QuickMatcher::<16, 1, 5, false>::new();
-        matcher.prepare(true, data.len(), data);
+        matcher.prepare(true, data.len(), data, true);
         let mut state = ReferenceState::default();
         let mut commands = Vec::new();
         let level = Level::new();
@@ -413,7 +425,7 @@ mod tests {
                 data.extend_from_slice(&[0u8; 8]);
                 let params = params(quality);
                 let mut matcher = QuickMatcher::<16, 1, 5, false>::new();
-                matcher.prepare(true, payload.len(), &data);
+                matcher.prepare(true, payload.len(), &data, true);
                 let mut state = ReferenceState::default();
                 let mut commands = Vec::new();
                 let level = Level::new();
@@ -445,7 +457,7 @@ mod tests {
         let payload = data.len() - 8;
         let params = params(QualityLevel::Q3);
         let mut matcher = QuickMatcher::<16, 1, 5, false>::new();
-        matcher.prepare(true, payload, &data);
+        matcher.prepare(true, payload, &data, true);
         let mut state = ReferenceState::default();
         let mut commands = Vec::new();
         let level = Level::new();
@@ -483,7 +495,7 @@ mod tests {
         let payload = data.len() - 8;
         let params = params(QualityLevel::Q3);
         let mut matcher = QuickMatcher::<16, 1, 5, false>::new();
-        matcher.prepare(true, payload, &data);
+        matcher.prepare(true, payload, &data, true);
         let mut state = ReferenceState::default();
         let mut commands = Vec::new();
         let level = Level::new();

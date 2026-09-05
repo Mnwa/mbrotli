@@ -12,9 +12,76 @@ pub(crate) const MAX_BITS_PER_WRITE: u32 = 56;
 /// Bytes a write touches, and therefore the headroom the buffer must keep.
 pub(crate) const WRITE_SLACK: usize = 8;
 
+/// Statically selected initialized storage for a bit writer.
+///
+/// Slice storage has a fixed bound. Vector storage initializes only requested
+/// ranges, so its unwritten reserved capacity never needs clearing or copying.
+pub(crate) trait ByteBuffer {
+    fn bytes(&self) -> &[u8];
+    fn window(&mut self, range: std::ops::Range<usize>) -> Option<&mut [u8]>;
+
+    #[inline(always)]
+    fn copy_bytes(&mut self, start: usize, data: &[u8]) -> bool {
+        let Some(window) = self.window(start..start + data.len()) else {
+            return false;
+        };
+        window.copy_from_slice(data);
+        true
+    }
+}
+
+impl ByteBuffer for [u8] {
+    #[inline(always)]
+    fn bytes(&self) -> &[u8] {
+        self
+    }
+
+    #[inline(always)]
+    fn window(&mut self, range: std::ops::Range<usize>) -> Option<&mut [u8]> {
+        self.get_mut(range)
+    }
+}
+
+/// Keeps infrequent allocation and initialization out of each symbol write.
+#[cold]
+#[inline(never)]
+fn grow_bit_output(storage: &mut Vec<u8>, required: usize) {
+    let end = required.checked_add(255).map_or(required, |end| end & !255);
+    storage.resize(required.max(end.min(storage.capacity())), 0);
+}
+
+impl ByteBuffer for Vec<u8> {
+    #[inline(always)]
+    fn bytes(&self) -> &[u8] {
+        self
+    }
+
+    #[inline(always)]
+    fn window(&mut self, range: std::ops::Range<usize>) -> Option<&mut [u8]> {
+        if self.len() < range.end {
+            // Amortize initialization over small batches of bit writes.
+            grow_bit_output(self, range.end);
+        }
+        self.get_mut(range)
+    }
+
+    #[inline(always)]
+    fn copy_bytes(&mut self, start: usize, data: &[u8]) -> bool {
+        if self.len() < start {
+            self.resize(start, 0);
+        }
+        let initialized = (self.len() - start).min(data.len());
+        self[start..start + initialized].copy_from_slice(&data[..initialized]);
+        // Uncompressed blocks are copied straight into spare capacity by Vec.
+        // No zero-fill is needed before this safe initialized append.
+        self.extend_from_slice(&data[initialized..]);
+        true
+    }
+}
+
 /// Cursor into a caller-owned byte buffer that appends individual bits.
-pub(crate) struct BitWriter<'a> {
-    storage: &'a mut [u8],
+pub(crate) struct BitWriter<'a, B: ByteBuffer + ?Sized = [u8]> {
+    storage: &'a mut B,
     position: usize,
     overflowed: bool,
 }
@@ -32,7 +99,20 @@ impl<'a> BitWriter<'a> {
             overflowed: false,
         }
     }
+}
 
+impl<'a> BitWriter<'a, Vec<u8>> {
+    /// Appends bits into a growable vector, retaining its existing prefix.
+    pub(crate) const fn append(storage: &'a mut Vec<u8>, position: usize) -> Self {
+        Self {
+            storage,
+            position,
+            overflowed: false,
+        }
+    }
+}
+
+impl<B: ByteBuffer + ?Sized> BitWriter<'_, B> {
     /// Returns the current bit position.
     pub(crate) const fn position(&self) -> usize {
         self.position
@@ -49,7 +129,7 @@ impl<'a> BitWriter<'a> {
 
     /// Returns the byte at `index`, or zero when it lies past the buffer.
     pub(crate) fn byte(&self, index: usize) -> u8 {
-        match self.storage.get(index) {
+        match self.storage.bytes().get(index) {
             Some(&byte) => byte,
             None => 0,
         }
@@ -60,7 +140,15 @@ impl<'a> BitWriter<'a> {
     /// The encoder uses this to restore the partial byte it carried into a
     /// meta-block after deciding to store that meta-block uncompressed.
     pub(crate) fn set_byte(&mut self, index: usize, value: u8) {
-        match self.storage.get_mut(index) {
+        let Some(end) = index.checked_add(1) else {
+            self.overflowed = true;
+            return;
+        };
+        match self
+            .storage
+            .window(index..end)
+            .and_then(|bytes| bytes.first_mut())
+        {
             Some(byte) => *byte = value,
             None => self.overflowed = true,
         }
@@ -82,7 +170,7 @@ impl<'a> BitWriter<'a> {
         debug_assert!(n_bits <= MAX_BITS_PER_WRITE);
         debug_assert!(n_bits == 64 || (bits >> n_bits) == 0);
         let start = self.position >> 3;
-        let Some(window) = self.storage.get_mut(start..start + WRITE_SLACK) else {
+        let Some(window) = self.storage.window(start..start + WRITE_SLACK) else {
             self.overflowed = true;
             self.position += n_bits as usize;
             return;
@@ -102,7 +190,11 @@ impl<'a> BitWriter<'a> {
             let unchanged = (position & 7) as u32;
             let changed = n_bits.min(8 - unchanged);
             let total = unchanged + changed;
-            let Some(byte) = self.storage.get_mut(byte_position) else {
+            let Some(byte) = self
+                .storage
+                .window((byte_position)..(byte_position) + 1)
+                .and_then(|bytes| bytes.first_mut())
+            else {
                 self.overflowed = true;
                 return;
             };
@@ -119,7 +211,11 @@ impl<'a> BitWriter<'a> {
     /// Drops everything written after bit `position` and resumes there.
     pub(crate) fn rewind(&mut self, position: usize) {
         let mask = (1u16 << (position & 7)) - 1;
-        if let Some(byte) = self.storage.get_mut(position >> 3) {
+        if let Some(byte) = self
+            .storage
+            .window((position >> 3)..(position >> 3) + 1)
+            .and_then(|bytes| bytes.first_mut())
+        {
             *byte &= mask as u8;
         } else {
             self.overflowed = true;
@@ -147,7 +243,11 @@ impl<'a> BitWriter<'a> {
     /// Mirrors `BrotliWriteBitsPrepareStorage`.
     pub(crate) fn prepare_storage(&mut self) {
         debug_assert_eq!(self.position & 7, 0);
-        match self.storage.get_mut(self.position >> 3) {
+        match self
+            .storage
+            .window((self.position >> 3)..(self.position >> 3) + 1)
+            .and_then(|bytes| bytes.first_mut())
+        {
             Some(byte) => *byte = 0,
             None => self.overflowed = true,
         }
@@ -157,14 +257,17 @@ impl<'a> BitWriter<'a> {
     pub(crate) fn write_bytes(&mut self, data: &[u8]) {
         debug_assert_eq!(self.position & 7, 0);
         let start = self.position >> 3;
-        let Some(window) = self.storage.get_mut(start..start + data.len()) else {
+        if !self.storage.copy_bytes(start, data) {
             self.overflowed = true;
             self.position += data.len() << 3;
             return;
-        };
-        window.copy_from_slice(data);
+        }
         self.position += data.len() << 3;
-        match self.storage.get_mut(self.position >> 3) {
+        match self
+            .storage
+            .window((self.position >> 3)..(self.position >> 3) + 1)
+            .and_then(|bytes| bytes.first_mut())
+        {
             Some(byte) => *byte = 0,
             None => self.overflowed = true,
         }
@@ -225,6 +328,42 @@ pub(crate) fn inject_byte_padding(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn growing_storage_matches_fixed_storage_through_rewinds_and_byte_writes() {
+        fn exercise<B: ByteBuffer + ?Sized>(writer: &mut BitWriter<'_, B>, count: usize) -> usize {
+            let start = writer.position();
+            writer.write(3, 5);
+            for value in 0..count {
+                writer.write(7, (value & 127) as u64);
+            }
+            writer.update(2, 2, start);
+            writer.rewind(writer.position() - 1);
+            writer.write(1, 0);
+            writer.jump_to_byte_boundary();
+            writer.write_bytes(&vec![37; count]);
+            writer.set_byte(start >> 3, 6);
+            assert_eq!(writer.byte(start >> 3), 6);
+            assert_eq!(writer.byte(usize::MAX), 0);
+            assert!(!writer.overflowed());
+            writer.set_byte(usize::MAX, 0);
+            assert!(writer.overflowed());
+            writer.position()
+        }
+
+        for prefix in [0, 1, 7, 64] {
+            for count in (0..=65).chain([127, 128, 255, 256, 1023, 4097]) {
+                let mut fixed = vec![0; 1 << 14];
+                fixed[..prefix].fill(91);
+                let mut growing = vec![91; prefix];
+                let expected = exercise(&mut BitWriter::new(&mut fixed, prefix * 8), count);
+                let actual = exercise(&mut BitWriter::append(&mut growing, prefix * 8), count);
+                assert_eq!(actual, expected);
+                assert_eq!(&growing[..actual / 8], &fixed[..actual / 8]);
+                assert!(growing.len() < fixed.len());
+            }
+        }
+    }
 
     fn writer_output(bits: &[(u32, u64)]) -> (Vec<u8>, usize) {
         let mut storage = vec![0u8; 64];

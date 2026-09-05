@@ -17,7 +17,7 @@ use super::hq::zopfli::{
 };
 use super::rfc9841::context::SharedContextInner;
 use super::shared::bits::BitWriter;
-use super::shared::command::Command;
+use super::shared::command::{Command, CommandExtension, extend_last_command};
 use super::shared::ringbuffer::{BlockSpan, Window};
 
 /// Borrowed greedy state for one monomorphized scan.
@@ -53,6 +53,15 @@ pub(crate) trait Kernels: Send + Sync {
         table: &mut [i32],
         writer: &mut BitWriter<'_>,
     );
+    fn extend(&self, input: CommandExtension<'_>);
+    fn fast_append(
+        &self,
+        core: &mut FastCore,
+        input: &[u8],
+        is_last: bool,
+        table: &mut [i32],
+        writer: &mut BitWriter<'_, Vec<u8>>,
+    );
     fn greedy(&self, input: GreedyInput<'_>);
     fn hq(&self, input: HqInput<'_>);
     fn stitch(
@@ -85,6 +94,27 @@ impl<S: Simd, const INDEPENDENT: bool> Kernels for Selected<S, INDEPENDENT> {
         is_last: bool,
         table: &mut [i32],
         writer: &mut BitWriter<'_>,
+    ) {
+        self.0.vectorize(
+            #[inline(always)]
+            || encode_fragment::<_, INDEPENDENT>(self.0, core, input, is_last, table, writer),
+        );
+    }
+
+    fn extend(&self, input: CommandExtension<'_>) {
+        self.0.vectorize(
+            #[inline(always)]
+            || extend_last_command(self.0, input),
+        );
+    }
+
+    fn fast_append(
+        &self,
+        core: &mut FastCore,
+        input: &[u8],
+        is_last: bool,
+        table: &mut [i32],
+        writer: &mut BitWriter<'_, Vec<u8>>,
     ) {
         self.0.vectorize(
             #[inline(always)]

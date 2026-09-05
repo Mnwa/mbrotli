@@ -64,9 +64,11 @@ implementations; see [greedy-encoder.md](greedy-encoder.md).
 
 ## 2. Ownership and reuse
 
-`FastEncoder` owns every buffer the encoder needs and reuses them across
-fragments, so after construction no allocation happens inside a match scan or a
-command replay.
+`FastEncoder` retains its hash table, entropy workspace and scratch across
+fragments. One-shot append output uses the caller's reserved vector through a
+statically specialized bit writer; slice and I/O output retain their existing
+fixed-buffer paths. [Bit output](bit-output.md) specifies initialization,
+reservation, overflow and partial-byte handling.
 
 ```mermaid
 classDiagram
@@ -147,7 +149,7 @@ stateDiagram-v2
 ```
 
 The trailing partial byte is never emitted: it is kept in `last_bytes` and
-re-seeded into the next fragment's scratch buffer, exactly as the reference
+re-seeded into the next fragment's scratch or append destination, exactly as the reference
 carries `s->last_bytes_`.
 
 ## 4. Quality 0: one pass
@@ -273,7 +275,7 @@ Meta-block layout for a compressed fast-path block:
 ```mermaid
 graph TD
     select["core::dispatch::select(level), once on construction"] --> kernel["retained Selected&lt;S&gt;"]
-    A["FastEncoder::encode_block"] --> kernel
+    A["FastEncoder::encode_block / encode_block_append"] --> kernel
     kernel -->|"S::vectorize, no re-selection"| B["encode_fragment&lt;S: Simd&gt;"]
     B --> C["q0::compress_fragment&lt;S&gt;"]
     B --> D["q1::compress_fragment&lt;S&gt;"]
@@ -288,6 +290,12 @@ graph TD
     classDef scalar fill:#fce5cd,stroke:#b45f06;
     class C,D,J scalar;
 ```
+
+The specialized q0 `compress_fragment_impl` and q1 `create_commands` bodies each
+enter `S::vectorize` through an always-inlined closure. This keeps the native
+comparison loop inside a feature-enabled function even when LLVM keeps the
+large scan separate from the outer dispatcher. It introduces no feature detection
+inside the scan and retains independent table-width specializations.
 
 Only the exact match-length scan is vectorised. Hash lookups, candidate
 selection, skip logic, command encoding, the bit writer and the Huffman builder
