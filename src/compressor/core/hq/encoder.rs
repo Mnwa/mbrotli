@@ -80,7 +80,21 @@ impl HqEncoder {
     pub(crate) fn new(level: Level, params: &CompressParams) -> BrotliResult<Self> {
         let resolved = HqParams::new(params)?;
         let (last_bytes, last_bytes_bits) = resolved.window.header();
+        #[cfg(feature = "experimental")]
+        let (last_bytes, last_bytes_bits) = if resolved.stream_offset != 0 {
+            (0, 0)
+        } else {
+            (last_bytes, last_bytes_bits)
+        };
         let references = ZopfliState::default();
+        #[cfg(feature = "experimental")]
+        let references = {
+            let mut references = references;
+            if resolved.stream_offset != 0 {
+                references.dist_cache[..4].fill(-16);
+            }
+            references
+        };
         Ok(Self {
             level,
             params: resolved,
@@ -138,6 +152,12 @@ impl HqEncoder {
     /// already rebuilt on every use, so nothing there has to be undone.
     pub(crate) fn reset(&mut self) {
         let (last_bytes, last_bytes_bits) = self.params.window.header();
+        #[cfg(feature = "experimental")]
+        let (last_bytes, last_bytes_bits) = if self.params.stream_offset != 0 {
+            (0, 0)
+        } else {
+            (last_bytes, last_bytes_bits)
+        };
         self.ringbuffer.reset();
         // The binary tree needs no cleaning: `prepare` always refills every
         // bucket, and the forest is only ever entered through one.
@@ -147,6 +167,10 @@ impl HqEncoder {
         self.last_flush_pos = 0;
         self.commands.clear();
         self.references = ZopfliState::default();
+        #[cfg(feature = "experimental")]
+        if self.params.stream_offset != 0 {
+            self.references.dist_cache[..4].fill(-16);
+        }
         self.saved_dist_cache = self.references.dist_cache;
         self.prev_byte = 0;
         self.prev_byte2 = 0;
@@ -419,7 +443,15 @@ impl HqEncoder {
             }
         }
 
+        #[cfg(feature = "experimental")]
+        {
+            self.params.dictionary_context_mode = context_mode;
+        }
         self.create_references(span, attached);
+        #[cfg(feature = "experimental")]
+        {
+            self.params.dictionary_context_mode = ContextMode::Utf8;
+        }
 
         {
             let max_length = self.params.max_metablock_size();

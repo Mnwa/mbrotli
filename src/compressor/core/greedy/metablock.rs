@@ -46,7 +46,9 @@ fn map_static_contexts(num_contexts: usize, static_map: &[u32; 64], mb: &mut Met
         .resize(num_types << LITERAL_CONTEXT_BITS, 0);
     for (block_type, slots) in mb
         .literal_context_map
-        .chunks_exact_mut(1usize << LITERAL_CONTEXT_BITS)
+        .as_chunks_mut::<{ 1usize << LITERAL_CONTEXT_BITS }>()
+        .0
+        .iter_mut()
         .enumerate()
     {
         let offset = (block_type * num_contexts) as u32;

@@ -20,7 +20,7 @@ The package is split so that the AFL dependency stops at the binary layer:
 ```mermaid
 graph TD
     subgraph engine["Engine layer (depends on afl)"]
-        bins["src/bin/ — twenty-one afl::fuzz! adapters"]
+        bins["src/bin/ — twenty-two afl::fuzz! adapters"]
     end
 
     subgraph neutral["Engine-neutral layer (no afl dependency)"]
@@ -139,7 +139,8 @@ target that can reach the validating conversions and the large-window refusal.
 | `parameter_parsing` | numeric | `TryFrom` and `Window` contracts hold; every legal quality compresses and round-trips; `Compressor::new` refuses a large window at qualities 0 to 2 and accepts it above |
 | `large_window` | large window | `Window::large` contract holds; qualities 0, 1 and 2 refuse when the compressor is built rather than dropping the request; bound, determinism, backend identity; C decoder round-trip up to 30 declared bits, and above it the stream differs from the 30-bit stream only in the six header bits |
 | `dictionary` | dictionary | preparation is a transaction — an empty, count or limit refusal yields no dictionary; the accessors agree with what was attached; the offset-to-distance mapping round-trips and saturates at both ends; below quality 5 every entry point refuses rather than ignoring, and the compressor still works afterwards; at quality 5 and above the three entry points agree, the output fits the bound, and a dictionary call never changes the next ordinary one |
-| `serialized_dictionary` | dictionary stream | parsing arbitrary bytes never panics; this crate and the pinned C parser agree on validity, except for the tail after the structure that the reference ignores and this crate refuses; what parses re-serializes to bytes that parse back equal and serialize identically again; and a prepared dictionary either takes the LZ77 prefix or refuses a custom static one rather than ignoring it |
+| `serialized_dictionary` | dictionary stream | parser validity versus C, excluding its five-byte varint limit and ignored trailing bytes; canonical reserialization; bounded preparation of prefixes/custom indexes; q5/q11 compression independently decoded by C with the serialized dictionary attached |
+| `framing` | settings byte and bounded resource bytes | resource/metadata sequences with explicit bounded chunks; identical bytes under one-byte, 37-byte and 2048-byte caller writes; successful finalization or typed validation failure |
 | `compressor_lifecycle` | lifecycle | whatever sequence of reuse, appending, deliberate failure, trimming, reconfiguration, abandoned and leaked sessions the input asks for, the compressor still emits the bytes a fresh one would for the configuration it ended up with |
 
 The oracles are layered rather than independent: `differential_c` is the
@@ -252,20 +253,19 @@ sets are identical; the corpus takes under two seconds instead of minutes.
 
 - **No decompression target.** There is no decoder in `mbrotli`; round-trip
   oracles use Google's C decoder. A decoder target has to wait for one.
-- **No fuzz target round-trips a dictionary stream through the decoder.**
-  `dictionary` checks preparation, addressing, the refusals and agreement
-  between the entry points, but it does not decode a stream whose distances
-  reached into the prefix — that needs the C decoder with the same dictionaries
-  attached, which the target layer does not wire up yet.
-  `tests/dictionary.rs` covers it deterministically instead.
+- **Framing fault injection is deterministic, not fuzz-driven.**
+  `tests/framing.rs` injects short writes and retryable failures at each tested
+  offset; the fuzz target varies valid resource/metadata sequences and chunking.
 - **Payloads are capped at 128 KiB.** Inputs longer than that are truncated, so
   windows of 2^17 and above never span multiple encoder blocks under the
   fuzzer. `tests/vendor_corpus.rs` covers multi-fragment inputs instead,
   including a 12 MiB case.
-- **No CI fuzzing.** The repository has no CI configuration at all, so neither
-  a bounded smoke campaign nor the regression replay runs automatically.
-- **The regression corpora are seeded, not found.** Every `boundary-*.bin` is
-  hand-written; nothing has crashed yet to replace them.
+- **CI smoke campaigns are bounded evidence.** `.github/workflows/ci.yml`
+  includes serialized dictionaries and framing; a short campaign is not a
+  substitute for longer scheduled fuzzing.
+- **Most regression corpora are seeded, not found.** Every `boundary-*.bin` is
+  hand-written. The two noncanonical-varint serialized fixtures are minimized
+  AFL findings documenting the C helper's narrower integer reader.
 - **`prepare-seeds.sh` does not emit a `compressor_lifecycle` corpus.** That
   target's committed cases are hand-written command sequences; a campaign starts
   from those rather than from the vendored test data.

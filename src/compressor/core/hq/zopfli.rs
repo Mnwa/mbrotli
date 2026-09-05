@@ -277,14 +277,17 @@ fn update_nodes<S: Simd>(
     let cur_ix_masked = cur_ix & ctx.ringbuffer_mask;
     let max_distance = cur_ix.min(ctx.max_backward_limit);
     let gap = ctx.gap;
-    let dictionary_start = cur_ix.min(ctx.max_backward_limit);
+    let dictionary_start = ctx
+        .params
+        .logical_position(cur_ix)
+        .min(ctx.max_backward_limit);
     let max_len = ctx.num_bytes - pos;
     let max_zopfli_len = ctx.params.max_zopfli_len();
     let max_iters = ctx.params.max_zopfli_candidates();
     let mut result = 0usize;
 
     evaluate_node(
-        ctx.block_start,
+        ctx.params.logical_position(ctx.block_start),
         pos,
         ctx.max_backward_limit,
         gap,
@@ -491,7 +494,9 @@ fn create_commands(
 
         let distance = next.copy_distance() as usize;
         let len_code = next.length_code() as usize;
-        let dictionary_start = (block_start + pos).min(max_backward_limit);
+        let dictionary_start = params
+            .logical_position(block_start + pos)
+            .min(max_backward_limit);
         let is_dictionary = distance > dictionary_start + gap;
         let dist_code = next.distance_code() as usize;
 
@@ -581,7 +586,7 @@ fn zopfli_iterate<S: Simd>(
                     break;
                 }
                 evaluate_node(
-                    position,
+                    params.logical_position(position),
                     i,
                     ctx.max_backward_limit,
                     gap,
@@ -742,9 +747,16 @@ fn zopfli_compute_shortest_path<S: Simd>(
     while i + HASH_TYPE_LENGTH - 1 < num_bytes {
         let pos = position + i;
         let max_distance = pos.min(max_backward_limit);
-        let dictionary_start = pos.min(max_backward_limit);
+        let dictionary_start = params.logical_position(pos).min(max_backward_limit);
 
         scratch.clear();
+        let dictionary_distance = dictionary_start + gap;
+        #[cfg(feature = "experimental")]
+        let dictionary_distance = if attached.is_some_and(|c| c.static_index.is_some()) {
+            params.dist.max_distance as usize + 1
+        } else {
+            dictionary_distance
+        };
         matcher.find_all_matches(
             simd,
             ringbuffer,
@@ -752,11 +764,36 @@ fn zopfli_compute_shortest_path<S: Simd>(
             pos,
             num_bytes - i,
             max_distance,
-            dictionary_start + gap,
+            dictionary_distance,
             params.dist.max_distance as usize,
             short_scan,
             scratch,
         );
+        #[cfg(feature = "experimental")]
+        if let Some(index) = attached.and_then(|c| c.static_index.as_ref()) {
+            let context = params.dictionary_context_mode.context(
+                crate::compressor::core::rfc9841::static_index::previous(
+                    ringbuffer,
+                    pos,
+                    ringbuffer_mask,
+                    1,
+                ),
+                crate::compressor::core::rfc9841::static_index::previous(
+                    ringbuffer,
+                    pos,
+                    ringbuffer_mask,
+                    2,
+                ),
+            );
+            let start = pos & ringbuffer_mask;
+            index.find_all(
+                context,
+                &ringbuffer[start..start + num_bytes - i],
+                dictionary_start + gap,
+                params.dist.max_distance as usize,
+                scratch,
+            );
+        }
         if let Some(context) = attached {
             prefix_matches.clear();
             context.find_all_matches(
@@ -804,7 +841,7 @@ fn zopfli_compute_shortest_path<S: Simd>(
                     break;
                 }
                 evaluate_node(
-                    position,
+                    params.logical_position(position),
                     i,
                     max_backward_limit,
                     gap,
@@ -916,10 +953,17 @@ pub(crate) fn create_hq_zopfli_backward_references<S: Simd>(
     while i + HASH_TYPE_LENGTH - 1 < num_bytes {
         let pos = position + i;
         let max_distance = pos.min(max_backward_limit);
-        let dictionary_start = pos.min(max_backward_limit);
+        let dictionary_start = params.logical_position(pos).min(max_backward_limit);
         let max_length = num_bytes - i;
 
         let cur_match_pos = workspace.arena.len();
+        let dictionary_distance = dictionary_start + gap;
+        #[cfg(feature = "experimental")]
+        let dictionary_distance = if attached.is_some_and(|c| c.static_index.is_some()) {
+            params.dist.max_distance as usize + 1
+        } else {
+            dictionary_distance
+        };
         matcher.find_all_matches(
             simd,
             ringbuffer,
@@ -927,11 +971,42 @@ pub(crate) fn create_hq_zopfli_backward_references<S: Simd>(
             pos,
             max_length,
             max_distance,
-            dictionary_start + gap,
+            dictionary_distance,
             params.dist.max_distance as usize,
             short_scan,
             &mut workspace.arena,
         );
+        #[cfg(feature = "experimental")]
+        if let Some(index) = attached.and_then(|c| c.static_index.as_ref()) {
+            let context = params.dictionary_context_mode.context(
+                crate::compressor::core::rfc9841::static_index::previous(
+                    ringbuffer,
+                    pos,
+                    ringbuffer_mask,
+                    1,
+                ),
+                crate::compressor::core::rfc9841::static_index::previous(
+                    ringbuffer,
+                    pos,
+                    ringbuffer_mask,
+                    2,
+                ),
+            );
+            let start = pos & ringbuffer_mask;
+            workspace.scratch.clear();
+            workspace
+                .scratch
+                .extend_from_slice(&workspace.arena[cur_match_pos..]);
+            index.find_all(
+                context,
+                &ringbuffer[start..start + max_length],
+                dictionary_start + gap,
+                params.dist.max_distance as usize,
+                &mut workspace.scratch,
+            );
+            workspace.arena.truncate(cur_match_pos);
+            workspace.arena.extend_from_slice(&workspace.scratch);
+        }
         if let Some(context) = attached {
             prefix_matches.clear();
             context.find_all_matches(

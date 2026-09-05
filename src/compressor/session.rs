@@ -144,10 +144,11 @@ impl StreamConfig {
 
     /// Sets where the stream begins, logically.
     ///
-    /// A non-zero offset is not implemented yet: starting a session with one
-    /// reports [`EncodeError::UnsupportedStreamOffset`] rather than quietly
-    /// compressing at zero. The value is part of the API so that the shape of
-    /// a stream's own knowledge is complete and the gap is visible.
+    /// A non-zero offset requires the `experimental` feature and quality 2 or
+    /// higher. It emits a headerless continuation after a byte-aligned flush,
+    /// with no references to unavailable prior history. The caller must join
+    /// it to a compatible stream; it is not independently decodable. Logical
+    /// positions, including the input, must fit in 63 bits.
     ///
     /// # Examples
     ///
@@ -326,6 +327,10 @@ pub struct EncoderSession<'c, 'd> {
     limit: usize,
     /// Where the stream is.
     phase: Phase,
+    #[cfg(feature = "experimental")]
+    logical_position: u64,
+    #[cfg(feature = "experimental")]
+    flint: bool,
 }
 
 impl<'c, 'd> EncoderSession<'c, 'd> {
@@ -337,12 +342,19 @@ impl<'c, 'd> EncoderSession<'c, 'd> {
         compressor: &'c mut Compressor,
         dictionary: Option<&'d PreparedDictionary>,
         limit: usize,
+        stream: StreamConfig,
     ) -> Self {
+        #[cfg(not(feature = "experimental"))]
+        let _ = stream;
         Self {
             compressor,
             dictionary,
             limit,
             phase: Phase::Open,
+            #[cfg(feature = "experimental")]
+            logical_position: stream.stream_offset(),
+            #[cfg(feature = "experimental")]
+            flint: stream.stream_offset() != 0,
         }
     }
 
@@ -408,6 +420,17 @@ impl<'c, 'd> EncoderSession<'c, 'd> {
 
         let mut consumed = 0usize;
         let mut produced = 0usize;
+        #[cfg(feature = "experimental")]
+        if self
+            .logical_position
+            .checked_add(input.len() as u64)
+            .is_none_or(|end| end > (1u64 << 63) - 1)
+        {
+            return Err(EncodeError::StreamPositionOverflow {
+                position: self.logical_position,
+                input_bytes: input.len() as u64,
+            });
+        }
 
         loop {
             produced += self.compressor.drain_pending(&mut output[produced..]);
@@ -427,13 +450,20 @@ impl<'c, 'd> EncoderSession<'c, 'd> {
             }
 
             // Take what the staging buffer still has room for.
-            let room = self.limit - self.compressor.staging.len();
+            let limit = self.limit;
+            #[cfg(feature = "experimental")]
+            let limit = if self.flint { 2 } else { limit };
+            let room = limit - self.compressor.staging.len();
             let take = room.min(input.len() - consumed);
             if take > 0 {
                 self.compressor
                     .staging
                     .extend_from_slice(&input[consumed..consumed + take]);
                 consumed += take;
+                #[cfg(feature = "experimental")]
+                {
+                    self.logical_position += take as u64;
+                }
                 self.phase = Phase::Open;
             }
 
@@ -441,6 +471,15 @@ impl<'c, 'd> EncoderSession<'c, 'd> {
             // it, so that the last block of a stream is always the one carrying
             // `is_last`. That is what makes a streamed stream reproduce the
             // one-shot bytes for an input that is a whole number of blocks.
+            #[cfg(feature = "experimental")]
+            if self.flint
+                && self.compressor.staging.len() == 2
+                && (consumed < input.len() || operation != Operation::Finish)
+            {
+                self.flush(output, &mut produced)?;
+                self.flint = false;
+                continue;
+            }
             if self.compressor.staging.len() == self.limit && consumed < input.len() {
                 self.encode(false, output, &mut produced)?;
                 continue;

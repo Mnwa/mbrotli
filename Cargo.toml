@@ -56,6 +56,11 @@ path = "brotli-ffi"
 name = "compress"
 harness = false
 
+[[bench]]
+name = "track_b"
+harness = false
+required-features = ["experimental"]
+
 [features]
 # RFC 9841's shared dictionary and framing formats, which are specified but
 # have no stable reference encoder: the C library compiles its serialized

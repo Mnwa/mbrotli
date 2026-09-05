@@ -368,6 +368,9 @@ impl BinaryTreeMatcher {
         }
 
         // Static-dictionary words, which sit past every real distance.
+        if dictionary_distance > max_distance {
+            return matches.len() - start;
+        }
         let min_len = best_len.saturating_add(1).max(4);
         let mut found = [INVALID_MATCH; MAX_STATIC_DICTIONARY_MATCH_LEN + 1];
         if all_matches::find_all(

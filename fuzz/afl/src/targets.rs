@@ -50,7 +50,7 @@ pub const TARGETS: &[(&str, TargetFn)] = &[
     ("large_window", large_window),
     ("dictionary", dictionary),
     ("serialized_dictionary", serialized_dictionary),
-    ("serialized_dictionary", serialized_dictionary),
+    ("framing", framing),
     ("compressor_lifecycle", compressor_lifecycle),
 ];
 
@@ -810,10 +810,11 @@ pub fn compressor_lifecycle(ctx: &Context, input: &[u8]) {
 /// - parsing never panics, however malformed the input;
 /// - this crate and the pinned C parser agree on whether the stream is valid,
 ///   except for a tail after the structure, which the reference ignores and
-///   this crate refuses — so the tail is retried without it;
+///   this crate refuses, and RFC-valid prefix varints longer than the C helper's
+///   five-byte limit; accepted dictionaries still require C-valid canonical bytes;
 /// - what parses re-serializes to bytes that parse to an equal dictionary and
 ///   serialize identically again, which is what makes the encoding canonical.
-pub fn serialized_dictionary(_ctx: &Context, input: &[u8]) {
+pub fn serialized_dictionary(ctx: &Context, input: &[u8]) {
     let input = cap(input);
     // Most random bytes fail the two magic bytes immediately, which would make
     // the campaign learn nothing. Prefixing the magic when it is absent puts
@@ -837,11 +838,25 @@ pub fn serialized_dictionary(_ctx: &Context, input: &[u8]) {
     };
     let theirs = c_parse_shared_dictionary(bytes);
 
-    assert_eq!(
-        ours.is_ok(),
-        theirs,
-        "this crate and the reference disagree about {bytes:02X?}"
-    );
+    // RFC 9841 permits up to nine bytes, including redundant leading-zero
+    // groups. C's ReadVarint32 rejects a fifth byte with its high bit set.
+    // Keep this exception structural and narrow; canonical output below must
+    // still parse with C and every prepared dictionary must decode with C.
+    let exceeds_c_varint_width = bytes
+        .get(2..7)
+        .is_some_and(|v| v.iter().all(|b| b & 128 != 0));
+    if exceeds_c_varint_width {
+        assert!(
+            !theirs,
+            "C unexpectedly accepted a prefix varint beyond 32 bits"
+        );
+    } else {
+        assert_eq!(
+            ours.is_ok(),
+            theirs,
+            "this crate and the reference disagree about {bytes:02X?}"
+        );
+    }
 
     let Ok(dictionary) = ours else {
         return;
@@ -887,20 +902,80 @@ pub fn serialized_dictionary(_ctx: &Context, input: &[u8]) {
         "the reference rejected what this crate wrote"
     );
 
-    // A prepared dictionary may be built from anything that parses, and is
-    // refused rather than silently ignored when it carries custom lists.
-    match DictionaryBuilder::new().add_serialized(&dictionary).build() {
+    // Bound transform expansion independently of the small wire input.
+    match DictionaryBuilder::new()
+        .add_serialized(&dictionary)
+        .with_limits(
+            DictionaryLimits::default()
+                .with_max_retained_bytes(4 << 20)
+                .with_max_transformed_word_bytes(1 << 20)
+                .with_max_static_entries(32768),
+        )
+        .build()
+    {
         Ok(prepared) => {
-            assert!(!dictionary.is_custom_static());
-            assert_eq!(prepared.source_bytes(), dictionary.prefix().len());
+            assert!(prepared.source_bytes() >= dictionary.prefix().len());
+            assert!(prepared.retained_bytes() <= 4 << 20);
+            let payload = &written[..written.len().min(1024)];
+            for quality in [Quality::Q5, Quality::Q11] {
+                let encoded = ctx
+                    .encoder(EncoderConfig::default().with_quality(quality))
+                    .compress_with_dictionary(&prepared, payload)
+                    .expect("custom compression");
+                assert_eq!(
+                    crate::c_decompress_serialized(&written, &encoded, payload.len()).as_deref(),
+                    Some(payload)
+                );
+            }
         }
-        Err(DictionaryError::CustomStaticDictionaryUnsupported) => {
-            assert!(dictionary.is_custom_static());
-        }
+        Err(DictionaryError::PreparationTooLarge { .. }) => {}
         Err(DictionaryError::Empty) => {
             assert!(dictionary.prefix().is_empty());
             assert!(!dictionary.is_custom_static());
         }
         Err(other) => panic!("unexpected preparation failure: {other}"),
+    }
+}
+
+/// Resource chunking and metadata sequences remain deterministic across caller writes.
+pub fn framing(ctx: &Context, input: &[u8]) {
+    use mbrotli::framing::{FramingConfig, MetadataField, MetadataKind, ResourceOptions};
+    let input = &input[..input.len().min(2048)];
+    let selector = input.first().copied().unwrap_or(0);
+    let config = FramingConfig {
+        chunk_bytes: 1 + usize::from(selector),
+        central_directory: selector & 1 != 0,
+        repeat_metadata: selector & 3 == 3,
+        ..Default::default()
+    };
+    let mut expected = None;
+    for split in [1, 37, 2048] {
+        let mut compressor = ctx.encoder(EncoderConfig::default().with_quality(Quality::Q5));
+        let mut container = compressor
+            .framed_writer(Vec::new(), config)
+            .expect("valid profile");
+        for (index, payload) in input.chunks(512).enumerate() {
+            let code = if index & 1 == 0 { *b"id" } else { *b"AB" };
+            let _ = container.metadata(
+                MetadataKind::Resource,
+                &[MetadataField {
+                    code,
+                    value: payload,
+                }],
+            );
+            let mut resource = container
+                .resource(ResourceOptions::default(), Default::default())
+                .expect("resource");
+            for chunk in payload.chunks(split) {
+                resource.write_all(chunk).expect("in-memory sink");
+            }
+            resource.try_finish().expect("finish resource");
+        }
+        let encoded = container.finish().expect("finish container");
+        if let Some(expected) = &expected {
+            assert_eq!(&encoded, expected);
+        } else {
+            expected = Some(encoded);
+        }
     }
 }

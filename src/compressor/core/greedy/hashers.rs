@@ -106,6 +106,9 @@ fn read_u8(data: &[u8], offset: usize) -> u8 {
 /// what stops the search from rebuilding it in memory at every position.
 #[derive(Copy, Clone)]
 pub(crate) struct MatchQuery<'a> {
+    #[cfg(feature = "experimental")]
+    pub(crate) custom:
+        Option<&'a crate::compressor::core::rfc9841::static_index::StaticCombination>,
     /// The ring buffer being searched.
     pub(crate) data: &'a [u8],
     /// Mask that turns an absolute position into a buffer index.
@@ -122,6 +125,35 @@ pub(crate) struct MatchQuery<'a> {
     pub(crate) dictionary_distance: usize,
     /// Longest distance the distance alphabet can express.
     pub(crate) max_distance: usize,
+}
+
+impl MatchQuery<'_> {
+    fn search_dictionary(self, stats: &mut DictionaryStats, out: &mut SearchResult, shallow: bool) {
+        let data = self.data.get(self.cur_ix & self.mask..).unwrap_or_default();
+        #[cfg(feature = "experimental")]
+        if let Some(custom) = self.custom {
+            dictionary::search_custom(
+                custom,
+                stats,
+                data,
+                self.max_length,
+                self.dictionary_distance,
+                self.max_distance,
+                out,
+                shallow,
+            );
+            return;
+        }
+        dictionary::search(
+            stats,
+            data,
+            self.max_length,
+            self.dictionary_distance,
+            self.max_distance,
+            out,
+            shallow,
+        );
+    }
 }
 
 /// A match finder over the ring buffer.
@@ -403,15 +435,7 @@ impl<const BUCKET_BITS: u32, const SWEEP_BITS: u32, const HASH_LEN: u32, const U
         }
 
         if USE_DICTIONARY && min_score == out.score {
-            dictionary::search(
-                stats,
-                data.get(cur_ix_masked..).unwrap_or_default(),
-                query.max_length,
-                query.dictionary_distance,
-                query.max_distance,
-                out,
-                true,
-            );
+            query.search_dictionary(stats, out, true);
         }
         if let Some(slot) = key_out {
             buckets[slot & Self::BUCKET_MASK] = query.cur_ix as u32;
@@ -649,15 +673,7 @@ impl<const HASH64: bool, const BUCKET_BITS: u32> Matcher for BucketMatcher<HASH6
         }
 
         if min_score == out.score {
-            dictionary::search(
-                stats,
-                data.get(cur_ix_masked..).unwrap_or_default(),
-                query.max_length,
-                query.dictionary_distance,
-                query.max_distance,
-                out,
-                false,
-            );
+            query.search_dictionary(stats, out, false);
         }
     }
 }
@@ -911,15 +927,7 @@ impl<const NUM_BANKS: usize, const BANK_BITS: u32> Matcher for ChainMatcher<NUM_
         self.store(data, mask, query.cur_ix);
 
         if out.score == min_score {
-            dictionary::search(
-                stats,
-                data.get(cur_ix_masked..).unwrap_or_default(),
-                query.max_length,
-                query.dictionary_distance,
-                query.max_distance,
-                out,
-                false,
-            );
+            query.search_dictionary(stats, out, false);
         }
     }
 }
@@ -1049,6 +1057,8 @@ mod tests {
 
     fn query<'a>(data: &'a [u8], cache: &'a DistanceCache, cur_ix: usize) -> MatchQuery<'a> {
         MatchQuery {
+            #[cfg(feature = "experimental")]
+            custom: None,
             data,
             mask: usize::MAX,
             cache,

@@ -17,6 +17,8 @@ use thiserror::Error;
 /// Every knob the encoder exposes, resolved per compression call.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CompressParams {
+    #[cfg(feature = "experimental")]
+    pub(crate) stream_offset: usize,
     pub(crate) quality: QualityLevel,
     pub(crate) lgwin: WindowBits,
     pub(crate) lgblock: Option<BlockBits>,
@@ -34,6 +36,8 @@ impl CompressParams {
     /// and literal context modelling left on.
     pub(crate) const fn new(quality: QualityLevel, lgwin: WindowBits) -> Self {
         Self {
+            #[cfg(feature = "experimental")]
+            stream_offset: 0,
             quality,
             lgwin,
             lgblock: None,

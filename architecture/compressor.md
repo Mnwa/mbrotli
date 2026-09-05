@@ -525,7 +525,7 @@ graph TD
         de["DictionaryError<br/>Empty, TooManyAttachments,<br/>TooLarge, PreparationTooLarge"]
     end
     subgraph run["When an operation runs"]
-        ee["EncodeError<br/>OutputTooSmall, AllocationFailed, Bound,<br/>DictionaryUnsupportedForQuality,<br/>UnsupportedStreamOffset, AbandonedSession,<br/>InvalidState, InternalInvariant"]
+        ee["EncodeError<br/>OutputTooSmall, AllocationFailed, Bound,<br/>DictionaryUnsupportedForQuality,<br/>UnsupportedStreamOffset, StreamPositionOverflow,<br/>AbandonedSession, InvalidState, InternalInvariant"]
     end
     so["SizeOverflow"] -->|"#[from]"| ee
     core["core::BrotliCompressError<br/>(private)"] -->|from_core| ee
@@ -599,10 +599,9 @@ graph LR
 
 - **No decoder.** Round-trip verification uses Google's C decoder from the
   `google-brotli-ffi` workspace crate.
-- **No stream offset.** `StreamConfig::stream_offset` exists so the shape of a
-  stream's own knowledge is complete, but a non-zero value is refused with
-  `EncodeError::UnsupportedStreamOffset` rather than compressed at zero behind
-  the caller's back.
+- **Stream offsets require experimental quality 2 or above.** See
+  [rfc9841-encoding.md](rfc9841-encoding.md) for headerless continuation,
+  restart flushing and checked logical-position mechanics.
 - **Large window is refused below quality 3.** Qualities 0, 1 and 2 may write
   distances through a code built for the RFC 7932 alphabet, so
   `Compressor::new` refuses the combination. Retained history stops at 30 bits
@@ -611,8 +610,8 @@ graph LR
 - **A dictionary is refused below quality 5.** The reference compiles its
   compound-dictionary search only for the match finders qualities five and above
   select, and silently ignores the dictionary elsewhere; this crate refuses.
-- **No serialized dictionary and no framing container.** See
-  [shared-brotli.md](shared-brotli.md).
+- **Serialized dictionaries and framing are experimental.** See
+  [rfc9841-encoding.md](rfc9841-encoding.md) and [framing.md](framing.md).
 - **One retained encoder.** The workspace holds exactly one, so alternating
   between two configurations rebuilds on every call. `RetentionPolicy` bounds and
   releases it but does not yet keep one slot per encoder family.

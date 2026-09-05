@@ -16,6 +16,7 @@
 //! - each configurable resource limit.
 
 #![cfg(feature = "experimental")]
+mod support;
 
 use google_brotli_ffi::{
     MAX_TRANSFORMED_WORD_BYTES, MbrotliSharedDictInfo, mbrotli_shim_parse_shared_dictionary,
@@ -504,7 +505,7 @@ fn a_serialized_prefix_prepares_the_same_dictionary_a_raw_one_does() {
 }
 
 #[test]
-fn a_custom_static_dictionary_is_refused_rather_than_silently_ignored() {
+fn a_custom_static_dictionary_prepares_without_a_prefix() {
     let described = SerializedDictionary::builder()
         .add_word_list(
             WordList::builder()
@@ -515,10 +516,267 @@ fn a_custom_static_dictionary_is_refused_rather_than_silently_ignored() {
         .build()
         .expect("valid");
 
-    assert!(matches!(
-        DictionaryBuilder::new().add_serialized(&described).build(),
-        Err(DictionaryError::CustomStaticDictionaryUnsupported)
-    ));
+    let prepared = DictionaryBuilder::new()
+        .add_serialized(&described)
+        .build()
+        .expect("custom index");
+    assert_eq!(prepared.attachment_count(), 0);
+    assert!(prepared.retained_bytes() > 0);
+}
+
+#[test]
+fn custom_index_limits_are_enforced_before_expansion() {
+    let described = SerializedDictionary::builder()
+        .add_word_list(WordList::builder().add_word(b"word").build().expect("word"))
+        .build()
+        .expect("dictionary");
+    for limits in [
+        DictionaryLimits::default().with_max_transformed_word_bytes(1),
+        DictionaryLimits::default().with_max_static_entries(1),
+        DictionaryLimits::default().with_max_source_bytes(1),
+        DictionaryLimits::default().with_max_retained_bytes(1),
+    ] {
+        assert!(
+            DictionaryBuilder::default()
+                .add_serialized(&described)
+                .with_limits(limits)
+                .build()
+                .is_err()
+        );
+    }
+    assert_eq!(
+        DictionaryLimits::default()
+            .with_max_transformed_word_bytes(12)
+            .max_transformed_word_bytes(),
+        12
+    );
+    assert_eq!(
+        DictionaryLimits::default()
+            .with_max_static_entries(34)
+            .max_static_entries(),
+        34
+    );
+}
+
+fn decode_custom(dictionary: &[u8], compressed: &[u8], expected: &[u8]) {
+    use google_brotli_ffi as ffi;
+    let mut output = vec![0; expected.len().max(1)];
+    // SAFETY: the dictionary and input outlive the decoder; output is writable
+    // for its advertised capacity. The instance is destroyed before returning.
+    unsafe {
+        let state = ffi::BrotliDecoderCreateInstance(None, None, std::ptr::null_mut());
+        assert!(!state.is_null());
+        assert_eq!(
+            ffi::BrotliDecoderAttachDictionary(
+                state,
+                ffi::BROTLI_SHARED_DICTIONARY_SERIALIZED,
+                dictionary.len(),
+                dictionary.as_ptr()
+            ),
+            ffi::BROTLI_TRUE
+        );
+        let mut available_in = compressed.len();
+        let mut next_in = compressed.as_ptr();
+        let mut available_out = output.len();
+        let mut next_out = output.as_mut_ptr();
+        let mut total = 0;
+        let result = ffi::BrotliDecoderDecompressStream(
+            state,
+            &raw mut available_in,
+            &raw mut next_in,
+            &raw mut available_out,
+            &raw mut next_out,
+            &raw mut total,
+        );
+        ffi::BrotliDecoderDestroyInstance(state);
+        assert_eq!(result, ffi::BROTLI_DECODER_RESULT_SUCCESS);
+        assert_eq!(available_in, 0);
+        output.truncate(total);
+    }
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn custom_words_and_transforms_interoperate_at_every_dictionary_quality() {
+    use mbrotli::{Compressor, EncoderConfig, Quality};
+    use std::io::Write;
+    let described = rich_dictionary();
+    let bytes = described.to_bytes();
+    let prepared = DictionaryBuilder::default()
+        .add_serialized(&described)
+        .build()
+        .expect("prepare");
+    let payload =
+        b"charset <Content> encoding frqwhqw conte... charset <Charset> HELLO WORLD ".repeat(7);
+    for quality in [
+        Quality::Q5,
+        Quality::Q6,
+        Quality::Q7,
+        Quality::Q8,
+        Quality::Q9,
+        Quality::Q10,
+        Quality::Q11,
+    ] {
+        let mut compressor =
+            Compressor::new(EncoderConfig::default().with_quality(quality)).expect("config");
+        let encoded = compressor
+            .compress_with_dictionary(&prepared, &payload)
+            .expect("encode");
+        decode_custom(&bytes, &encoded, &payload);
+        for chunk in [1, 7, 64] {
+            let mut writer = compressor
+                .writer_with_dictionary(
+                    &prepared,
+                    Vec::new(),
+                    mbrotli::InputSize::Exact(payload.len() as u64).into(),
+                )
+                .expect("writer");
+            for input in payload.chunks(chunk) {
+                writer.write_all(input).expect("write");
+            }
+            let streamed = writer
+                .finish()
+                .map_err(mbrotli::io::FinishError::into_error)
+                .expect("finish");
+            assert_eq!(encoded, streamed, "{quality:?}, chunk {chunk}");
+        }
+    }
+}
+
+#[test]
+fn long_transformed_words_keep_their_base_length_in_hq_commands() {
+    use mbrotli::{Compressor, EncoderConfig, Quality};
+    let prefix = vec![b'X'; 200];
+    let suffix = vec![b'Y'; 200];
+    let described = SerializedDictionary::builder()
+        .add_word_list(
+            WordList::builder()
+                .add_word(b"word")
+                .build()
+                .expect("words"),
+        )
+        .add_transform_list(
+            TransformList::builder()
+                .add_transform(&prefix, TransformOperation::Identity, &suffix)
+                .build()
+                .expect("transforms"),
+        )
+        .build()
+        .expect("dictionary");
+    let prepared = DictionaryBuilder::default()
+        .add_serialized(&described)
+        .build()
+        .expect("prepare");
+    let mut input = prefix;
+    input.extend_from_slice(b"word");
+    input.extend_from_slice(&suffix);
+    input.extend_from_slice(b" a trailing literal");
+    for quality in [Quality::Q10, Quality::Q11] {
+        let mut compressor =
+            Compressor::new(EncoderConfig::default().with_quality(quality)).expect("config");
+        let encoded = compressor
+            .compress_with_dictionary(&prepared, &input)
+            .expect("compress");
+        decode_custom(&described.to_bytes(), &encoded, &input);
+    }
+}
+
+fn c_encode_custom(dictionary: &[u8], input: &[u8], quality: mbrotli::Quality) -> Vec<u8> {
+    use google_brotli_ffi as ffi;
+    let mut output = vec![0; input.len() * 2 + 4096];
+    // SAFETY: input/dictionary live through encoder destruction; output has
+    // the advertised writable length. Both C instances are destroyed below.
+    unsafe {
+        let state = ffi::BrotliEncoderCreateInstance(None, None, std::ptr::null_mut());
+        assert!(!state.is_null());
+        assert_eq!(
+            ffi::BrotliEncoderSetParameter(
+                state,
+                ffi::BROTLI_PARAM_QUALITY,
+                u32::from(quality.get())
+            ),
+            ffi::BROTLI_TRUE
+        );
+        let prepared = ffi::BrotliEncoderPrepareDictionary(
+            ffi::BROTLI_SHARED_DICTIONARY_SERIALIZED,
+            dictionary.len(),
+            dictionary.as_ptr(),
+            i32::from(quality.get()),
+            None,
+            None,
+            std::ptr::null_mut(),
+        );
+        assert!(!prepared.is_null());
+        assert_eq!(
+            ffi::BrotliEncoderAttachPreparedDictionary(state, prepared),
+            ffi::BROTLI_TRUE
+        );
+        let mut available_in = input.len();
+        let mut next_in = input.as_ptr();
+        let mut available_out = output.len();
+        let mut next_out = output.as_mut_ptr();
+        let mut total = 0;
+        assert_eq!(
+            ffi::BrotliEncoderCompressStream(
+                state,
+                ffi::BROTLI_OPERATION_FINISH,
+                &raw mut available_in,
+                &raw mut next_in,
+                &raw mut available_out,
+                &raw mut next_out,
+                &raw mut total
+            ),
+            ffi::BROTLI_TRUE
+        );
+        assert_eq!(ffi::BrotliEncoderIsFinished(state), ffi::BROTLI_TRUE);
+        ffi::BrotliEncoderDestroyInstance(state);
+        ffi::BrotliEncoderDestroyPreparedDictionary(prepared);
+        output.truncate(total);
+    }
+    output
+}
+
+#[test]
+fn a_custom_identity_dictionary_matches_c_and_every_host_backend() {
+    use mbrotli::Quality;
+    use std::io::Write;
+    let described = SerializedDictionary::builder()
+        .add_word_list(
+            WordList::builder()
+                .add_word(b"unusualword")
+                .add_word(b"otherword")
+                .build()
+                .expect("words"),
+        )
+        .add_transform_list(
+            TransformList::builder()
+                .add_transform(b"", TransformOperation::Identity, b"")
+                .build()
+                .expect("transforms"),
+        )
+        .build()
+        .expect("dictionary");
+    let prepared = DictionaryBuilder::default()
+        .add_serialized(&described)
+        .build()
+        .expect("prepare");
+    let payload = b"unusualword otherword unusualword another string otherword ".repeat(13);
+    for quality in [Quality::Q5, Quality::Q9, Quality::Q10, Quality::Q11] {
+        let expected = c_encode_custom(&described.to_bytes(), &payload, quality);
+        decode_custom(&described.to_bytes(), &expected, &payload);
+        for (name, level) in support::host_levels() {
+            let mut compressor = support::encoder_on(level, quality, 22);
+            let mut writer = compressor
+                .writer_with_dictionary(&prepared, Vec::new(), Default::default())
+                .expect("writer");
+            writer.write_all(&payload).expect("write");
+            let encoded = writer
+                .finish()
+                .map_err(mbrotli::io::FinishError::into_error)
+                .expect("finish");
+            assert_eq!(encoded, expected, "{quality:?}, {name}");
+        }
+    }
 }
 
 #[test]
@@ -593,6 +851,38 @@ fn the_limits_are_carried_into_the_builder() {
             ..
         })
     ));
+}
+
+#[test]
+fn preparation_rechecks_description_limits_without_reparsing() {
+    let described = rich_dictionary();
+    for limits in [
+        DictionaryLimits::default().with_max_serialized_bytes(0),
+        DictionaryLimits::default().with_max_word_bytes(0),
+        DictionaryLimits::default().with_max_word_lists(0),
+        DictionaryLimits::default().with_max_transform_bytes(0),
+        DictionaryLimits::default().with_max_transform_lists(0),
+        DictionaryLimits::default().with_max_combinations(0),
+    ] {
+        let error = DictionaryBuilder::default()
+            .add_serialized(&described)
+            .with_limits(limits)
+            .build()
+            .expect_err("preparation ceiling");
+        assert!(matches!(error, DictionaryError::LimitExceeded { .. }));
+        assert!(error.to_string().contains("exceeds the limit of 0"));
+    }
+}
+
+#[test]
+fn rfc_noncanonical_prefix_varints_may_exceed_the_c_helpers_five_bytes() {
+    // Minimized AFL oracle disagreement: RFC 9841 section 4 permits a
+    // redundant six-byte zero; C's ReadVarint32 stops after five bytes.
+    let bytes = [0x91, 0, 0x80, 0x80, 0x80, 0x80, 0x80, 0, 0, 0];
+    let parsed = SerializedDictionary::try_from(bytes.as_slice()).expect("RFC varint");
+    assert_eq!(c_parse(&bytes).ok, 0);
+    assert_eq!(parsed.to_bytes(), [0x91, 0, 0, 0, 0]);
+    assert_eq!(c_parse(&parsed.to_bytes()).ok, 1);
 }
 
 #[test]

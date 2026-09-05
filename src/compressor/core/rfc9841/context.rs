@@ -108,6 +108,8 @@ pub(crate) struct PrefixMatch {
 /// The whole private state of one caller-owned shared context.
 #[derive(Debug, Default)]
 pub(crate) struct SharedContextInner {
+    #[cfg(feature = "experimental")]
+    pub(crate) static_index: Option<super::static_index::StaticIndex>,
     /// The caller's dictionary bytes.
     dictionaries: SharedDictionaryData,
     /// The indexes prepared over them.
@@ -183,6 +185,8 @@ impl SharedContextInner {
             .collect();
 
         Ok(Self {
+            #[cfg(feature = "experimental")]
+            static_index: None,
             dictionaries: SharedDictionaryData {
                 prefix: PrefixSources::new(attachments),
             },
@@ -216,7 +220,15 @@ impl SharedContextInner {
 
     /// Returns the bytes this context owns, sources and indexes together.
     pub(crate) fn allocated_size(&self) -> usize {
-        size_of::<Self>() + self.dictionaries.allocated_size() + self.prepared.allocated_size()
+        let bytes =
+            size_of::<Self>() + self.dictionaries.allocated_size() + self.prepared.allocated_size();
+        #[cfg(feature = "experimental")]
+        let bytes = bytes
+            + self
+                .static_index
+                .as_ref()
+                .map_or(0, super::static_index::StaticIndex::allocated_size);
+        bytes
     }
 
     /// Returns the longest match the attached dictionaries offer for `input`.

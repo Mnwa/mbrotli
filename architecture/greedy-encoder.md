@@ -560,10 +560,11 @@ sized by the same `2 * bytes + 503` reservation the reference uses.
   compiles its compound-dictionary search for `H5`, `H6`, `H40`, `H41`, `H42`,
   `H55` and `H65` only, so `H2`, `H3`, `H4` and `H54` have nowhere to put a
   prefix match; where the reference then ignores the dictionary, this crate
-  refuses. Custom word and transform lists are not implemented at any quality.
-- **No stream offset.** The reference parameter that starts a stream at a
-  non-zero position is not exposed, so its poisoned distance cache is
-  unreachable.
+  refuses. Experimental custom static dictionaries use the same quality floor.
+- **Custom static and offset mechanics are experimental.** The selected
+  UTF-8 context combination replaces the implicit built-in probe; headerless
+  continuations poison the distance cache and shift dictionary placement without
+  inventing history. See [rfc9841-encoding.md](rfc9841-encoding.md).
 - **No SIMD beyond the match-length scan.** Tag masks, histogram accumulation
   and context sampling are still scalar.
 - **The throughput gate is not met, and the reason splits in two.** Geometric

@@ -24,6 +24,8 @@ mod session;
 mod shared;
 
 pub mod dictionary;
+#[cfg(feature = "experimental")]
+pub mod framing;
 pub mod io;
 
 pub use config::{

@@ -35,6 +35,14 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum EncodeError {
+    /// Logical placement plus input exceeds the RFC's 63-bit position range.
+    #[error("stream position {position} plus {input_bytes} input bytes exceeds 63 bits")]
+    StreamPositionOverflow {
+        /// Position before accepting this input.
+        position: u64,
+        /// Number of input bytes offered.
+        input_bytes: u64,
+    },
     /// The caller's destination cannot hold the whole stream.
     ///
     /// Size one with [`Compressor::max_compressed_size`] to make this
@@ -68,12 +76,12 @@ pub enum EncodeError {
         /// The quality that was asked for.
         quality: Quality,
     },
-    /// A non-zero stream offset was asked for, which is not implemented.
+    /// A non-zero stream offset was asked for on an unsupported path.
     ///
-    /// RFC 9841 lets a stream declare that it begins at a logical position
-    /// other than zero. This encoder does not implement it yet, and says so
-    /// rather than compressing at offset zero behind the caller's back.
-    #[error("a stream offset of {offset} is not implemented; only zero is supported")]
+    /// Continuations require `experimental` and quality two or above.
+    #[error(
+        "stream offset {offset} requires experimental continuation support at quality 2 or above"
+    )]
     UnsupportedStreamOffset {
         /// The offset that was asked for.
         offset: u64,
@@ -147,6 +155,7 @@ impl From<EncodeError> for std::io::Error {
             EncodeError::OutputTooSmall { .. } => std::io::ErrorKind::WriteZero,
             EncodeError::AllocationFailed { .. } => std::io::ErrorKind::OutOfMemory,
             EncodeError::UnsupportedStreamOffset { .. }
+            | EncodeError::StreamPositionOverflow { .. }
             | EncodeError::DictionaryUnsupportedForQuality { .. } => {
                 std::io::ErrorKind::InvalidInput
             }

@@ -4,7 +4,7 @@ Brotli compression in safe Rust, byte-identical to Google's reference encoder.
 
 `mbrotli` implements every Brotli quality as a port of
 [google/brotli] v1.2.0, commit `028fb5a`. For any input and any
-combination of encoder parameters, it emits exactly the same bytes the
+combination of standard encoder parameters covered by the differential suite, it emits the same bytes the
 reference encoder does. That is not an aspiration: it is what the test suite
 asserts, on every corpus, on every run.
 
@@ -59,10 +59,10 @@ serialise the compression itself, not merely the access. One immutable
 | RFC 9841 Large Window (qualities 3–11) | implemented — qualities 0, 1 and 2 refuse it when the compressor is built |
 | RFC 9841 prefix dictionaries (qualities 5–11) | implemented — byte-identical to the reference's compound dictionary |
 | RFC 9841 prefix dictionaries at qualities 0–4 | refused with `DictionaryUnsupportedForQuality`, never ignored — the reference has no search there either |
-| Stream offset | not implemented; a non-zero offset is refused rather than ignored |
+| Stream offset | experimental headerless continuations at qualities 2–11; checked 63-bit logical positions |
 | RFC 9841 serialized dictionary format | implemented behind the `experimental` feature — parsed, validated, built and written, and differential-tested against the reference parser; see below |
-| RFC 9841 framing container | not implemented |
-| Custom static dictionaries | described but not compressed against; the built-in static dictionary is used, and a custom one is refused rather than ignored |
+| RFC 9841 framing container | experimental streaming writer, chunk types 0–10, explicit references, metadata, directory and footer |
+| Custom static dictionaries | experimental preparation and compression at qualities 5–11, including transforms and context combinations |
 
 ### The `experimental` feature
 
@@ -85,15 +85,21 @@ What the feature adds:
   lists, combinations and the sixty-four entry context map;
 - `WordList`, `TransformList` and `TransformOperation`, covering all
   twenty-three transform operations including the two scalar shifts;
-- `DictionaryBuilder::add_serialized`, which attaches such a dictionary's LZ77
-  prefix;
-- six more `DictionaryLimits` ceilings that bound the parse before it allocates.
+- `DictionaryBuilder::add_serialized`, which prepares the embedded prefix and
+  custom static search indexes in the same immutable `PreparedDictionary`;
+- additional `DictionaryLimits` ceilings for parsing and transformed index
+  expansion, checked before allocation;
+- headerless continuation streams through `StreamConfig::with_stream_offset`;
+- `framing::FramedWriter` and borrowing resource writers, with bounded chunks,
+  explicit caller-supplied dictionary IDs, transactional sink recovery and no
+  implicit finalization on drop.
 
-What it does not add: no encoder consults a custom word or transform list yet,
-so `DictionaryBuilder::build` refuses a dictionary carrying one with
-`DictionaryError::CustomStaticDictionaryUnsupported` rather than preparing a
-dictionary whose custom words would be silently ignored. See
-[`architecture/serialized-dictionary.md`](architecture/serialized-dictionary.md).
+See [custom dictionary and continuation mechanics](architecture/rfc9841-encoding.md)
+and [container mechanics and supported forms](architecture/framing.md). Extended
+custom-transform behavior is verified by independent C decoding; it does not
+claim byte identity with C's more restricted experimental search implementation.
+Local test results, benchmark observations and open release gates are recorded in
+[the Track B validation report](docs/track_b_validation.md).
 
 ### Quality guide
 

@@ -9,12 +9,11 @@ features:
 | Large Window Brotli | **implemented** for qualities 3 to 11 |
 | LZ77 prefix dictionaries: preparation, indexes, addressing, search | **implemented** |
 | LZ77 prefix dictionaries: use by an encoder | **implemented** for qualities 5 to 11 — refused below, not ignored |
-| Serialized shared dictionaries | not implemented |
-| Framing container format | not implemented |
+| Serialized shared dictionaries and custom static encoding | implemented behind `experimental`; see [rfc9841-encoding.md](rfc9841-encoding.md) |
+| Framing container format | experimental writer; see [framing.md](framing.md) |
 
-Only the implemented rows are described below as working mechanics. The rest is
-recorded in "Known gaps" so that this file never describes intent as if it were
-behaviour.
+This file covers Large Window and prefix mechanics. The linked specifications
+cover the experimental extensions; remaining limitations are recorded below.
 
 Interoperability choices this design rests on are recorded in
 [`docs/rfc9841_interop_decisions.md`](../docs/rfc9841_interop_decisions.md); the
@@ -684,25 +683,13 @@ has to prove it.
   carry a prefix match. Where the reference then ignores the dictionary, every
   dictionary entry point refuses with
   `EncodeError::DictionaryUnsupportedForQuality`.
-- **Serialized dictionaries are described but not compressed against.** Behind
-  the `experimental` feature the whole RFC 9841 section 5 format is parsed,
-  validated, built and written, and `DictionaryBuilder::add_serialized`
-  attaches such a dictionary's LZ77 prefix; see
-  [`serialized-dictionary.md`](serialized-dictionary.md). What is missing is the
-  encoder side: no match finder consults a custom word or transform list, so the
-  reference's `contextual.dict[dict_id]` selection still has no counterpart and
-  `DictionaryBuilder::build` refuses a custom static dictionary with
-  `DictionaryError::CustomStaticDictionaryUnsupported` rather than ignoring it.
-- **Two of the six specified limits are absent.** `DictionaryLimits` carries
-  the four that something checks today, plus six more behind `experimental`.
-  `max_transformed_word_bytes` and `max_trie_nodes` bound structures only the
-  custom static dictionary encoder builds, and land with it;
-  `max_reusable_workspace_bytes` would bound the compressor's workspace, which
-  `RetentionPolicy::Bounded` now does instead.
-- **No framing container.** No signature, chunks, metadata, references, central
-  directory or final footer. `Compressor::framed_writer` does not exist. RFC
-  9841 section 8 specifies it in full and the pinned C library implements none
-  of it, so it would be written against the RFC alone.
+- **Custom dictionaries and continuations are experimental.** Their current
+  search, context selection, transformed-index limits and checked stream offsets
+  are specified in [rfc9841-encoding.md](rfc9841-encoding.md). Parser mechanics
+  remain in [serialized-dictionary.md](serialized-dictionary.md).
+- **Framing has no pinned C container oracle.** The experimental writer emits
+  RFC fixtures and independently decodable resource streams; see
+  [framing.md](framing.md) for supported forms and limits.
 - **Large window is refused at qualities 0, 1 and 2.** See decision D4 and §6.
 - **Declared windows above 30 bits are not decoded end to end** by any
   implementation in this repository; the pinned C decoder rejects them and this

@@ -311,6 +311,8 @@ pub(crate) const fn choose_hasher(
 /// Every parameter the greedy encoder needs, already sanitised.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GreedyParams {
+    #[cfg(feature = "experimental")]
+    pub(crate) stream_offset: usize,
     /// Quality this encoder runs at.
     pub(crate) quality: GreedyQuality,
     /// Window this stream declares, and whether it is a large one.
@@ -360,6 +362,8 @@ impl GreedyParams {
         let lgwin = window.encoder_bits();
         let lgblock = compute_lgblock(quality, params.lgblock().map(usize::from), lgwin);
         Ok(Self {
+            #[cfg(feature = "experimental")]
+            stream_offset: params.stream_offset,
             quality,
             window,
             lgwin,

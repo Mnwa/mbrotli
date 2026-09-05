@@ -30,6 +30,8 @@ pub(crate) mod search;
 #[cfg(feature = "experimental")]
 pub(crate) mod serialized;
 #[cfg(feature = "experimental")]
+pub(crate) mod static_index;
+#[cfg(feature = "experimental")]
 pub(crate) mod transform;
 #[cfg(feature = "experimental")]
 pub(crate) mod varint;

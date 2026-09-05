@@ -70,6 +70,10 @@ impl ZopfliNode {
     #[inline(always)]
     pub(crate) const fn length_code(&self) -> u32 {
         let modifier = self.length >> LEN_CODE_SHIFT;
+        #[cfg(feature = "experimental")]
+        if modifier >= 96 {
+            return modifier - 96;
+        }
         self.copy_length() + 9 - modifier
     }
 
@@ -163,7 +167,16 @@ impl ZopfliNode {
         cost: f32,
     ) {
         if let Some(next) = nodes.get_mut(pos + len) {
-            next.length = (len as u32) | (((len + 9 - len_code) as u32) << LEN_CODE_SHIFT);
+            let modifier = (len + 9 - len_code) as u32;
+            // The built-in dictionary never reaches 96. These upper tags
+            // encode an absolute base length for long custom transforms.
+            #[cfg(feature = "experimental")]
+            let modifier = if modifier >= 96 {
+                96 + len_code as u32
+            } else {
+                modifier
+            };
+            next.length = (len as u32) | (modifier << LEN_CODE_SHIFT);
             next.distance = dist as u32;
             next.dcode_insert_length =
                 ((short_code as u32) << DCODE_SHIFT) | ((pos - start_pos) as u32);

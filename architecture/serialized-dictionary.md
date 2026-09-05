@@ -191,6 +191,14 @@ The RFC permits a longer varint than a value needs. Such an encoding is
 accepted on parse and normalised on write, which is the documented treatment of
 the one noncanonical encoding the format allows.
 
+The pinned C helper reads prefix lengths with `ReadVarint32` and rejects a
+fifth byte with its high bit set, even for a valid six-to-nine-byte redundant
+encoding of a small length. RFC 9841 permits those encodings. AFL minimized
+this oracle disagreement to the committed zero-length and 17-byte-prefix
+fixtures. The Rust parser retains RFC behavior; differential fuzzing exempts
+only that structural C width limit and still requires canonical reserialization
+to parse and compressed payloads to decode with C.
+
 `WordListBuilder` pads each length group to a power of two by repeating its last
 word, because the format addresses a word by a fixed-width index and spells "no
 words of this length" as a zero exponent — so a group of one word is stored as
@@ -254,19 +262,12 @@ suite passing unchanged with it defined is what shows no ordinary output moved.
 
 ## Known gaps
 
-- **No encoder consults a custom static dictionary.** The format is parsed,
-  validated, built and written in full, and `DictionaryBuilder::add_serialized`
-  attaches such a dictionary's LZ77 prefix. Its word and transform lists reach
-  no match finder, so `DictionaryBuilder::build` refuses with
-  `DictionaryError::CustomStaticDictionaryUnsupported` rather than preparing a
-  dictionary whose custom words would be silently ignored. What is missing is
-  the encoder-side index: the runtime hash table, the `dict_words` lookup
-  table, the heavy trie qualities 10 and 11 need, the per-position context
-  selection, and the fall-through between combinations.
-- **`max_transformed_word_bytes` and `max_trie_nodes` are absent.** Both bound
-  structures the encoder-side index would build, and land with it.
-- **No framing container.** No signature, chunks, metadata, references, central
-  directory or final footer. `Compressor::framed_writer` does not exist.
-- **No fuzz target.** The parser is a byte-consuming boundary and wants one;
-  the differential mutation test covers the same ground exhaustively for one
-  fixture but not randomly for many.
+- Custom static compression is now implemented by the immutable
+  `core::rfc9841::static_index` described in
+  [rfc9841-encoding.md](rfc9841-encoding.md). Its expansion limits are
+  `max_transformed_word_bytes`, `max_static_entries` and the aggregate retained
+  byte ceiling. A flat index is used instead of a trie.
+- Container writing is described in [framing.md](framing.md).
+- The `serialized_dictionary` AFL target covers parse/serialize, bounded
+  preparation and attached-dictionary C decoding. Extended combination and
+  transform search has no equivalent blanket C encoder byte-identity authority.

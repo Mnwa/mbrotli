@@ -779,7 +779,9 @@ fn parse_transform_list(
     // The parameter block is on the wire if and only if some transform shifts,
     // which is decided by the triples that were just read.
     let shifts = triples
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .any(|triple| triple[1] == SHIFT_FIRST || triple[1] == SHIFT_ALL);
     let params = if shifts {
         reader

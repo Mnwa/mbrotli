@@ -59,6 +59,10 @@ impl TryFrom<QualityLevel> for HqQuality {
 /// Every parameter the high-quality encoder needs, already sanitised.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct HqParams {
+    #[cfg(feature = "experimental")]
+    pub(crate) stream_offset: usize,
+    #[cfg(feature = "experimental")]
+    pub(crate) dictionary_context_mode: ContextMode,
     /// Quality this encoder runs at.
     pub(crate) quality: HqQuality,
     /// Window this stream declares, and whether it is a large one.
@@ -81,6 +85,17 @@ pub(crate) struct HqParams {
 }
 
 impl HqParams {
+    /// Logical placement shifts dictionary addresses, never ring-buffer probes.
+    pub(crate) const fn logical_position(&self, position: usize) -> usize {
+        #[cfg(feature = "experimental")]
+        {
+            position + self.stream_offset
+        }
+        #[cfg(not(feature = "experimental"))]
+        {
+            position
+        }
+    }
     /// Resolves `params` for a stream.
     ///
     /// Unlike the lower qualities, nothing here depends on the size hint: both
@@ -96,6 +111,10 @@ impl HqParams {
         let lgwin = window.encoder_bits();
         let lgblock = compute_lgblock(params.lgblock().map(usize::from), lgwin);
         Ok(Self {
+            #[cfg(feature = "experimental")]
+            stream_offset: params.stream_offset,
+            #[cfg(feature = "experimental")]
+            dictionary_context_mode: ContextMode::Utf8,
             quality,
             window,
             lgwin,

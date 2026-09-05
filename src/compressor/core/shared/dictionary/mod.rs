@@ -110,6 +110,32 @@ impl DictionaryStats {
     }
 }
 
+#[cfg(feature = "experimental")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "same inputs as the reference static dictionary query"
+)]
+pub(crate) fn search_custom(
+    dictionary: &crate::compressor::core::rfc9841::static_index::StaticCombination,
+    stats: &mut DictionaryStats,
+    data: &[u8],
+    max_length: usize,
+    base: usize,
+    max_distance: usize,
+    out: &mut SearchResult,
+    shallow: bool,
+) {
+    if !stats.is_worth_probing() {
+        return;
+    }
+    for offset in 0..if shallow { 1 } else { 2 } {
+        stats.lookups += 1;
+        if dictionary.probe(data, max_length, base, max_distance, offset, out) {
+            stats.matches += 1;
+        }
+    }
+}
+
 /// Tests one hash bucket entry against the data at the current position.
 ///
 /// Mirrors `TestStaticDictionaryItem`. Returns whether the entry produced a

@@ -145,6 +145,15 @@ impl Command {
         distance_code: usize,
     ) -> Self {
         let delta = (copylen_code_delta as i8) as u8 as u32;
+        // Values 32..=63 cannot describe a normal static-word length delta.
+        // Reserve them for the absolute base-word length of long RFC 9841
+        // transforms, retaining the reference layout for ordinary commands.
+        #[cfg(feature = "experimental")]
+        let delta = if copylen_code_delta < -64 {
+            32 + (copylen as i64 + copylen_code_delta as i64) as u32
+        } else {
+            delta
+        };
         let (dist_prefix, dist_extra) =
             prefix_encode_copy_distance(distance_code, dist.num_direct, dist.postfix_bits);
         let cmd_prefix = length_code(
@@ -187,6 +196,10 @@ impl Command {
     #[inline(always)]
     pub(crate) const fn copy_len_code(&self) -> u32 {
         let modifier = self.copy_len >> COPY_LEN_CODE_SHIFT;
+        #[cfg(feature = "experimental")]
+        if modifier >= 32 && modifier <= 63 {
+            return modifier - 32;
+        }
         let delta = ((modifier | ((modifier & 0x40) << 1)) as u8) as i8 as i32;
         ((self.copy_len & COPY_LEN_MASK) as i32 + delta) as u32
     }

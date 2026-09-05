@@ -529,7 +529,7 @@ impl Compressor {
         stream: StreamConfig,
     ) -> Result<EncoderSession<'_, 'static>, EncodeError> {
         let limit = self.begin(None, stream)?;
-        Ok(EncoderSession::new(self, None, limit))
+        Ok(EncoderSession::new(self, None, limit, stream))
     }
 
     /// Starts an incremental stream compressed against `dictionary`.
@@ -561,7 +561,7 @@ impl Compressor {
         stream: StreamConfig,
     ) -> Result<EncoderSession<'c, 'd>, EncodeError> {
         let limit = self.begin(Some(dictionary), stream)?;
-        Ok(EncoderSession::new(self, Some(dictionary), limit))
+        Ok(EncoderSession::new(self, Some(dictionary), limit, stream))
     }
 
     /// Returns how many bytes this compressor is keeping allocated.
@@ -743,7 +743,9 @@ impl Compressor {
         stream: StreamConfig,
     ) -> Result<usize, EncodeError> {
         self.ensure_available()?;
-        if stream.stream_offset() != 0 {
+        if stream.stream_offset() != 0
+            && (!cfg!(feature = "experimental") || self.config.quality().get() < 2)
+        {
             return Err(EncodeError::UnsupportedStreamOffset {
                 offset: stream.stream_offset(),
             });
@@ -753,6 +755,27 @@ impl Compressor {
         }
 
         let params = self.config.lower(Some(stream.input_size().hint()));
+        #[cfg(feature = "experimental")]
+        let params = {
+            let input_bytes = match stream.input_size() {
+                super::InputSize::Exact(size) => size,
+                super::InputSize::Unknown => 0,
+            };
+            if stream
+                .stream_offset()
+                .checked_add(input_bytes)
+                .is_none_or(|end| end > (1u64 << 63) - 1)
+            {
+                return Err(EncodeError::StreamPositionOverflow {
+                    position: stream.stream_offset(),
+                    input_bytes,
+                });
+            }
+            let mut params = params;
+            let bits = self.config.window().bits().min(30);
+            params.stream_offset = stream.stream_offset().min((1u64 << bits) - 16) as usize;
+            params
+        };
         let limit = match self.workspace.acquire(self.level, &params, 0) {
             Ok(encoder) => encoder.block_size_limit(),
             Err(error) => {

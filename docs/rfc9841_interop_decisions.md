@@ -54,10 +54,10 @@ central directory, and would leave the extended profile with no way to find one.
 That is not a format anyone can implement.
 
 **Revisit when** an accepted erratum or a document that updates RFC 9841 says
-otherwise. The framing writer is not implemented yet; when it is, the named
-tests `interop_9841_container_flag_simple`,
-`interop_9841_container_flag_indexed` and `interop_9841_footer_flag_consistency`
-pin this decision.
+otherwise. The experimental framing writer now follows this decision;
+`tests/framing.rs` pins both the single-resource golden fixture and full
+container header/footer consistency. Current mechanics and supported forms are
+documented in [`architecture/framing.md`](../architecture/framing.md).
 
 ## D1a — One window type instead of two (repository owner's decision)
 

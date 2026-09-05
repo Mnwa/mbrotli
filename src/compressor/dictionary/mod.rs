@@ -101,7 +101,7 @@ pub struct PreparedDictionary {
 impl PreparedDictionary {
     /// Returns how many prefix dictionaries were attached.
     ///
-    /// Always at least one: an empty dictionary is refused when it is built.
+    /// Zero for a dictionary containing only custom static words/transforms.
     ///
     /// # Examples
     ///
@@ -123,8 +123,9 @@ impl PreparedDictionary {
 
     /// Returns how many dictionary bytes the caller handed over.
     ///
-    /// This is what a decoder has to attach, in the same order, to read a
-    /// stream compressed against this dictionary.
+    /// Includes prefix bytes and custom word/transform source bytes, but not
+    /// serialized framing or built-in dictionary bytes. The decoder must attach
+    /// the same dictionaries in the same order.
     ///
     /// # Examples
     ///
@@ -138,7 +139,15 @@ impl PreparedDictionary {
     /// ```
     #[must_use]
     pub fn source_bytes(&self) -> usize {
-        self.inner.dictionaries().source_size()
+        let bytes = self.inner.dictionaries().source_size();
+        #[cfg(feature = "experimental")]
+        let bytes = bytes
+            + self
+                .inner
+                .static_index
+                .as_ref()
+                .map_or(0, |index| index.source_bytes);
+        bytes
     }
 
     /// Returns how much memory this dictionary occupies.
@@ -168,7 +177,8 @@ impl PreparedDictionary {
     /// RFC 9841 places the attached prefix immediately beyond the ordinary
     /// sliding window: distances `1..=max_backward` are the stream's own
     /// history, `max_backward + 1` is the *last* prefix byte, and
-    /// `max_backward + source_bytes()` is the very first. `max_backward` is the
+    /// `max_backward + prefix_length` is the very first. Custom static source
+    /// bytes do not contribute to `prefix_length`. `max_backward` is the
     /// largest distance the window can express at the position the copy starts
     /// from.
     ///
@@ -397,9 +407,43 @@ pub struct DictionaryLimits {
     /// Most word-and-transform-list combinations.
     #[cfg(feature = "experimental")]
     max_combinations: usize,
+    #[cfg(feature = "experimental")]
+    max_transformed_word_bytes: u64,
+    #[cfg(feature = "experimental")]
+    max_static_entries: u64,
 }
 
 impl DictionaryLimits {
+    /// Sets the total transformed-word storage limit (default 128 MiB).
+    #[cfg(feature = "experimental")]
+    #[must_use]
+    pub const fn with_max_transformed_word_bytes(mut self, bytes: u64) -> Self {
+        self.max_transformed_word_bytes = bytes;
+        self
+    }
+
+    /// Returns the total transformed-word storage limit.
+    #[cfg(feature = "experimental")]
+    #[must_use]
+    pub const fn max_transformed_word_bytes(self) -> u64 {
+        self.max_transformed_word_bytes
+    }
+
+    /// Sets the number of entries in the static search index (default 8 million).
+    /// This bounds the flat index used instead of a trie.
+    #[cfg(feature = "experimental")]
+    #[must_use]
+    pub const fn with_max_static_entries(mut self, count: u64) -> Self {
+        self.max_static_entries = count;
+        self
+    }
+
+    /// Returns the maximum number of static search entries.
+    #[cfg(feature = "experimental")]
+    #[must_use]
+    pub const fn max_static_entries(self) -> u64 {
+        self.max_static_entries
+    }
     /// Default ceiling on the attached source bytes: 64 MiB.
     ///
     /// Far above any ordinary production dictionary, and at the size where the
@@ -854,6 +898,10 @@ impl Default for DictionaryLimits {
             max_transform_lists: Self::DEFAULT_MAX_TRANSFORM_LISTS,
             #[cfg(feature = "experimental")]
             max_combinations: Self::DEFAULT_MAX_COMBINATIONS,
+            #[cfg(feature = "experimental")]
+            max_transformed_word_bytes: 128 << 20,
+            #[cfg(feature = "experimental")]
+            max_static_entries: 8_000_000,
         }
     }
 }
@@ -1043,15 +1091,87 @@ impl DictionaryBuilder {
     /// ```
     pub fn build(self) -> Result<PreparedDictionary, DictionaryError> {
         #[cfg(feature = "experimental")]
-        if self.custom_static.is_some() {
-            return Err(DictionaryError::CustomStaticDictionaryUnsupported);
-        }
-        if self.attachments.iter().all(|bytes| bytes.is_empty()) {
+        let has_static = self.custom_static.is_some();
+        #[cfg(not(feature = "experimental"))]
+        let has_static = false;
+        if !has_static && self.attachments.iter().all(|bytes| bytes.is_empty()) {
             return Err(DictionaryError::Empty);
+        }
+        #[cfg(feature = "experimental")]
+        if let Some(data) = &self.custom_static {
+            let word_bytes = data
+                .word_lists()
+                .iter()
+                .map(|w| w.data().len() as u64)
+                .sum::<u64>();
+            let transform_bytes = data
+                .transform_lists()
+                .iter()
+                .map(|t| t.wire_len() as u64)
+                .sum::<u64>();
+            for (what, found, limit) in [
+                (
+                    "serialized bytes",
+                    data.wire_len() as u64,
+                    self.limits.max_serialized_bytes,
+                ),
+                (
+                    "word lists",
+                    data.word_lists().len() as u64,
+                    self.limits.max_word_lists as u64,
+                ),
+                ("word bytes", word_bytes, self.limits.max_word_bytes),
+                (
+                    "transform lists",
+                    data.transform_lists().len() as u64,
+                    self.limits.max_transform_lists as u64,
+                ),
+                (
+                    "transform bytes",
+                    transform_bytes,
+                    self.limits.max_transform_bytes,
+                ),
+                (
+                    "combinations",
+                    data.combinations().len() as u64,
+                    self.limits.max_combinations as u64,
+                ),
+            ] {
+                if found > limit {
+                    return Err(DictionaryError::LimitExceeded { what, found, limit });
+                }
+            }
+            let source = self.attachments.iter().map(|p| p.len() as u64).sum::<u64>()
+                + word_bytes
+                + transform_bytes;
+            if source > self.limits.max_source_bytes {
+                return Err(DictionaryError::TooLarge {
+                    bytes: source,
+                    limit: self.limits.max_source_bytes,
+                });
+            }
         }
         let budget = Budget::from(self.limits);
         let inner = SharedContextInner::new(self.attachments, &budget)
             .map_err(DictionaryError::from_core)?;
+        #[cfg(feature = "experimental")]
+        let inner = {
+            let mut inner = inner;
+            if let Some(data) = self.custom_static {
+                inner.static_index = Some(
+                    super::core::rfc9841::static_index::StaticIndex::prepare(
+                        &data,
+                        self.limits
+                            .max_retained_bytes
+                            .saturating_sub(inner.allocated_size() as u64),
+                        self.limits.max_transformed_word_bytes,
+                        self.limits.max_static_entries,
+                    )
+                    .map_err(DictionaryError::from_core)?,
+                );
+            }
+            inner
+        };
         Ok(PreparedDictionary { inner })
     }
 }
@@ -1076,6 +1196,17 @@ impl DictionaryBuilder {
 #[derive(Error, Debug, Copy, Clone, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum DictionaryError {
+    /// An experimental serialized-description preparation limit was exceeded.
+    #[cfg(feature = "experimental")]
+    #[error("dictionary {what} of {found} exceeds the limit of {limit}")]
+    LimitExceeded {
+        /// The bounded resource.
+        what: &'static str,
+        /// The description's requirement.
+        found: u64,
+        /// The caller's ceiling.
+        limit: u64,
+    },
     /// Nothing was attached, or every attachment was empty.
     ///
     /// A dictionary with no bytes in it can shorten no stream, so it is refused
@@ -1096,18 +1227,6 @@ pub enum DictionaryError {
         /// How many it may hold.
         limit: usize,
     },
-    /// The dictionary carries a custom static dictionary, which no encoder reads yet.
-    ///
-    /// **Experimental.** [`SerializedDictionary`] parses, validates and writes
-    /// custom word and transform lists in full, and
-    /// [`DictionaryBuilder::add_serialized`] attaches the LZ77 prefix of such a
-    /// dictionary, but no match finder consults the custom static dictionary
-    /// yet. Refusing to prepare one is what keeps a caller from believing a
-    /// stream used words it did not; a dictionary that carries only a prefix
-    /// prepares normally.
-    #[cfg(feature = "experimental")]
-    #[error("custom static dictionaries are described but not yet used by any encoder")]
-    CustomStaticDictionaryUnsupported,
     /// An attachment, or the whole logical prefix, is larger than allowed.
     #[error("{bytes} dictionary bytes exceed the limit of {limit}")]
     TooLarge {

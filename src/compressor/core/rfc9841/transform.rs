@@ -353,8 +353,7 @@ impl TransformList {
     }
 
     /// Returns how many stringlets the list defines, terminator included.
-    #[cfg(test)]
-    pub(crate) fn stringlet_count(&self) -> usize {
+    pub(crate) const fn stringlet_count(&self) -> usize {
         self.stringlets.len()
     }
 
@@ -401,7 +400,6 @@ impl TransformList {
     ///
     /// `None` when the list defines no such transform, which is what makes a
     /// cutoff match unavailable at that length.
-    #[cfg(test)]
     pub(crate) fn cutoff(&self, cut: usize) -> Option<usize> {
         self.cutoff.get(cut).copied().flatten().map(usize::from)
     }

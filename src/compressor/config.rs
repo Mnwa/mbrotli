@@ -910,6 +910,8 @@ impl EncoderConfig {
     /// from it, so it arrives per stream rather than per encoder.
     pub(crate) const fn lower(&self, size_hint: Option<usize>) -> super::internal::CompressParams {
         super::internal::CompressParams {
+            #[cfg(feature = "experimental")]
+            stream_offset: 0,
             quality: self.quality.level(),
             lgwin: self.window.resolve(),
             lgblock: match self.block_size {

@@ -124,6 +124,10 @@ pub(crate) fn create_backward_references<S: Simd, M: Matcher, const ENABLE_PREFI
     let num_bytes = span.bytes as usize;
     let mut position = span.position as usize;
     let max_backward_limit = params.max_backward_limit();
+    #[cfg(feature = "experimental")]
+    let position_offset = params.stream_offset;
+    #[cfg(not(feature = "experimental"))]
+    let position_offset = 0;
     let mut insert_length = state.last_insert_len;
     let pos_end = position + num_bytes;
     let store_end = if num_bytes >= M::STORE_LOOKAHEAD {
@@ -153,12 +157,27 @@ pub(crate) fn create_backward_references<S: Simd, M: Matcher, const ENABLE_PREFI
     while position + M::HASH_TYPE_LENGTH < pos_end {
         let mut max_length = pos_end - position;
         let mut max_distance = position.min(max_backward_limit);
-        let mut dictionary_start = position.min(max_backward_limit);
+        let mut dictionary_start = (position + position_offset).min(max_backward_limit);
         let mut sr = SearchResult::empty();
         matcher.find_longest_match(
             simd,
             &mut state.dictionary,
             MatchQuery {
+                #[cfg(feature = "experimental")]
+                custom: if ENABLE_PREFIX {
+                    attached.and_then(|c| c.static_index.as_ref()).map(|index| {
+                        index.combination(super::context_model::context(
+                            crate::compressor::core::rfc9841::static_index::previous(
+                                ringbuffer, position, mask, 1,
+                            ),
+                            crate::compressor::core::rfc9841::static_index::previous(
+                                ringbuffer, position, mask, 2,
+                            ),
+                        ))
+                    })
+                } else {
+                    None
+                },
                 data: ringbuffer,
                 mask,
                 cache: &state.dist_cache,
@@ -227,11 +246,32 @@ pub(crate) fn create_backward_references<S: Simd, M: Matcher, const ENABLE_PREFI
                 len_code_delta: 0,
             };
             max_distance = (position + 1).min(max_backward_limit);
-            dictionary_start = (position + 1).min(max_backward_limit);
+            dictionary_start = (position + 1 + position_offset).min(max_backward_limit);
             matcher.find_longest_match(
                 simd,
                 &mut state.dictionary,
                 MatchQuery {
+                    #[cfg(feature = "experimental")]
+                    custom: if ENABLE_PREFIX {
+                        attached.and_then(|c| c.static_index.as_ref()).map(|index| {
+                            index.combination(super::context_model::context(
+                                crate::compressor::core::rfc9841::static_index::previous(
+                                    ringbuffer,
+                                    position + 1,
+                                    mask,
+                                    1,
+                                ),
+                                crate::compressor::core::rfc9841::static_index::previous(
+                                    ringbuffer,
+                                    position + 1,
+                                    mask,
+                                    2,
+                                ),
+                            ))
+                        })
+                    } else {
+                        None
+                    },
                     data: ringbuffer,
                     mask,
                     cache: &state.dist_cache,
@@ -270,7 +310,7 @@ pub(crate) fn create_backward_references<S: Simd, M: Matcher, const ENABLE_PREFI
         }
 
         apply_random_heuristics = position + 2 * sr.len + window;
-        dictionary_start = position.min(max_backward_limit);
+        dictionary_start = (position + position_offset).min(max_backward_limit);
         let distance_code =
             compute_distance_code(sr.distance, dictionary_start + gap, &state.dist_cache);
         if sr.distance <= dictionary_start + gap && distance_code > 0 {

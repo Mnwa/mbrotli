@@ -404,6 +404,50 @@ pub fn c_decompress_large_window(input: &[u8], expected_size: usize) -> Option<V
     Some(output)
 }
 
+/// Decodes a bounded custom-dictionary stream using the independent C decoder.
+pub fn c_decompress_serialized(
+    dictionary: &[u8],
+    input: &[u8],
+    expected_size: usize,
+) -> Option<Vec<u8>> {
+    let mut output = vec![0; expected_size.max(1)];
+    // SAFETY: buffers remain alive for the decoder's lifetime; the output
+    // capacity matches its writable length. State is freed on both paths.
+    unsafe {
+        let state = ffi::BrotliDecoderCreateInstance(None, None, std::ptr::null_mut());
+        assert!(!state.is_null());
+        if ffi::BrotliDecoderAttachDictionary(
+            state,
+            ffi::BROTLI_SHARED_DICTIONARY_SERIALIZED,
+            dictionary.len(),
+            dictionary.as_ptr(),
+        ) != ffi::BROTLI_TRUE
+        {
+            ffi::BrotliDecoderDestroyInstance(state);
+            return None;
+        }
+        let mut available_in = input.len();
+        let mut next_in = input.as_ptr();
+        let mut available_out = output.len();
+        let mut next_out = output.as_mut_ptr();
+        let mut total = 0;
+        let result = ffi::BrotliDecoderDecompressStream(
+            state,
+            &raw mut available_in,
+            &raw mut next_in,
+            &raw mut available_out,
+            &raw mut next_out,
+            &raw mut total,
+        );
+        ffi::BrotliDecoderDestroyInstance(state);
+        if result != ffi::BROTLI_DECODER_RESULT_SUCCESS || available_in != 0 {
+            return None;
+        }
+        output.truncate(total);
+    }
+    Some(output)
+}
+
 /// Asserts that `compressed` decodes back to `data`.
 ///
 /// # Panics

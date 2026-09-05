@@ -100,7 +100,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [differential_c, streaming_equivalence, dictionary, serialized_dictionary, compressor_lifecycle]
+        target: [differential_c, streaming_equivalence, dictionary, serialized_dictionary, framing, compressor_lifecycle]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -130,6 +130,7 @@ jobs:
           case "$TARGET" in
             dictionary) seeds=seeds/dictionary ;;
             serialized_dictionary) seeds=seeds/serialized ;;
+            framing) seeds=regressions/framing ;;
           esac
           timeout --preserve-status 600 \
             cargo afl fuzz -i "$seeds" -o findings "target/release/$TARGET" || true

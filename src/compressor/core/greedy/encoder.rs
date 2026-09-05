@@ -90,7 +90,21 @@ impl GreedyEncoder {
     ) -> BrotliResult<Self> {
         let resolved = GreedyParams::new(params, size_hint)?;
         let (last_bytes, last_bytes_bits) = resolved.window.header();
+        #[cfg(feature = "experimental")]
+        let (last_bytes, last_bytes_bits) = if resolved.stream_offset != 0 {
+            (0, 0)
+        } else {
+            (last_bytes, last_bytes_bits)
+        };
         let references = ReferenceState::default();
+        #[cfg(feature = "experimental")]
+        let references = {
+            let mut references = references;
+            if resolved.stream_offset != 0 {
+                references.dist_cache[..4].fill(-16);
+            }
+            references
+        };
         Ok(Self {
             level,
             params: resolved,
@@ -149,6 +163,12 @@ impl GreedyEncoder {
     /// table that was never used.
     pub(crate) fn reset(&mut self) {
         let (last_bytes, last_bytes_bits) = self.params.window.header();
+        #[cfg(feature = "experimental")]
+        let (last_bytes, last_bytes_bits) = if self.params.stream_offset != 0 {
+            (0, 0)
+        } else {
+            (last_bytes, last_bytes_bits)
+        };
         // Clean the match finder before the window it read from is dropped:
         // the sweep hashes the very bytes the previous stream stored, and they
         // are still where that stream left them.
@@ -169,6 +189,10 @@ impl GreedyEncoder {
         self.last_flush_pos = 0;
         self.commands.clear();
         self.references = ReferenceState::default();
+        #[cfg(feature = "experimental")]
+        if self.params.stream_offset != 0 {
+            self.references.dist_cache[..4].fill(-16);
+        }
         self.saved_dist_cache = remembered(&self.references.dist_cache);
         self.prev_byte = 0;
         self.prev_byte2 = 0;

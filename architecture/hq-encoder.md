@@ -389,12 +389,12 @@ the reference's `limit`; only `extend_last_command` runs on across seams.
   alphabet and its `alphabet_size_limit`, but retained history is capped at 30
   bits by `ResolvedWindow::encoder_bits`, so the binary tree never indexes a
   window wider than that. See [shared-brotli.md](shared-brotli.md) decision D2.
-- **No serialized or contextual dictionary.** The LZ77 prefix is implemented;
-  the reference's custom word lists, transform lists and context map are not,
-  so its `contextual.dict[dict_id]` selection has no counterpart and the
-  built-in static dictionary is always the one consulted.
-- **Stream offset.** Always zero; the reference uses it only for shared
-  dictionaries.
+- **Custom static dictionaries and offsets are experimental.** The immutable
+  flat index merges per-length transformed candidates into Zopfli matches using
+  the current meta-block literal context. Extended packed length modifiers keep
+  long transforms' base lengths intact. Headerless continuations shift logical
+  dictionary placement but not history availability. See
+  [rfc9841-encoding.md](rfc9841-encoding.md) for both flows and their limits.
 - **`hotpath` instrumentation.** Only `encode_block`, `encode_block_with` and
   `flush_block` are annotated on this path; the inner stages are not yet
   measured.

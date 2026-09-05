@@ -281,7 +281,7 @@ fn a_stream_configuration_carries_only_what_one_stream_knows() {
 
 #[test]
 fn a_non_zero_stream_offset_is_refused_rather_than_ignored() {
-    let mut encoder = encoder(Quality::Q5, 22);
+    let mut encoder = encoder(Quality::Q1, 22);
     let stream = StreamConfig::default().with_stream_offset(64);
 
     assert!(matches!(

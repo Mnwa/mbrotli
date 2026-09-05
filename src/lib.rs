@@ -168,8 +168,10 @@
 //! stream compressed without the dictionary it was given decodes perfectly
 //! well, which is what would make the mistake invisible.
 //!
-//! Serialized shared dictionaries and the Shared Brotli framing container are
-//! not implemented.
+//! The `experimental` feature adds serialized shared dictionaries, custom word
+//! and transform indexes, headerless stream continuations, and the separate
+//! Shared Brotli framing writer. These extensions do not carry the standard
+//! encoder's blanket C byte-identity guarantee.
 //!
 //! [RFC 9841]: https://www.rfc-editor.org/rfc/rfc9841.html
 
@@ -190,6 +192,8 @@
 
 mod compressor;
 
+#[cfg(feature = "experimental")]
+pub use compressor::framing;
 pub use compressor::{
     BlockBits, BlockSize, CompressionMode, Compressor, CompressorBuilder, ConfigError,
     DistanceParams, EncodeError, EncoderConfig, EncoderSession, EncoderStatus, InputSize,
