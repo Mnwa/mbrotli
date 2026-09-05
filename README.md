@@ -1,5 +1,11 @@
 # mbrotli
 
+[![Crates.io](https://img.shields.io/crates/v/mbrotli.svg)](https://crates.io/crates/mbrotli)
+[![Docs.rs](https://docs.rs/mbrotli/badge.svg)](https://docs.rs/mbrotli)
+[![Coverage](https://github.com/Mnwa/mbrotli/actions/workflows/ci-coverage.yml/badge.svg?branch=master)](https://github.com/Mnwa/mbrotli/actions/workflows/ci-coverage.yml)
+[![Fuzz](https://github.com/Mnwa/mbrotli/actions/workflows/ci-fuzz.yml/badge.svg?branch=master)](https://github.com/Mnwa/mbrotli/actions/workflows/ci-fuzz.yml)
+[![Tests](https://github.com/Mnwa/mbrotli/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Mnwa/mbrotli/actions/workflows/ci.yml)
+
 Brotli compression in safe Rust, with qualities 0–11, reusable encoder storage,
 streaming I/O, and caller-scheduled parallel compression. This crate provides
 compression only; it does not include a decoder.
