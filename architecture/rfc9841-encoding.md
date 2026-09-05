@@ -150,11 +150,10 @@ partial chunks share one encoder session instead.
   backend identity, overflow and fresh-stream recovery.
 - AFL's serialized target parses and reserializes arbitrary bytes, prepares
   under small budgets, then checks q5/q11 streams with C's attached-dictionary
-  decoder. No decoder was added to this crate.
+  decoder. This crate has no decoder.
 - C byte identity is authoritative only for equivalent exposed behavior. Its
   experimental HQ encoder searches fewer combinations and shorter transformed
   words than RFC 9841 permits. Extended cases require deterministic output and
   independent decoding, not an artificial restriction to those C search limits.
-- As before, declared windows above 30 bits have header tests but no available
-  independent end-to-end decoder in this repository. Cross-platform release
-  performance gates require measurements on the requested target machines.
+- Declared windows above 30 bits have header tests but no independent
+  end-to-end decoder in this repository.

@@ -15,11 +15,6 @@ features:
 This file covers Large Window and prefix mechanics. The linked specifications
 cover the experimental extensions; remaining limitations are recorded below.
 
-Interoperability choices this design rests on are recorded in
-[`docs/rfc9841_interop_decisions.md`](../docs/rfc9841_interop_decisions.md); the
-symbol-by-symbol mapping is in
-[`docs/rfc9841_api_binding.md`](../docs/rfc9841_api_binding.md).
-
 [RFC 9841]: https://www.rfc-editor.org/rfc/rfc9841.html
 
 ## 1. Module boundaries
@@ -121,12 +116,10 @@ let config = EncoderConfig::default()
     .with_window(Window::large(30)?);
 ```
 
-`Window` carries both the size and the header that declares it, in one value,
-because they are one decision. The two constructors are the only way to build
-one and each validates its own range: `standard` takes `10..=24`, `large` takes
-`10..=62`. The ranges overlap, and that is the point — `Window::large(22)` and
-`Window::standard(22)` are different windows of the same size, because they
-select different headers and different distance alphabets.
+`Window` carries both the size and the header encoding. Its constructors validate
+their ranges: `standard` accepts `10..=24`, and `large` accepts `10..=62`.
+`Window::large(22)` and `Window::standard(22)` select different headers and
+distance alphabets at the same size.
 
 There is no separate `large_window` flag that could disagree with the size, and
 nothing downstream re-checks a range, because no `Window` can exist that no
@@ -203,8 +196,7 @@ flowchart TD
 ```
 
 This is what makes a 62-bit declaration free: it allocates nothing, and the
-emitted payload is byte-identical to the same stream declared at 30 bits. See
-decision D2.
+emitted payload is byte-identical to the same stream declared at 30 bits.
 
 ## 4. The distance alphabet
 
@@ -465,12 +457,8 @@ behind the `diagnostics` feature, not the search a match finder runs; that one
 is §5.5. It is feature-gated because the candidate order it breaks ties by is an
 implementation detail no application should depend on.
 
-The scan is **scalar**, and its own — a whole-word compare with a byte tail,
-not the vector kernel `core::shared::match_len` gives the encoders. Reaching
-for the encoders' kernel meant refactoring it, which cost about 6% of quality
-1: `docs/rfc9841_benchmarks.md` records the measurement and the symmetric A/B
-that separated it from machine drift. The prefix search therefore touches no
-file any encoder compiles.
+The scan uses scalar whole-word comparisons with a byte tail. It is separate
+from the encoders' vector kernel in `core::shared::match_len`.
 
 Being scalar, the answer cannot depend on the backend, so there is no identity
 test to run for it. The tie rule is the reference's: strictly-longer wins, so
@@ -480,8 +468,7 @@ attachment the one at the *newer* position, is kept.
 A match may begin in one attachment and run into the next, and on into the
 stream's own history — the virtual concatenation RFC 9841 allows. The candidate
 that *starts* a match must still be indexed, so its own eight hashed bytes have
-to lie inside one attachment; that is the reference's behaviour too, and is
-recorded as decision D6.
+to lie inside one attachment.
 
 ### 5.5. How a match finder consults a prefix
 
@@ -556,15 +543,11 @@ The order is fixed and every check runs before any input is consumed: the window
 against the quality when the compressor is built, then the quality against the
 dictionary when the operation starts.
 
-Below quality five a dictionary is **refused, not ignored**. A stream compressed
-without the dictionary it was handed decodes perfectly well on its own, so a
-silent drop would only surface as corruption at a decoder that *did* attach the
-dictionary. Refusing costs the caller nothing: the compressor is untouched and
-the next ordinary call works.
-
-There is no empty dictionary to reason about — `DictionaryBuilder::build`
-refuses one — so a compressor either has a dictionary attached to a call or it
-does not, and the second case is byte for byte the ordinary path.
+Below quality five, dictionary operations return
+`EncodeError::DictionaryUnsupportedForQuality` before consuming input. The
+compressor remains usable for an ordinary call. `DictionaryBuilder::build`
+rejects an empty dictionary; an operation without a dictionary uses the ordinary
+encoding path.
 
 An empty *input* follows the same encoder finish path in every API shape,
 preserving the configured stream header. Dictionary validation still applies,
@@ -609,14 +592,13 @@ stateDiagram-v2
 The check runs when the compressor is built, so a refused request never reaches
 an operation at all and cannot be silently dropped, even for empty input. The
 encoders keep their own copies of the refusal in `FastEncoder::new` and
-`GreedyParams::new`, which is now unreachable from a validated configuration and
+`GreedyParams::new`, which is unreachable from a validated configuration and
 is reported as `EncodeError::InternalInvariant` if it ever fires.
 
 Qualities 0, 1 and 2 are refused rather than downgraded because all three may
 write distances through a code built for the 64-symbol RFC 7932 alphabet: the
 fast qualities always do, and quality 2 does whenever a meta-block carries at
-most a hundred and twenty-eight commands. `SanitizeParams` drops the request
-silently instead; see decision D4 for what lifting the restriction would take.
+most a hundred and twenty-eight commands.
 
 ## 7. Error propagation
 
@@ -691,24 +673,9 @@ has to prove it.
 - **Framing has no pinned C container oracle.** The experimental writer emits
   RFC fixtures and independently decodable resource streams; see
   [framing.md](framing.md) for supported forms and limits.
-- **Large window is refused at qualities 0, 1 and 2.** See decision D4 and §6.
-- **Declared windows above 30 bits are not decoded end to end** by any
-  implementation in this repository; the pinned C decoder rejects them and this
-  crate has no decoder. See decision D3 for what is checked instead.
-- **Retained history stops at 30 bits.** Distances therefore never need more
-  than 31 bits, so window and distance arithmetic is proven to fit a `usize`
-  rather than carried in `u64`. Widening the history past 30 bits would make
-  64-bit positions load-bearing and is a separate change. See decision D2.
-- **Prefix performance needs fresh measurements.** Historical measurements put
-  the cost of consulting a prefix at
-  1.26x to 1.84x the time of compressing the same payload without one, for 6%
-  to 9% off the output; against the reference's own compound dictionary the
-  path sits at 0.69x to 0.90x, which is where the encoder around it sits
-  anyway. See [`docs/api_benchmarks.md`](../docs/api_benchmarks.md) §3. These are
-  not measurements of the current universal one-shot contract. The chain walk
-  and byte comparison remain scalar, but the high-quality merge now uses a
-  retained prefix arena and in-place backward merge instead of allocating a
-  vector per matching position; see [hq-encoder.md](hq-encoder.md).
-  The ordinary path is unaffected —
-  `attachment` hands the encoders `None`, and every prefix branch is behind
-  that or behind `ENABLE_PREFIX`.
+- **Large window is refused at qualities 0, 1 and 2.** See §6.
+- **Declared windows above 30 bits lack independent end-to-end decoding.**
+  The pinned C decoder rejects their original headers. Tests check those headers
+  separately and compare the payload with a 30-bit declaration.
+- **Retained history stops at 30 bits.** Matchers and distance arithmetic use
+  this physical ceiling regardless of the declared window.

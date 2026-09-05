@@ -56,10 +56,8 @@ references; ordinary Brotli uses codec 2.
 ## Wire representation
 
 The main header is `91 0a 42 52 FLAGS`. Bit 2 is **set** for the full container
-profile with a footer, and clear for the single-resource profile. This follows
-RFC 9841's main-header and final-footer descriptions despite the inverted
-sentence in section 8.4.12. The writer does not auto-detect or silently switch
-interpretations. The independent wire fixture tests assert both profiles.
+profile with a footer, and clear for the single-resource profile. Independent
+wire fixture tests assert both profiles.
 
 Every chunk uses a canonical 63-bit varint length followed by type-specific
 header and content. Content chunk headers, including the length varint, are

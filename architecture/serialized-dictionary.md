@@ -1,16 +1,12 @@
 # Serialized shared dictionaries (RFC 9841 section 5)
 
-**Experimental.** Everything this file describes is behind the `experimental`
-Cargo feature. It is separated from the default surface because RFC 9841's
-dictionary stream has no stable reference encoder: the C library compiles its
-parser out unless `BROTLI_EXPERIMENTAL` is defined, and has never exposed it as
-a supported API. The default surface's equivalent-C-streaming byte oracle
-therefore does not cover full custom static search here, and the API may change
-in a patch release. Rust API/backend identity and decoder compatibility remain
-required.
+The serialized dictionary API requires the `experimental` Cargo feature and
+may change in a patch release. It parses and writes dictionary descriptions;
+preparation and compression are described in [rfc9841-encoding.md](rfc9841-encoding.md).
 
-This file describes what exists today. Anything specified but unwritten is in
-"Known gaps" rather than described as if it worked.
+Rust API/backend identity and independent decoder compatibility apply. Full
+custom static search has no blanket C encoder byte-identity oracle. The C test
+build enables its serialized parser with `BROTLI_EXPERIMENTAL`.
 
 [RFC 9841]: https://www.rfc-editor.org/rfc/rfc9841.html
 
@@ -162,7 +158,7 @@ flowchart TD
     suf --> out["return the written prefix of the scratch"]
 ```
 
-Two details are the reference's, kept deliberately:
+Transform casing and scratch behavior follow the reference:
 
 - the casing model is an exclusive-or — bit five for ASCII and for the second
   byte of a two-byte sequence, and the constant five for the third byte of a
@@ -231,16 +227,16 @@ product is bounded by `31 << 15` per length and cannot overflow a `u32`; the
 varint reader caps at sixty-three bits; every slice is taken through a checked
 `take` that reports truncation rather than panicking.
 
-## 7. Deliberate differences from the C reference
+## 7. Parser and transform boundaries
 
-| # | Difference | Why |
-| --- | --- | --- |
-| S1 | The LZ77 prefix ceiling is `(1 << 30) - 16`, not the reference's `0x3FFFFFFF` | The reference's own comment says its limit "is not specified"; section 5 says the ceiling is the widest sliding window, which is fifteen bytes smaller |
-| S2 | Bytes after the structure are refused | The reference stops once the structure is complete and ignores the rest, so one meaning would have unboundedly many encodings |
-| S3 | A transform index past the end of the list is the identity | The reference reads past its own array; refusing keeps an out-of-range index from silently naming transform zero's prefix and suffix |
-
-S2 is the only difference a differential test has to account for, and
-`tests/serialized_dictionary.rs` does so by retrying the head.
+- The LZ77 prefix ceiling is `(1 << 30) - 16`.
+- Public parsing rejects bytes after a complete structure; the C parser can
+  accept the same structure while ignoring trailing input.
+- Applying a transform index beyond the list returns the word unchanged.
+- The Rust prefix-length reader accepts up to nine varint bytes, including
+  redundant encodings. C's `ReadVarint32` rejects continuation in byte five.
+  Differential tests account for this narrower C reader and require canonical
+  serialization to parse with C.
 
 ## 8. Verification
 
@@ -270,7 +266,7 @@ embedded prefix remain part of that peak until the description is dropped.
 The preparation flow and allocator-backed regression are described in
 [rfc9841-encoding.md](rfc9841-encoding.md).
 
-- Custom static compression is now implemented by the immutable
+- Custom static compression is implemented by the immutable
   `core::rfc9841::static_index` described in
   [rfc9841-encoding.md](rfc9841-encoding.md). Its expansion limits are
   `max_transformed_word_bytes`, `max_static_entries` and the aggregate retained

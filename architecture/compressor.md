@@ -24,12 +24,9 @@ Five layers, each owning one idea:
 5. **The core** — private `compressor::core` modules own the algorithms and the
    bitstream. Nothing from them escapes.
 
-The public types are a redesign; the `core` tree is not. It is still written
-against the encoders' own `CompressParams`, `QualityLevel`, `WindowBits` and
-`BrotliCompressError`, which now live in the private `compressor::internal`
-module. The public configuration *lowers* into those on the way down. Keeping
-the two apart is what let the surface change without moving a byte of the
-bitstream.
+Public configuration lowers into the private `compressor::internal` types:
+`CompressParams`, `QualityLevel`, `WindowBits` and `BrotliCompressError`.
+The encoder cores use these internal parameter and error shapes.
 
 ### 1.1. Module map
 
@@ -268,11 +265,10 @@ otherwise, so reuse can never change a byte:
 | `Greedy` | `GreedyParams` compares equal, which covers the matcher, both block sizes and the distance alphabet |
 | `Hq` | `HqParams` compares equal |
 
-Two details make the reset correct rather than merely cheap, and both predate
-this redesign: `MatchFinder::prepare`'s partial sweep is replayed over the
-previous stream's own bytes before the window is dropped, and the ring buffer is
-not wiped because a backward reference is bounded by the distance to the start of
-the stream. See [greedy-encoder.md](greedy-encoder.md).
+During reset, `MatchFinder::prepare` replays its partial sweep over the previous
+stream's bytes before dropping the window. The ring buffer retains its bytes;
+backward references are bounded by the distance to the current stream's start.
+See [greedy-encoder.md](greedy-encoder.md).
 
 A call that fails part-written drops the retained encoder rather than resetting
 it, so no half-written stream can reach the next call.
@@ -441,7 +437,7 @@ scratch. No extra staging copy is made for a directly borrowed input block.
 
 One-shot and incremental encoding produce the same bytes for equivalent stream
 settings, including empty input and incompressible small-window streams. One-shot
-calls no longer use C's empty shortcut or whole-stream uncompressed rewrite.
+calls use the same finish path, including empty and expanded output.
 A zero-offset session declaring `InputSize::Exact` and no extra flushes is the
 incremental equivalent of a one-shot call. Unknown size, different dictionaries,
 explicit flush boundaries or continuation offsets can change encoding decisions.
@@ -451,7 +447,7 @@ C one-shot. C's q0/q1 PROCESS calls also emit fragments at caller chunk boundari
 whereas Rust stages undecided tails. The Criterion streaming adapter normalizes
 those C chunks and charges staging to the timed C operation. Its one-shot adapter
 borrows the whole input and calls C streaming FINISH without staging or rewrites.
-See [universal-encoding.md](universal-encoding.md) for the decision and regressions.
+See [universal-encoding.md](universal-encoding.md) for the contract and regression coverage.
 
 ### 4.2. Flushing
 
@@ -652,14 +648,10 @@ graph LR
   [rfc9841-encoding.md](rfc9841-encoding.md) and [framing.md](framing.md).
 - **One retained encoder.** The workspace holds exactly one, so alternating
   between two configurations rebuilds on every call. `RetentionPolicy` bounds and
-  releases it but does not yet keep one slot per encoder family.
-- **Native C API differences are intentional.** Universal Rust API identity
-  takes priority over C one-shot empty/fallback shortcuts. C comparisons use
-  equivalent streaming settings, as recorded in [universal-encoding.md](universal-encoding.md).
-- **Release performance gates remain open.** Lazy bucket payloads and chain
-  banks eliminate eager cold payload initialization, and allocator regressions
-  enforce zero warmed allocations on text/binary/multi-block cases. They do not
-  establish every speed/RSS gate on both AVX2 and NEON hardware.
+  releases it and has no per-family cache slots.
+- **C comparisons use equivalent streaming settings.** Native C one-shot
+  empty/fallback shortcuts can produce different bytes; see
+  [universal-encoding.md](universal-encoding.md).
 
 ## Parallel companion
 

@@ -1,8 +1,7 @@
 # Continuous integration
 
-The workflows separate routine validation from expensive checks. All check out
-the vendored submodules recursively and preserve the same test commands and
-runner matrices used before the split.
+Routine validation runs automatically; expensive checks run on manual dispatch.
+All workflows check out the vendored submodules recursively.
 
 ```mermaid
 flowchart TD

@@ -113,16 +113,11 @@ The shaded modules on the right are shared with the high-quality encoder; see
 | Chain hops | — | — | — | 16 | 32 | 56 | 112 | 224 |
 | Meta-block storage | fast | trivial | greedy split | greedy split | greedy split | greedy split | greedy split | greedy split |
 
-Qualities two and three are not "quality four with fewer candidates": each
-stores a meta-block through a different, simpler path, and both flush on a
-symbol count rather than on a block-splitting decision. From quality five
-upwards the shape of the search is fixed and only its depth changes — which is
-why one code path serves all five.
-
-Quality two differs from quality three in exactly two places, which is why it
-lives here rather than in a core of its own: it selects `H2` instead of `H3`,
-and it stores a meta-block with `store_meta_block_fast` instead of
-`store_meta_block_trivial`. Everything between those two points is shared.
+Qualities two and three use simpler meta-block storage and flush on a symbol
+count. Quality two selects `H2` and `store_meta_block_fast`; quality three selects
+`H3` and `store_meta_block_trivial`. Their intermediate command generation is
+shared. From quality five through nine the search shape is shared, with depth
+controlled by quality.
 
 Because the fixed distance code `store_meta_block_fast` may fall back to is
 built for the RFC 7932 alphabet, quality two cannot carry a large window;
@@ -178,9 +173,7 @@ compile-time constants inside the probe loop. The `MatchFinder` enum that
 selects between them is matched once per input block, never per candidate.
 
 The candidate depth, the chain depth and the number of cached distances are
-ordinary fields rather than const generics. They only bound loops, and turning
-five bucket depths into five monomorphisations would cost far more instruction
-cache than the bound is worth.
+ordinary fields used as loop bounds.
 
 `H2` and `H3` share a shape but not a path: with one slot per bucket the probe
 has no loop to leave, so the reference returns as soon as it has a match and
@@ -194,7 +187,7 @@ only matchers where the difference is observable.
 The reference builds `H58` and `H68` in place of `H5` and `H6` whenever
 `BROTLI_MAX_SIMD_QUALITY` is defined, which on GCC and Clang covers quality six.
 Those variants store a one-byte tag beside every position and iterate only the
-slots whose tag matches. The bucket matcher now keeps these tags in compact
+slots whose tag matches. The bucket matcher keeps these tags in compact
 parallel storage for q5/q6, matching the pinned C build's tag quality ceiling.
 `tags::Candidates` loads in-bounds groups of sixteen tags with
 safe `fearless_simd` vectors and visits matching initialized slots newest first.
@@ -350,25 +343,15 @@ they do in the reference:
   `dictionary_start + gap`, so a prefix reference is coded as an ordinary
   distance but never enters the cache.
 
-`extend_last_command` gains the matching branch: a copy whose distance is past
+`extend_last_command` handles prefix copies: a copy whose distance is past
 the window continues into the concatenated prefix, and unlike the search it
 runs on across attachment seams. See [shared-brotli.md](shared-brotli.md).
 
 `create_backward_references` is generic over a `const ENABLE_PREFIX: bool`, and
 `GreedyEncoder::create_references` instantiates both — the reference's
 `ENABLE_COMPOUND_DICTIONARY`, which it uses to compile the same function twice
-per match finder. This is not style. Folding the two into one runtime
-`Option::is_some` branch cost **2.1% of the geometric-mean throughput** over
-the eleven `oneshot/q3` corpora on an Apple M5 Pro, and 9.7% on `text-1MiB`,
-against a same-machine baseline built from `HEAD`. With the split the same
-measurement is +1.3% — inside the noise of no change. The loop is layout
-sensitive enough that one extra register and one always-untaken branch per
-position are measurable.
-
-The high-quality path keeps a runtime check instead, because that is what the
-reference does there too: `backward_references_hq.c` tests
-`addon->num_chunks != 0` rather than compiling two copies, and its per-position
-cost is dominated by the tree query and the dynamic program.
+per match finder. The prefix-enabled and ordinary loops are separately
+monomorphized. The high-quality path checks for attached chunks at runtime.
 
 Two details separate the qualities:
 
@@ -575,8 +558,7 @@ sized by the same `2 * bytes + 503` reservation the reference uses.
   distance alphabet is used, but `ResolvedWindow::encoder_bits` caps retained
   history at 30 bits and every matcher is sized from that. The reference's
   `H35`, `H55` and `H65` composite match finders are selected only above that
-  cap, so they are never built. See [shared-brotli.md](shared-brotli.md)
-  decision D2.
+  cap, so they are never built. See [shared-brotli.md](shared-brotli.md).
 - **An attached prefix reaches only qualities five and above.** The reference
   compiles its compound-dictionary search for `H5`, `H6`, `H40`, `H41`, `H42`,
   `H55` and `H65` only, so `H2`, `H3`, `H4` and `H54` have nowhere to put a
@@ -588,12 +570,6 @@ sized by the same `2 * bytes + 503` reservation the reference uses.
   inventing history. See [rfc9841-encoding.md](rfc9841-encoding.md).
 - **Histogram accumulation and context sampling remain scalar.** Match-length
   scans and bucket tag filtering have SIMD implementations.
-- **The full throughput gate remains open.** Historical baseline ratios in
-  [`docs/all_qualities_benchmarks.md`](../docs/all_qualities_benchmarks.md) predate
-  retained split/histogram storage, sparse bucket promotion and pinned kernels.
-  Current measurements and their limitations are recorded in
-  [encoder-workspace.md](encoder-workspace.md); historical setup costs must not
-  be read as measurements of the new representation.
 
 ## Independent parallel fragments
 

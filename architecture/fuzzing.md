@@ -13,14 +13,14 @@ root workspace (`Cargo.toml`, `exclude = ["fuzz/afl"]`) so that AFL's
 instrumentation and its runtime never reach an ordinary root `cargo test` or
 `cargo clippy`. It depends on `mbrotli` and on `google-brotli-ffi` by path.
 Backend selection goes through `mbrotli::Backend`, including its scalar baseline;
-the fuzz package no longer depends directly on the SIMD implementation crate.
+the fuzz package has no direct dependency on the SIMD implementation crate.
 
 The package is split so that the AFL dependency stops at the binary layer:
 
 ```mermaid
 graph TD
     subgraph engine["Engine layer (depends on afl)"]
-        bins["src/bin/ — twenty-two afl::fuzz! adapters"]
+        bins["src/bin/ — twenty-three afl::fuzz! adapters"]
     end
 
     subgraph neutral["Engine-neutral layer (no afl dependency)"]
@@ -56,20 +56,17 @@ Only `src/bin/` names `afl`. Every target body is a plain
 `cargo afl test`, and under a debugger. That is what makes a minimised crash
 reproducible without an instrumented binary.
 
-`Context` is built once per process and carries the prepared state: the detected
-opaque `Backend` and the deduplicated list of host backends. A `Compressor` is stateful
-now, so each iteration builds the one its case calls for through
-`Context::encoder`; that construction is itself part of what the targets
-exercise, and it allocates nothing large. Nothing in `mbrotli` holds mutable
-global state — there is no `static mut`, `thread_local`, `OnceLock`, `RefCell`,
-`Mutex` or atomic in `src/` — so AFL's persistent mode still needs no reset hook
-and `fuzz_with_reset!` is not used.
+`Context` is built once per process and holds the detected `Backend` and the
+deduplicated list of host backends. Each iteration creates its compressors
+through `Context::encoder` and drops its owned stream state afterward. Parallel
+batches use their own synchronization and cancellation state. No compressor or
+batch state is shared between fuzz inputs, and `fuzz_with_reset!` is not used.
 
 ## Input model
 
-Six input shapes exist. All cap the payload at `MAX_PAYLOAD` (128 KiB) by
-truncation rather than rejection, so an oversized input still contributes the
-structure its prefix carries.
+The common payload and parameter input shapes cap data at `MAX_PAYLOAD`
+(128 KiB). Specialized lifecycle, serialized dictionary, framing, and parallel
+targets decode their own bounded command or format structures.
 
 ```mermaid
 flowchart TD
@@ -141,12 +138,12 @@ target that can reach the validating conversions and the large-window refusal.
 | `dictionary` | dictionary | preparation is a transaction — an empty, count or limit refusal yields no dictionary; the accessors agree with what was attached; the offset-to-distance mapping round-trips and saturates at both ends; below quality 5 every entry point refuses rather than ignoring, and the compressor still works afterwards; at quality 5 and above the three entry points agree, the output fits the bound, and a dictionary call never changes the next ordinary one |
 | `serialized_dictionary` | dictionary stream | parser validity versus C, excluding its five-byte varint limit and ignored trailing bytes; canonical reserialization; bounded preparation of prefixes/custom indexes; q5/q11 compression independently decoded by C with the serialized dictionary attached |
 | `framing` | settings byte and bounded resource bytes | resource/metadata sequences with bounded chunks, independent metadata compression and selected repeats; identical bytes under one-byte, 37-byte and 2048-byte caller writes; directory completeness including type 8; C decoding of metadata streams; successful finalization or typed validation failure |
+| `parallel` | bounded task/source settings | deterministic task schedules, slice/seek-source equivalence, staged assembly and C decoding |
 | `compressor_lifecycle` | lifecycle | whatever sequence of reuse, appending, deliberate failure, trimming, reconfiguration, abandoned and leaked sessions the input asks for, the compressor still emits the bytes a fresh one would for the configuration it ended up with |
 
-The oracles are layered rather than independent: `differential_c` is the
-strongest (byte identity with the reference), `params_roundtrip` and the
-streaming target hold when the reference is unavailable, and the bound and
-capacity checks pin the API contract regardless of the bytes produced.
+Byte comparison checks the equivalent C encoding policy. Independent C decoding
+checks stream validity and content. Rust API/backend comparisons check
+consistency, while bounds and capacity tests check output-buffer contracts.
 
 ## Per-iteration flow
 
@@ -184,7 +181,7 @@ rejections — are asserted on rather than treated as crashes.
 
 `host_levels` delegates to `Backend::available()`, which returns each supported
 backend once, scalar first. `Context::default()` detects and enumerates before
-the persistent loop. The fuzz package no longer depends directly on
+the persistent loop. The fuzz package has no direct dependency on
 `fearless_simd`; unsupported implementation tokens cannot cross the public API.
 
 ## Finding lifecycle
@@ -238,18 +235,14 @@ coverage the small ones miss and survive `cmin`. Per-iteration cost is bounded
 by `MAX_PAYLOAD`, not by the corpus. No dictionary is used — the targets
 consume arbitrary payload bytes rather than a token grammar.
 
-`minimise-seeds.sh` must export `AFL_NO_FORKSRV=1`. `afl-cmin` measures
-coverage with `afl-showmap -I`, and that folder mode stalls against these
-binaries — persistent mode with a deferred forkserver — so every input blocks
-until the `-t` timeout expires: roughly six seconds per seed, and an empty
-output directory at the end. Without the forkserver, showmap execs the target
-once per input the way its single-file mode already does. The captured edge
-sets are identical; the corpus takes under two seconds instead of minutes.
+`minimise-seeds.sh` exports `AFL_NO_FORKSRV=1` for `afl-cmin` folder-mode
+coverage collection. This runs the target once per input and avoids persistent
+forkserver timeouts during corpus minimization.
 
 ## Known gaps
 
 - **No decompression target.** There is no decoder in `mbrotli`; round-trip
-  oracles use Google's C decoder. A decoder target has to wait for one.
+  oracles use Google's C decoder.
 - **Framing fault injection is deterministic, not fuzz-driven.**
   `tests/framing.rs` injects short writes and retryable failures at each tested
   offset; the fuzz target varies valid resource/metadata sequences and chunking.
@@ -266,26 +259,6 @@ sets are identical; the corpus takes under two seconds instead of minutes.
 - **`prepare-seeds.sh` does not emit a `compressor_lifecycle` corpus.** That
   target's committed cases are hand-written command sequences; a campaign starts
   from those rather than from the vendored test data.
-- **The `large_window` regression corpus is seeded, not found.** Its twenty
-  inputs are the boundary cases written when the target was added — every edge
-  of the `10..=62` range, both refusing qualities, an empty payload, a single
-  byte and incompressible bytes — and a 150-second campaign over
-  `seeds/large_window` on `aarch64-apple-darwin` found 1024 new corpus items,
-  24.45% coverage, no crashes and no timeouts.
-- **Only smoke campaigns have been run,** and none since qualities six to
-  eleven were added, so the figures below predate more than half the targets.
-  The most recent was thirty to forty-five seconds per target on
-  `aarch64-apple-darwin` over the unminimised parameter corpus:
-  `differential_c` 650 new corpus items and 21.7% coverage,
-  `simd_equivalence` 736 and 33.5%, `streaming_equivalence` 607 and 20.6%,
-  `params_roundtrip` 482 and 20.8%, `q5_roundtrip` 35 and 7.0%; 0 crashes and
-  0 hangs throughout. That depth finds shallow faults only; no long campaign
-  has been run, and no crash has ever been triaged, so the tmin-to-regression
-  path in `regressions/` is exercised by boundary cases rather than by a real
-  finding.
-- **`cargo afl fuzz` and `cargo afl cmin` need `cargo afl system-config`** on
-  macOS, which runs `sudo`. Without it both fail at `shmget()`.
-
 ## Parallel boundary target
 
 `parallel` uses the public task API, 64 KiB segments and at most 128 KiB of input. It compares one-task and reverse three-task output, scalar and host backends, retained workers, and independent C decoding. The engine-neutral body and per-quality seeds are replayed by the existing regression runner.

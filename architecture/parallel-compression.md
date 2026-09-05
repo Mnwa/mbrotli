@@ -1,11 +1,9 @@
 # Parallel compression
 
-This describes the implementation added for source specifications 02 and 03.
-Where those drafts conflict, the later extension (03) governs: caller-run task
-values, fixed independent segments, aligned non-final fragments, and staged
-assembly. The older mandatory spawner trait, overlap scheduler, relocatable
-bit tape, and unknown-length reader pipeline are superseded. The optional
-RFC 9841 framing/dictionary and global-context extensions are not implemented.
+The caller schedules tasks that encode fixed independent segments. Private
+fragment encoders produce aligned non-final blocks, and the batch assembles them
+in source order into one stream. The API supports qualities 0–11 with standard
+windows; dictionary, Large Window, and framing extensions are unsupported.
 
 ## Public and ownership boundaries
 
@@ -13,8 +11,8 @@ RFC 9841 framing/dictionary and global-context extensions are not implemented.
 `BatchConfig`, validated `SegmentSize` and `TaskCount`, memory/directory staging,
 source wrappers (including `SeekSource<R>`), task/batch types, polling, statistics,
 retention, and errors.
-The previously private `compressor` module is now public; its `core` remains
-private. Existing crate-root serial exports remain available.
+The `compressor` module is public; its `core` remains private. Serial APIs are
+also re-exported at the crate root.
 
 Validated integers use `TryFrom<usize>` and `get()`; standard values use
 `SegmentSize::DEFAULT`, `TaskCount::ONE`, and `Default`. Configuration/staging
@@ -89,8 +87,8 @@ is proportional to segment count and included in the aggregate ceiling.
 
 `prepare_source<S, T>` accepts `S: RandomAccessSource + ?Sized` and
 `T: Into<Arc<S>>`. Owned sources, shared concrete sources, custom conversions, and
-`Arc<dyn RandomAccessSource>` use this single entry point. `prepare_file` has
-been removed; `FileSource` is an ordinary source adapter. `Arc` and custom
+`Arc<dyn RandomAccessSource>` use this single entry point. `FileSource` is a
+source adapter. `Arc` and custom
 conversion arguments may need explicit source types due to `Into` ambiguity:
 `prepare_source::<FileSource, _>(shared_file, config)` or
 `prepare_source::<dyn RandomAccessSource, _>(erased_source, config)`.
@@ -136,7 +134,7 @@ provides live length checks only and callers must keep bytes immutable.
 `FileSource` retains positional reads and file identity verification; it remains
 the preferred file adapter when concurrent input reads are desired.
 
-## Fragment format and encoder-state audit
+## Fragment format and encoder state
 
 Format plan version 1 uses uniform two-byte raw prefixes and explicit distances
 throughout every segment. It follows RFC 7932 sections 11.2 and 11.3. Every part
@@ -178,12 +176,9 @@ sequenceDiagram
 | Entropy and splits | Rebuilt locally; q0 adaptive trees never cross a segment reset. |
 | SIMD | Backend detected by the planner once; `Selected<S, true>` installed when a fragment encoder is allocated, retained across reset. Serial `Selected<S, false>` remains separately monomorphized. |
 
-Encoding every distance explicitly is the correctness baseline allowed by the
-extension. It intentionally does not yet resume cache-relative coding after four
-pushes; compression ratio and worker performance need further measurement before
-that optimization. Dictionary overloads and optional boundary/dictionary enums
-are absent, so unsupported inputs cannot be silently ignored. Parallel Large
-Window configuration is rejected with a typed configuration error.
+Every segment uses explicit distances throughout; cache-relative coding does
+not resume after a prefix. Dictionary overloads are absent. Parallel Large
+Window configuration returns a typed configuration error.
 
 ## Completion, cancellation, and reuse
 
@@ -292,99 +287,14 @@ also required. `fuzz/afl` adds the `parallel` target and committed seeds.
 `benches/parallel.rs` validates before timing and prints sizes alongside scaling
 and serial C/Rust measurements; those policies are labeled separately.
 
-### Local verification, 2026-09-05
+## Known gaps
 
-Host: Apple M5 Pro, aarch64 macOS; Rust 1.98.1. The workspace test profile used
-`CARGO_PROFILE_TEST_OPT_LEVEL=1` with assertions and overflow checks enabled.
-
-- `cargo fmt --all -- --check` and workspace all-target/all-feature Clippy with
-  `--locked -- -D warnings` pass; rustdoc also passes with warnings denied.
-- `cargo test --workspace --all-features --locked`: 981 passing tests, including
-  163 doctests and 15 parallel integration tests.
-- The initial threaded implementation's clean full-workspace coverage reported
-  2,070/2,070 functions (100%): `target/parallel-coverage-clean.json`.
-  After the generic-source extension, a clean `--lib --test parallel` coverage
-  run reaches every changed function, including 13/13 in `core/source.rs`, 19/19
-  in public source adapters, and 34/34 in the public parallel module. Report:
-  `target/seek-source-coverage.json`. This is not a claim of 100% branch coverage.
-- The separate AFL package passes formatting, Clippy, and `cargo afl test`.
-  All 49 saved q1 crash inputs replay successfully after the two minimized
-  regressions. A fresh 60-second parallel campaign completed 45,486 executions,
-  with zero saved crashes or hangs. Log: `target/parallel-afl-campaign-final.log`.
-- `cargo bench --bench parallel --locked -- --test` passes all 120 validation
-  cases over tiny/text/binary/random/zero inputs and q0/q1/q5/q9/q11.
-
-The short isolated Criterion run below uses vendored `alice29.txt`, repeated and
-truncated to 16 MiB, 4 MiB segments, a precreated four-thread Rayon pool, retained
-workers, and an end-to-end memory-staged operation. Both task counts produce
-exactly the same compressed bytes. Setup and validation occur before timing.
-Serial references use the same input, quality and window, but retain stream-wide
-history and dictionary coding, so they are distinct output policies.
-
-```sh
-cargo bench --bench parallel --locked -- 'parallel/q(1|5|9)/text-16MiB' --sample-size 10 --warm-up-time 0.2 --measurement-time 0.5
-```
-
-| Quality | One task | Four tasks | Scaling | Parallel bytes | Serial bytes | C serial cold | Rust serial cold |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | 12.539 ms | 3.511 ms | 3.57x | 1,667,534 | 1,388,169 | 12.190 ms | 10.843 ms |
-| 5 | 18.354 ms | 4.881 ms | 3.76x | 207,239 | 51,286 | 11.630 ms | 12.517 ms |
-| 9 | 24.524 ms | 6.670 ms | 3.68x | 204,806 | 50,666 | 12.685 ms | 16.603 ms |
-
-These are Criterion point estimates, not comprehensive release gates. q1's
-one-task interval was 11.782–13.567 ms. The repeated corpus particularly rewards
-cross-segment serial history: q5/q9 parallel output is about four times larger.
-Log: `target/parallel-bench-timings-final.log`. No pre-change serial timing was
-collected, so this does not establish absence of a serial performance regression.
-
-The release `parallel` file example was also exercised on that 16 MiB corpus with
-`hotpath-cpu`, directory staging and a file writer. Its four q5 fragment calls
-account for most instrumented time, with match finding the largest named inner
-operation. Sampling was unavailable because `samply` was not installed; the
-profile provides instrumented function timings only. Log:
-`target/parallel-hotpath-cpu-verified.log`.
-
-### Generic-source verification
-
-The source extension adds concurrent range tests using a `Send` but non-`Sync`
-reader, short reads, interruptions, EOF, seek/read errors, panic poisoning, owned
-sources, shared handles, custom `Into<Arc<S>>` conversions, and erased sources.
-File consistency and greater-than-4-GiB tests now use `prepare_source` too.
-The public file example runs successfully through that entry point.
-
-The AFL regression suite passes with a slice-versus-seek-source oracle. Its
-fresh 60-second campaign completed 57,847 executions with zero saved crashes or
-hangs: `target/seek-source-afl-campaign.log`.
-
-An isolated follow-up run on the same host and 16 MiB text corpus compared source
-adapters using four tasks, q5, 4 MiB segments, memory staging and retained workers:
-
-```sh
-cargo bench --bench parallel --locked -- 'parallel/q5/text-16MiB' --sample-size 10 --warm-up-time 0.2 --measurement-time 0.5
-```
-
-| Source | Time | Output bytes |
-| --- | --- | --- |
-| `SeekSource<Cursor<Vec<u8>>>` | 5.189 ms | 207,239 |
-| `SeekSource<File>` | 5.725 ms | 207,239 |
-| `FileSource` (positional) | 5.317 ms | 207,239 |
-
-Files are precreated and cached; this measures end-to-end source/planning,
-compression and assembly, not cold-disk throughput. Every source result is
-validated against the slice result before timing. Source setup and corpus copies
-occur outside the timed region. The benchmark also retains the serial C/Rust
-comparisons above. Log: `target/seek-source-bench.log`.
-
-Known gaps / release gates (not claimed complete):
-
-- Cancellation is currently at segment boundaries, not inside q11 optimization
-  iterations. A running codec call may therefore delay cancellation.
-- Four-push cache resumption, equivalent-policy C fragment worker comparisons,
-  the 0.95 worker floor, the serial <=1% regression gate, complete ratio/scaling
-  matrices, and measured RSS acceptance are not yet established.
-- Local host-backend coverage is not evidence of an executed AVX2 or Windows run.
-  A synthetic 4 GiB + 3 byte source is compressed through directory staging
-  with four tasks, at most 4 MiB per read, and checked by incremental C decoding.
-- Fault tests cover common source/destination and cleanup failures; injected
-  disk-full, allocator-failure, and OS I/O faults need dedicated
-  infrastructure. No production decompressor was added.
+- Cancellation occurs around segment encoding, not inside q11 optimization.
+  A running codec call or blocking source read may delay cancellation.
+- Independent segments lose cross-segment history and dictionary coding, so
+  their ratio and speed are distinct from serial encoding.
+- Source metadata checks cannot detect every in-place mutation.
+- Spool cleanup is best effort; process termination and filesystem errors can
+  leave files behind.
+- Positional file reads are implemented for Unix and Windows. Other platforms
+  return `Unsupported`.

@@ -96,7 +96,7 @@ graph TD
 Both qualities run the same code; every difference is a number resolved once in
 `params.rs`, from the caller's parameters alone.
 
-| Decision | q10 | q11 | Reference |
+| Behavior | q10 | q11 | Reference |
 | --- | ---: | ---: | --- |
 | Matcher | `H10` | `H10` | `ChooseHasher` |
 | Matches held | one position at a time | every position, up front | `BrotliCreate*ZopfliBackwardReferences` |
@@ -407,7 +407,7 @@ the reference's `limit`; only `extend_last_command` runs on across seams.
   qualities and `DistanceParams::for_window` computes the widened RFC 9841
   alphabet and its `alphabet_size_limit`, but retained history is capped at 30
   bits by `ResolvedWindow::encoder_bits`, so the binary tree never indexes a
-  window wider than that. See [shared-brotli.md](shared-brotli.md) decision D2.
+  window wider than that. See [shared-brotli.md](shared-brotli.md).
 - **Custom static dictionaries and offsets are experimental.** The immutable
   flat index merges per-length transformed candidates into Zopfli matches using
   the current meta-block literal context. Extended packed length modifiers keep
@@ -417,13 +417,6 @@ the reference's `limit`; only `extend_last_command` runs on across seams.
 - **`hotpath` instrumentation.** Only `encode_block`, `encode_block_with` and
   `flush_block` are annotated on this path; the inner stages are not yet
   measured.
-- **Throughput is behind the reference, but least of any slow quality.**
-  0.863x at quality ten and 0.901x at quality eleven, geometric mean over eleven
-  corpora on an Apple M5 Pro, while emitting identical bytes. That is closer
-  than qualities two to nine manage; the dynamic program dominates enough that
-  the per-call setup these qualities also pay is a smaller share of the whole.
-  See [`docs/all_qualities_benchmarks.md`](../docs/all_qualities_benchmarks.md).
-
 ## Independent parallel fragments
 
 The parallel fragment adapter installs `Selected<S, true>` once per worker.

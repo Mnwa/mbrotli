@@ -125,8 +125,7 @@ classDiagram
 The hash table and the scratch output buffer grow but never shrink. Only the
 active table range is cleared between fragments; unused capacity is left
 untouched. A buffer that has to grow is replaced by a freshly zeroed
-allocation rather than resized in place, because the allocator hands out zero
-pages while a resize would memset a region the encoder immediately overwrites.
+allocation.
 
 ## 3. Fragment lifecycle
 
@@ -175,7 +174,7 @@ stateDiagram-v2
     NextCode --> [*]: build the next fragment's command code\nwhen is_last is false
 ```
 
-Observable decisions preserved verbatim from the reference:
+The scan follows this order:
 
 - the repeat candidate (`ip - last_distance`) is tested **before** the hash
   table candidate;
@@ -315,25 +314,10 @@ that ran to the limit. No backend `fearless_simd` ships reaches that arm —
 NEON, SSE2 and the fallback all have `u8s::N == 16` — so it is an invariant kept
 honest rather than a live path.
 
-### 7.2. Measured reach of the vector stage
+### 7.2. Vector entry
 
-The prefix is 16 bytes and the widest shipping backend on the reference host is
-also 16 lanes, so the vector loop only ever sees matches of 16 bytes or more.
-Counting how often it runs, per whole file at quality 0:
-
-| Corpus | `find_match_length` calls | Exit in the scalar prefix | Vector iterations |
-| --- | ---: | ---: | ---: |
-| `alice29.txt` | 19,291 | 99.4% | 29 |
-| `lcet10.txt` | 52,743 | 98.8% | 519 |
-| `plrabn12.txt` | 68,960 | 99.9% | 47 |
-| `mapsdatazrh` | 10,319 | 91.0% | 1,633 |
-| `random_org_10k.bin` | 0 | — | 0 |
-
-Text finds short matches, so the scalar word prefix answers almost every call
-and the vector stage earns its keep only on structured binary. This is a
-property of the fast qualities, not a tuning gap: the stages exist so that a
-long match does not pay a byte-at-a-time scan, and short matches never enter
-them.
+The scalar prefix checks the first 16 bytes. Longer matching runs reach the
+vector stage, followed by a scalar tail at the first mismatch or input limit.
 
 ## 8. Table-bit specialisation
 
@@ -373,18 +357,10 @@ removes their bounds checks without any unsafe code:
 
 The tree builder caps a literal depth at fourteen bits, so four codes are at
 most 56 bits and always fit one `BitWriter::write`; two fit with room to spare.
-Quality 0 emits literals between matches, and run length varies by an order of
-magnitude across corpora — roughly three literals per run on text against
-twenty on structured binary — so the quadruple loop is gated on the run being
-at least eight literals long and short runs go straight to the pair loop. An
-ungated quadruple loop measures 4% slower on `alice29.txt`, where a run rarely
-fills one quadruple, while keeping the full gain on `mapsdatazrh`.
-
-Quality 1 replays a whole meta-block of literals at once, so its packer stays
-greedy: it accumulates codes until the next would overflow the 56 bit limit,
-which reaches far more codes per store than a fixed quadruple. Batching that
-loop four at a time to amortise its per-literal branch measures within noise on
-every corpus, so it keeps the simpler shape.
+Quality 0 emits literals between matches. Runs of at least eight literals use
+quadruples, followed by pairs and singles; shorter runs start with pairs.
+Quality 1 replays a meta-block's literals and accumulates codes until the next
+would exceed the writer's 56-bit limit.
 
 ## Flushing
 
@@ -394,14 +370,10 @@ empty metadata block that pushes the stream back onto a byte boundary — and,
 when there is buffered input, a short non-final fragment ahead of it. An empty
 input skips the fragment entirely, exactly as the reference does when a flush
 arrives with nothing buffered, and nothing at all is emitted when the stream
-was already aligned. See [compressor.md](compressor.md) §3.1.
+was already aligned. See [compressor.md](compressor.md) §4.2.
 
-Flushing costs these qualities more ratio than it costs any other: quality 1
-rebuilds a whole code description per meta-block with nothing to amortise it
-over, so flushing every kibibyte of a 256 KiB text made the stream seventeen
-times larger. The time cost is nil — the ratio against the reference is flat
-across flush counts, because a flush is work both implementations do the same
-way. See [`docs/api_benchmarks.md`](../docs/api_benchmarks.md) §2.
+Quality 1 emits a code description per meta-block. Frequent flushes create
+smaller blocks and can substantially increase compressed size.
 
 ## Known gaps
 
@@ -418,10 +390,6 @@ way. See [`docs/api_benchmarks.md`](../docs/api_benchmarks.md) §2.
   count.** `create_huffman_tree` writes depths only for symbols that appear,
   exactly as the reference does; the seed histogram guarantees every symbol
   that can be emitted has a non-zero count.
-- **Throughput has not reached the reference on every corpus.** See
-  `docs/q0_q1_benchmarks.md` for measured ratios and the buckets that are still
-  behind.
-
 ## Independent parallel fragments
 
 `begin_fragment` removes the standalone header and `fragment_aligned` checks
