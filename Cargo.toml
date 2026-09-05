@@ -2,7 +2,7 @@
 name = "mbrotli"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 license = "MIT"
 description = "Brotli compression in safe Rust, byte-identical to Google's reference encoder"
 repository = "https://github.com/Mnwa/mbrotli"
