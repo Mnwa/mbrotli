@@ -22,6 +22,7 @@ exclude = [
 ]
 
 [dependencies]
+tempfile = "3.27"
 
 [dependencies.fearless_simd]
 version = "=0.7.0"
@@ -38,6 +39,7 @@ version = "0.24"
 optional = true
 
 [dev-dependencies]
+rayon = "1.11"
 
 [dev-dependencies.criterion]
 version = "0.8"
@@ -87,3 +89,7 @@ members = ["brotli-ffi"]
 # the workspace leaves `cargo test` and `cargo clippy` unaffected by it.
 exclude = ["fuzz/afl"]
 resolver = "3"
+
+[[bench]]
+name = "parallel"
+harness = false

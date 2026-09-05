@@ -194,7 +194,7 @@
 #![deny(missing_debug_implementations)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
-mod compressor;
+pub mod compressor;
 
 #[cfg(feature = "experimental")]
 pub use compressor::framing;

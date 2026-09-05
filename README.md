@@ -46,10 +46,10 @@ the compressor owns. That is the whole design. The alternative — `&self` plus
 hidden interior mutability — would communicate the wrong ownership model and make
 the synchronisation choice implicit.
 
-One compressor belongs to one worker. For parallel compression, build one per
-worker with `Compressor::fork_empty`; a lock around a single compressor would
-serialise the compression itself, not merely the access. One immutable
-`PreparedDictionary` can be shared by all of them.
+One compressor belongs to one worker. To encode separate streams concurrently,
+use one `Compressor` per worker; they can share an immutable `PreparedDictionary`.
+To divide one input among workers and produce one stream, use
+`compressor::parallel::ParallelCompressor`.
 
 ## Status
 
@@ -255,3 +255,30 @@ costs the reference skips. Making reuse the default addresses part of that
 directly; the rest is match-finder work that has not been done yet. Where the
 time goes and what would close the gap are in
 [`docs/q3_q5_benchmarks.md`](docs/q3_q5_benchmarks.md).
+
+### Caller-scheduled threaded compression
+
+`mbrotli::compressor::parallel` compresses fixed independent segments into one
+Brotli stream. The caller schedules its `Send` tasks with scoped threads, Rayon,
+or another executor. Memory staging has an explicit worst-case limit; directory
+staging supports file-scale inputs without holding the full payload in RAM.
+Parallel bytes are deterministic across task counts, but differ from serial bytes.
+
+```rust
+use mbrotli::{EncoderConfig, Quality};
+use mbrotli::compressor::parallel::{BatchConfig, ParallelCompressor, ParallelConfig, TaskCount};
+let mut encoder = ParallelCompressor::new(
+    EncoderConfig::default().with_quality(Quality::Q5), ParallelConfig::default())?;
+let mut batch = encoder.prepare_slice(input, BatchConfig::memory(TaskCount::try_from(4)?, 256 << 20))?;
+let tasks = batch.take_tasks()?;
+std::thread::scope(|scope| {
+    for task in tasks { scope.spawn(move || task.run()); }
+});
+let mut output = Vec::new();
+batch.finish_into(&mut output)?;
+```
+
+Files use `batch.finish_to_writer(file)`; the caller controls creation, flushing,
+and publication. For a complete example, run
+`cargo run --release --example parallel -- INPUT OUTPUT`.
+See [the architecture and current release gates](architecture/parallel-compression.md).

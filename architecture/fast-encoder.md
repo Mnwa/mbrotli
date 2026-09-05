@@ -421,3 +421,14 @@ way. See [`docs/api_benchmarks.md`](../docs/api_benchmarks.md) §2.
 - **Throughput has not reached the reference on every corpus.** See
   `docs/q0_q1_benchmarks.md` for measured ratios and the buckets that are still
   behind.
+
+## Independent parallel fragments
+
+`begin_fragment` removes the standalone header and `fragment_aligned` checks
+the flush boundary. The preselected `Selected<S, INDEPENDENT>` policy specializes
+q0/q1 command generation: independent fragments emit full distances, including
+the remainder after an insert command's two-byte copy. q0 seeds the otherwise
+unused short-copy symbols; q1 preserves the explicit copy-two symbol during
+Huffman alphabet expansion. Serial specializations retain their original trees
+and cache coding. See [parallel compression](parallel-compression.md) for prefix
+ownership, aligned assembly, and the minimized regressions.

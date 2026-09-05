@@ -276,7 +276,7 @@ fn emit_uncompressed_meta_block(
 
 /// Compresses one fragment with a table width baked in.
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
-fn compress_fragment_impl<S: Simd, const TABLE_BITS: usize>(
+fn compress_fragment_impl<S: Simd, const TABLE_BITS: usize, const INDEPENDENT: bool>(
     simd: S,
     arena: &mut OnePassArena,
     data: &[u8],
@@ -325,7 +325,15 @@ fn compress_fragment_impl<S: Simd, const TABLE_BITS: usize>(
         w,
     );
 
-    {
+    if INDEPENDENT {
+        // Explicit remainders of five/six-byte matches use copy lengths three
+        // and four. The serial starter tree omits their symbols (17 and 18).
+        cmd_histo.copy_from_slice(&CMD_HISTO_SEED);
+        cmd_histo[17..19].fill(1);
+        build_and_store_command_prefix_code(
+            cmd_histo, cmd_depth, cmd_bits, tmp_depth, tmp_bits, tree, w,
+        );
+    } else {
         // Store the pre-compressed command and distance prefix codes.
         let numbits = *cmd_code_numbits;
         let mut i = 0usize;
@@ -341,6 +349,9 @@ fn compress_fragment_impl<S: Simd, const TABLE_BITS: usize>(
     'emit_commands: loop {
         // Gather fresh statistics for the prefix code of the next block.
         cmd_histo.copy_from_slice(&CMD_HISTO_SEED);
+        if INDEPENDENT {
+            cmd_histo[17..19].fill(1);
+        }
 
         let mut ip = input;
         let mut last_distance: i64 = -1;
@@ -443,14 +454,21 @@ fn compress_fragment_impl<S: Simd, const TABLE_BITS: usize>(
                 }
                 emit_literals(data, next_emit, insert, lit_depth, lit_bits, w);
 
-                if distance == last_distance {
+                if !INDEPENDENT && distance == last_distance {
                     w.write(u32::from(cmd_depth[64]), u64::from(cmd_bits[64]));
                     cmd_histo[64] += 1;
                 } else {
                     emit_distance(distance as usize, cmd_depth, cmd_bits, cmd_histo, w);
                     last_distance = distance;
                 }
-                emit_copy_len_last_distance(matched, cmd_depth, cmd_bits, cmd_histo, w);
+                if INDEPENDENT {
+                    // The insert command already copied two bytes. Encode the
+                    // remaining copy explicitly, including its distance.
+                    emit_copy_len(matched - 2, cmd_depth, cmd_bits, cmd_histo, w);
+                    emit_distance(distance as usize, cmd_depth, cmd_bits, cmd_histo, w);
+                } else {
+                    emit_copy_len_last_distance(matched, cmd_depth, cmd_bits, cmd_histo, w);
+                }
 
                 next_emit = ip;
                 if ip >= ip_limit {
@@ -595,7 +613,7 @@ fn compress_fragment_impl<S: Simd, const TABLE_BITS: usize>(
 /// Compresses `data` as one or more meta-blocks at quality 0.
 ///
 /// `table` must be zeroed and hold exactly `table_bits.entries()` entries.
-pub(crate) fn compress_fragment<S: Simd>(
+pub(crate) fn compress_fragment<S: Simd, const INDEPENDENT: bool>(
     simd: S,
     arena: &mut OnePassArena,
     data: &[u8],
@@ -615,10 +633,18 @@ pub(crate) fn compress_fragment<S: Simd>(
     }
 
     match table_bits {
-        TableBits::B9 => compress_fragment_impl::<S, 9>(simd, arena, data, is_last, table, w),
-        TableBits::B11 => compress_fragment_impl::<S, 11>(simd, arena, data, is_last, table, w),
-        TableBits::B13 => compress_fragment_impl::<S, 13>(simd, arena, data, is_last, table, w),
-        TableBits::B15 => compress_fragment_impl::<S, 15>(simd, arena, data, is_last, table, w),
+        TableBits::B9 => {
+            compress_fragment_impl::<S, 9, INDEPENDENT>(simd, arena, data, is_last, table, w)
+        }
+        TableBits::B11 => {
+            compress_fragment_impl::<S, 11, INDEPENDENT>(simd, arena, data, is_last, table, w)
+        }
+        TableBits::B13 => {
+            compress_fragment_impl::<S, 13, INDEPENDENT>(simd, arena, data, is_last, table, w)
+        }
+        TableBits::B15 => {
+            compress_fragment_impl::<S, 15, INDEPENDENT>(simd, arena, data, is_last, table, w)
+        }
     }
 
     // Rewrite the fragment verbatim when compressing made it larger.

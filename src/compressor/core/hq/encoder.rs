@@ -66,6 +66,26 @@ pub(crate) struct HqEncoder {
 }
 
 impl HqEncoder {
+    /// Installs fragment-only kernels when constructing an independent worker.
+    pub(crate) fn select_fragment_kernels(&mut self, level: Level) {
+        self.kernels = dispatch::select_independent(level);
+    }
+
+    /// Resets the header and seeds only this segment's literal context/history.
+    pub(crate) fn begin_fragment(&mut self, prefix: &[u8]) -> BrotliResult<()> {
+        self.last_bytes = 0;
+        self.last_bytes_bits = 0;
+        // Two bytes cannot make a copy. Flush seeds the ring and prior-byte
+        // context; the shared fragment writer owns the actual prefix output.
+        self.flush_block(prefix, None)?;
+        Ok(())
+    }
+
+    /// Confirms the flush left no pending partial byte.
+    pub(crate) const fn fragment_aligned(&self) -> bool {
+        self.last_bytes_bits == 0
+    }
+
     /// Creates an encoder for `params`.
     ///
     /// Unlike the lower qualities, no size hint is taken: both qualities use

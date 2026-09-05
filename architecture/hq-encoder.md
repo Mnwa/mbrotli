@@ -423,3 +423,12 @@ the reference's `limit`; only `extend_last_command` runs on across seams.
   than qualities two to nine manage; the dynamic program dominates enough that
   the per-call setup these qualities also pay is a smaller share of the whole.
   See [`docs/all_qualities_benchmarks.md`](../docs/all_qualities_benchmarks.md).
+
+## Independent parallel fragments
+
+The parallel fragment adapter installs `Selected<S, true>` once per worker.
+The specialized Zopfli path excludes cache-relative distance edges and dictionary
+candidates. `begin_fragment` starts headerless and seeds the ring and literal
+context from the common raw prefix. The serial specialization retains both
+search mechanisms. See [parallel compression](parallel-compression.md) for reset
+ownership, alignment checks, and current cancellation limitations.

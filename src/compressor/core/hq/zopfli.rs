@@ -268,7 +268,7 @@ struct UpdateContext<'a> {
 /// positions in turn, then the matches the tree found — but only from the two
 /// cheapest starts, because a further start with the same distances rarely
 /// pays.
-fn update_nodes<S: Simd>(
+fn update_nodes<S: Simd, const INDEPENDENT: bool>(
     simd: S,
     ctx: &UpdateContext<'_>,
     pos: usize,
@@ -319,7 +319,11 @@ fn update_nodes<S: Simd>(
 
         // Copies reachable through this start position's distance cache.
         let mut best_len = min_len - 1;
-        for j in 0..NUM_DISTANCE_SHORT_CODES as usize {
+        for j in 0..if INDEPENDENT {
+            0
+        } else {
+            NUM_DISTANCE_SHORT_CODES as usize
+        } {
             if best_len >= max_len {
                 break;
             }
@@ -533,7 +537,7 @@ fn create_commands(
     clippy::too_many_arguments,
     reason = "mirrors ZopfliIterate, whose parameters are all needed"
 )]
-fn zopfli_iterate<S: Simd>(
+fn zopfli_iterate<S: Simd, const INDEPENDENT: bool>(
     simd: S,
     num_bytes: usize,
     position: usize,
@@ -571,7 +575,7 @@ fn zopfli_iterate<S: Simd>(
     while i + 3 < num_bytes {
         let count = num_matches[i] as usize;
         let matches = &arena[cur_match_pos..cur_match_pos + count];
-        let mut skip = update_nodes(simd, &ctx, i, matches, model, queue, nodes);
+        let mut skip = update_nodes::<_, INDEPENDENT>(simd, &ctx, i, matches, model, queue, nodes);
         if skip < LONG_COPY_QUICK_STEP {
             skip = 0;
         }
@@ -689,7 +693,7 @@ fn merge_prefix_matches(prefix: &[(usize, usize)], tree: &mut Vec<BackwardMatch>
     clippy::too_many_arguments,
     reason = "mirrors BrotliZopfliComputeShortestPath, whose parameters are all needed"
 )]
-fn zopfli_compute_shortest_path<S: Simd>(
+fn zopfli_compute_shortest_path<S: Simd, const INDEPENDENT: bool>(
     simd: S,
     num_bytes: usize,
     position: usize,
@@ -746,7 +750,11 @@ fn zopfli_compute_shortest_path<S: Simd>(
         let dictionary_start = params.logical_position(pos).min(max_backward_limit);
 
         scratch.clear();
-        let dictionary_distance = dictionary_start + gap;
+        let dictionary_distance = if INDEPENDENT {
+            usize::MAX
+        } else {
+            dictionary_start + gap
+        };
         #[cfg(feature = "experimental")]
         let dictionary_distance = if attached.is_some_and(|c| c.static_index.is_some()) {
             params.dist.max_distance as usize + 1
@@ -813,7 +821,7 @@ fn zopfli_compute_shortest_path<S: Simd>(
             scratch.push(longest);
         }
 
-        let mut skip = update_nodes(simd, &ctx, i, scratch, model, queue, nodes);
+        let mut skip = update_nodes::<_, INDEPENDENT>(simd, &ctx, i, scratch, model, queue, nodes);
         if skip < LONG_COPY_QUICK_STEP {
             skip = 0;
         }
@@ -861,7 +869,7 @@ fn zopfli_compute_shortest_path<S: Simd>(
     clippy::too_many_arguments,
     reason = "mirrors BrotliCreateZopfliBackwardReferences, whose parameters are all needed"
 )]
-pub(crate) fn create_zopfli_backward_references<S: Simd>(
+pub(crate) fn create_zopfli_backward_references<S: Simd, const INDEPENDENT: bool>(
     simd: S,
     num_bytes: usize,
     position: usize,
@@ -877,7 +885,7 @@ pub(crate) fn create_zopfli_backward_references<S: Simd>(
     workspace.prepare(num_bytes, params.dist.alphabet_size_limit as usize);
     let starting_dist_cache = state.dist_cache;
     let gap = attached.map_or(0, SharedContextInner::total_size);
-    zopfli_compute_shortest_path(
+    zopfli_compute_shortest_path::<_, INDEPENDENT>(
         simd,
         num_bytes,
         position,
@@ -911,7 +919,7 @@ pub(crate) fn create_zopfli_backward_references<S: Simd>(
     clippy::too_many_arguments,
     reason = "mirrors BrotliCreateHqZopfliBackwardReferences, whose parameters are all needed"
 )]
-pub(crate) fn create_hq_zopfli_backward_references<S: Simd>(
+pub(crate) fn create_hq_zopfli_backward_references<S: Simd, const INDEPENDENT: bool>(
     simd: S,
     num_bytes: usize,
     position: usize,
@@ -952,7 +960,11 @@ pub(crate) fn create_hq_zopfli_backward_references<S: Simd>(
         let max_length = num_bytes - i;
 
         let cur_match_pos = workspace.arena.len();
-        let dictionary_distance = dictionary_start + gap;
+        let dictionary_distance = if INDEPENDENT {
+            usize::MAX
+        } else {
+            dictionary_start + gap
+        };
         #[cfg(feature = "experimental")]
         let dictionary_distance = if attached.is_some_and(|c| c.static_index.is_some()) {
             params.dist.max_distance as usize + 1
@@ -1088,7 +1100,7 @@ pub(crate) fn create_hq_zopfli_backward_references<S: Simd>(
             model,
             ..
         } = workspace;
-        zopfli_iterate(
+        zopfli_iterate::<_, INDEPENDENT>(
             simd,
             num_bytes,
             position,
@@ -1186,14 +1198,18 @@ mod tests {
         dispatch!(level, simd => matcher.stitch_to_previous_block(
             simd, data.len(), 0, buffer.buffer(), buffer.mask()));
         match params.quality {
-            HqQuality::Q10 => dispatch!(level, simd => create_zopfli_backward_references(
-                simd, data.len(), 0, buffer.buffer(), buffer.mask(), &params,
-                None, &mut matcher, &mut workspace, &mut state, &mut commands,
-            )),
-            HqQuality::Q11 => dispatch!(level, simd => create_hq_zopfli_backward_references(
-                simd, data.len(), 0, buffer.buffer(), buffer.mask(), &params,
-                None, &mut matcher, &mut workspace, &mut state, &mut commands,
-            )),
+            HqQuality::Q10 => {
+                dispatch!(level, simd => create_zopfli_backward_references::<_, false>(
+                    simd, data.len(), 0, buffer.buffer(), buffer.mask(), &params,
+                    None, &mut matcher, &mut workspace, &mut state, &mut commands,
+                ))
+            }
+            HqQuality::Q11 => {
+                dispatch!(level, simd => create_hq_zopfli_backward_references::<_, false>(
+                    simd, data.len(), 0, buffer.buffer(), buffer.mask(), &params,
+                    None, &mut matcher, &mut workspace, &mut state, &mut commands,
+                ))
+            }
         }
         (commands, state, params)
     }

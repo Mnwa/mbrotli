@@ -65,14 +65,19 @@ pub(crate) trait Kernels: Send + Sync {
 }
 
 /// The boxed proof tokens are zero-sized for all currently supported backends.
-struct Selected<S>(S);
+struct Selected<S, const INDEPENDENT: bool>(S);
 
 /// Resolves the backend once, when a retained encoder is constructed.
 pub(crate) fn select(level: Level) -> Box<dyn Kernels> {
-    dispatch!(level, simd => Box::new(Selected(simd)) as Box<dyn Kernels>)
+    dispatch!(level, simd => Box::new(Selected::<_, false>(simd)) as Box<dyn Kernels>)
 }
 
-impl<S: Simd> Kernels for Selected<S> {
+/// Selects isolated fragment kernels once per worker allocation.
+pub(crate) fn select_independent(level: Level) -> Box<dyn Kernels> {
+    dispatch!(level, simd => Box::new(Selected::<_, true>(simd)) as Box<dyn Kernels>)
+}
+
+impl<S: Simd, const INDEPENDENT: bool> Kernels for Selected<S, INDEPENDENT> {
     fn fast(
         &self,
         core: &mut FastCore,
@@ -83,7 +88,7 @@ impl<S: Simd> Kernels for Selected<S> {
     ) {
         self.0.vectorize(
             #[inline(always)]
-            || encode_fragment(self.0, core, input, is_last, table, writer),
+            || encode_fragment::<_, INDEPENDENT>(self.0, core, input, is_last, table, writer),
         );
     }
 
@@ -100,11 +105,21 @@ impl<S: Simd> Kernels for Selected<S> {
         self.0.vectorize(
             #[inline(always)]
             || match attached {
-                None => with_matcher!(matcher, |finder| create_backward_references::<_, _, false>(
+                None => with_matcher!(matcher, |finder| create_backward_references::<
+                    _,
+                    _,
+                    false,
+                    INDEPENDENT,
+                >(
                     self.0, finder, params, window, span, None, references, commands
                 )),
                 Some(_) => {
-                    with_matcher!(matcher, |finder| create_backward_references::<_, _, true>(
+                    with_matcher!(matcher, |finder| create_backward_references::<
+                        _,
+                        _,
+                        true,
+                        INDEPENDENT,
+                    >(
                         self.0, finder, params, window, span, attached, references, commands
                     ))
                 }
@@ -126,7 +141,7 @@ impl<S: Simd> Kernels for Selected<S> {
         self.0.vectorize(
             #[inline(always)]
             || match params.quality {
-                HqQuality::Q10 => create_zopfli_backward_references(
+                HqQuality::Q10 => create_zopfli_backward_references::<_, INDEPENDENT>(
                     self.0,
                     span.bytes as usize,
                     span.position as usize,
@@ -139,7 +154,7 @@ impl<S: Simd> Kernels for Selected<S> {
                     references,
                     commands,
                 ),
-                HqQuality::Q11 => create_hq_zopfli_backward_references(
+                HqQuality::Q11 => create_hq_zopfli_backward_references::<_, INDEPENDENT>(
                     self.0,
                     span.bytes as usize,
                     span.position as usize,

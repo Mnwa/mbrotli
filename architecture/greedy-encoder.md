@@ -594,3 +594,13 @@ sized by the same `2 * bytes + 503` reservation the reference uses.
   Current measurements and their limitations are recorded in
   [encoder-workspace.md](encoder-workspace.md); historical setup costs must not
   be read as measurements of the new representation.
+
+## Independent parallel fragments
+
+The parallel fragment adapter installs `Selected<S, true>` once per worker.
+Its command policy emits full distance codes, while `DictionaryStats::DISABLED`
+keeps static-dictionary lookup disabled. `begin_fragment` starts headerless and
+seeds the ring and literal context with the raw prefix; the common fragment
+writer owns those prefix bytes in the output. Serial kernels use `false` and
+retain their existing behavior. See [parallel compression](parallel-compression.md)
+for reset invariants and assembly.

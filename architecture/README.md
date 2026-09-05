@@ -10,6 +10,7 @@ error propagation, with Mermaid diagrams for the mechanics it describes.
 | Specification | Summary |
 | --- | --- |
 | [ci.md](ci.md) | Automatic tests, lints and checks; manually dispatched coverage, Miri, sanitizer, fuzz campaigns and benchmarks. |
+| [parallel-compression.md](parallel-compression.md) | Caller-scheduled independent segments, q0–q11 aligned fragments, completion lifecycle, bounded staging, writer output and release gates. |
 | [compressor.md](compressor.md) | Compressor subsystem: the five layers of the public API, where each configuration value is validated, how it lowers into the encoders' own parameters, the stateful compressor and its retained workspace, the one-shot paths, the session state machine, the transactional writer and the cursor-based reader, the split error model, SIMD dispatch, verification topology, and current implementation gaps. |
 | [encoder-workspace.md](encoder-workspace.md) | Retained allocation ownership, sparse matcher promotion, pinned backend kernels, session completion and bounded writer backpressure, with Track A verification evidence and open gates. |
 | [universal-encoding.md](universal-encoding.md) | Universal cross-API byte identity, equivalent stream settings, deliberate native C differences, exact slice capacity and canonical differential oracles. |
@@ -27,6 +28,7 @@ error propagation, with Mermaid diagrams for the mechanics it describes.
 ```mermaid
 graph TD
     subgraph public["Public API"]
+        parallel["compressor::parallel<br/>(ParallelCompressor, tasks, batches,<br/>sources and staging)"]
         lib["mbrotli<br/>(crate root re-exports)"]
         cfg["compressor::config<br/>(EncoderConfig, Quality, Window,<br/>BlockSize, CompressionMode,<br/>DistanceParams, ConfigError)"]
         comp["compressor::encoder<br/>(Compressor, CompressorBuilder,<br/>RetentionPolicy, opaque Backend)"]
@@ -67,6 +69,10 @@ graph TD
         ffi["google-brotli-ffi<br/>(dev-only: benchmark and test oracle)"]
     end
 
+    lib --> parallel
+    parallel --> parallelcore["parallel::core<br/>(planner, task slots, artifacts, assembly)"]
+    parallelcore --> fragment["compressor::core::fragment<br/>(aligned independent parts)"]
+    fragment --> driver
     lib --> cfg
     lib --> comp
     lib --> sess
@@ -135,6 +141,8 @@ the ergonomic surface; `core` owns the algorithms.
 | Path | Role |
 | --- | --- |
 | `src/lib.rs` | Crate root; re-exports the public surface. |
+| `src/compressor/parallel/` | Public scheduler-neutral API over private `core` planning, task ownership, staging and assembly. |
+| `src/compressor/core/fragment.rs` | Private non-final independent fragment adapter for every quality. |
 | `src/compressor/config.rs` | Validated configuration: `EncoderConfig` and the values inside it. |
 | `src/compressor/encoder.rs` | The stateful `Compressor`, its builder and its retention policy. |
 | `src/compressor/session.rs` | Public session wrapper and per-stream values; delegates to private `core::session` and the shared `core::stream` scheduler. |

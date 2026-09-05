@@ -210,7 +210,12 @@ struct Pass1<'a> {
 
 /// First pass: finds matches and records commands and literals.
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
-fn create_commands<S: Simd, const TABLE_BITS: usize, const MIN_MATCH: usize>(
+fn create_commands<
+    S: Simd,
+    const TABLE_BITS: usize,
+    const MIN_MATCH: usize,
+    const INDEPENDENT: bool,
+>(
     simd: S,
     block: &Block<'_>,
     table: &mut [i32],
@@ -295,13 +300,18 @@ fn create_commands<S: Simd, const TABLE_BITS: usize, const MIN_MATCH: usize>(
             if let Some(block) = data.get(next_emit..next_emit + insert) {
                 literals.extend_from_slice(block);
             }
-            if distance == last_distance {
+            if !INDEPENDENT && distance == last_distance {
                 commands.push(64);
             } else {
                 emit_distance(distance as usize, commands);
                 last_distance = distance;
             }
-            emit_copy_len_last_distance(matched, commands);
+            if INDEPENDENT {
+                emit_copy_len(matched - 2, commands);
+                emit_distance(distance as usize, commands);
+            } else {
+                emit_copy_len_last_distance(matched, commands);
+            }
 
             next_emit = ip;
             if ip >= ip_limit {
@@ -359,7 +369,7 @@ fn create_commands<S: Simd, const TABLE_BITS: usize, const MIN_MATCH: usize>(
 
 /// Builds the command and distance prefix codes and stores them.
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
-fn build_and_store_command_prefix_code(
+fn build_and_store_command_prefix_code<const INDEPENDENT: bool>(
     histogram: &[u32; 128],
     depth: &mut [u8; 128],
     bits: &mut [u16; 128],
@@ -394,7 +404,12 @@ fn build_and_store_command_prefix_code(
     tmp_depth[192..200].copy_from_slice(&depth[48..56]);
     tmp_depth[384..392].copy_from_slice(&depth[56..64]);
     for i in 0..8 {
-        tmp_depth[128 + 8 * i] = depth[i];
+        // Independent fragments use explicit copy-two (compact symbol 40).
+        // Keep its depth at wire symbol 128: the unused insert-zero alias
+        // would overwrite it and invalidate canonical ordering of short copies.
+        if !INDEPENDENT || i != 0 {
+            tmp_depth[128 + 8 * i] = depth[i];
+        }
         tmp_depth[256 + 8 * i] = depth[8 + i];
         tmp_depth[448 + 8 * i] = depth[16 + i];
     }
@@ -404,7 +419,12 @@ fn build_and_store_command_prefix_code(
 
 /// Second pass: builds exact prefix codes and replays the buffered commands.
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
-fn store_commands(arena: &mut TwoPassArena, literals: &[u8], commands: &[u32], w: &mut BitWriter) {
+fn store_commands<const INDEPENDENT: bool>(
+    arena: &mut TwoPassArena,
+    literals: &[u8],
+    commands: &[u32],
+    w: &mut BitWriter,
+) {
     let TwoPassArena {
         lit_histo,
         lit_depth,
@@ -442,7 +462,7 @@ fn store_commands(arena: &mut TwoPassArena, literals: &[u8], commands: &[u32], w
     cmd_histo[2] += 1;
     cmd_histo[64] += 1;
     cmd_histo[84] += 1;
-    build_and_store_command_prefix_code(
+    build_and_store_command_prefix_code::<INDEPENDENT>(
         cmd_histo, cmd_depth, cmd_bits, tmp_depth, tmp_bits, tmp_tree, w,
     );
 
@@ -546,7 +566,12 @@ impl TwoPassState {
 }
 
 /// Compresses one fragment with the table width and match length baked in.
-fn compress_fragment_impl<S: Simd, const TABLE_BITS: usize, const MIN_MATCH: usize>(
+fn compress_fragment_impl<
+    S: Simd,
+    const TABLE_BITS: usize,
+    const MIN_MATCH: usize,
+    const INDEPENDENT: bool,
+>(
     simd: S,
     state: &mut TwoPassState,
     data: &[u8],
@@ -570,7 +595,7 @@ fn compress_fragment_impl<S: Simd, const TABLE_BITS: usize, const MIN_MATCH: usi
         let block_size = input_size.min(Q1_BLOCK_SIZE);
         commands.clear();
         literals.clear();
-        create_commands::<S, TABLE_BITS, MIN_MATCH>(
+        create_commands::<S, TABLE_BITS, MIN_MATCH, INDEPENDENT>(
             simd,
             &Block {
                 data,
@@ -589,7 +614,7 @@ fn compress_fragment_impl<S: Simd, const TABLE_BITS: usize, const MIN_MATCH: usi
             store_meta_block_header(block_size, false, w);
             // No block splits, no contexts.
             w.write(13, 0);
-            store_commands(arena, literals, commands, w);
+            store_commands::<INDEPENDENT>(arena, literals, commands, w);
         } else {
             // Few backward references and an entropy close to eight bits per
             // byte: emitting the block verbatim is about three times faster.
@@ -603,7 +628,7 @@ fn compress_fragment_impl<S: Simd, const TABLE_BITS: usize, const MIN_MATCH: usi
 /// Compresses `data` as one or more meta-blocks at quality 1.
 ///
 /// `table` must be zeroed and hold exactly `table_bits.entries()` entries.
-pub(crate) fn compress_fragment<S: Simd>(
+pub(crate) fn compress_fragment<S: Simd, const INDEPENDENT: bool>(
     simd: S,
     state: &mut TwoPassState,
     data: &[u8],
@@ -618,7 +643,7 @@ pub(crate) fn compress_fragment<S: Simd>(
         ($bits:literal, $min_match:literal) => {{
             debug_assert_eq!(table_bits.bits(), $bits);
             debug_assert_eq!(table_bits.min_match(), $min_match);
-            compress_fragment_impl::<S, $bits, $min_match>(simd, state, data, table, w)
+            compress_fragment_impl::<S, $bits, $min_match, INDEPENDENT>(simd, state, data, table, w)
         }};
     }
     match table_bits {

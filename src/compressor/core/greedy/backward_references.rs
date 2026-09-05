@@ -107,7 +107,12 @@ impl Default for ReferenceState {
     reason = "mirrors CreateBackwardReferences, whose parameters are all needed"
 )]
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
-pub(crate) fn create_backward_references<S: Simd, M: Matcher, const ENABLE_PREFIX: bool>(
+pub(crate) fn create_backward_references<
+    S: Simd,
+    M: Matcher,
+    const ENABLE_PREFIX: bool,
+    const INDEPENDENT: bool,
+>(
     simd: S,
     matcher: &mut M,
     params: &GreedyParams,
@@ -311,8 +316,11 @@ pub(crate) fn create_backward_references<S: Simd, M: Matcher, const ENABLE_PREFI
 
         apply_random_heuristics = position + 2 * sr.len + window;
         dictionary_start = (position + position_offset).min(max_backward_limit);
-        let distance_code =
-            compute_distance_code(sr.distance, dictionary_start + gap, &state.dist_cache);
+        let distance_code = if INDEPENDENT {
+            sr.distance + NUM_DISTANCE_SHORT_CODES as usize - 1
+        } else {
+            compute_distance_code(sr.distance, dictionary_start + gap, &state.dist_cache)
+        };
         if sr.distance <= dictionary_start + gap && distance_code > 0 {
             state.dist_cache[3] = state.dist_cache[2];
             state.dist_cache[2] = state.dist_cache[1];
@@ -375,7 +383,7 @@ mod tests {
             position: 0,
             bytes: data.len() as u32,
         };
-        dispatch!(level, simd => create_backward_references::<_, _, false>(
+        dispatch!(level, simd => create_backward_references::<_, _, false, false>(
             simd, &mut matcher, &params, window, span, None, &mut state, &mut commands,
         ));
         (commands, state)
@@ -417,7 +425,7 @@ mod tests {
                     position: 0,
                     bytes: payload.len() as u32,
                 };
-                dispatch!(level, simd => create_backward_references::<_, _, false>(
+                dispatch!(level, simd => create_backward_references::<_, _, false, false>(
                     simd, &mut matcher, &params, window, span, None, &mut state, &mut commands,
                 ));
                 assert_eq!(
@@ -449,7 +457,7 @@ mod tests {
             position: 0,
             bytes: payload as u32,
         };
-        dispatch!(level, simd => create_backward_references::<_, _, false>(
+        dispatch!(level, simd => create_backward_references::<_, _, false, false>(
             simd, &mut matcher, &params, window, span, None, &mut state, &mut commands,
         ));
         assert!(!commands.is_empty());
@@ -487,7 +495,7 @@ mod tests {
             position: 0,
             bytes: payload as u32,
         };
-        dispatch!(level, simd => create_backward_references::<_, _, false>(
+        dispatch!(level, simd => create_backward_references::<_, _, false, false>(
             simd, &mut matcher, &params, window, span, None, &mut state, &mut commands,
         ));
         // Only the four remembered entries are history; the rest stay derived.

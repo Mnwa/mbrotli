@@ -104,6 +104,12 @@ pub(crate) struct DictionaryStats {
 }
 
 impl DictionaryStats {
+    /// Permanently disables dictionary probing for an independent fragment.
+    pub(crate) const DISABLED: Self = Self {
+        lookups: 128,
+        matches: 0,
+    };
+
     /// Returns whether the dictionary has been paying for itself so far.
     const fn is_worth_probing(&self) -> bool {
         self.matches >= (self.lookups >> 7)

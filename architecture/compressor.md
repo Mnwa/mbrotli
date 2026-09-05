@@ -660,3 +660,7 @@ graph LR
   banks eliminate eager cold payload initialization, and allocator regressions
   enforce zero warmed allocations on text/binary/multi-block cases. They do not
   establish every speed/RSS gate on both AVX2 and NEON hardware.
+
+## Parallel companion
+
+The public `compressor::parallel` module is described in [parallel-compression.md](parallel-compression.md). It owns task scheduling boundaries, staging and assembly above a private independent fragment adapter. The serial entry points continue through the serial kernel policy.

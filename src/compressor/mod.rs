@@ -28,6 +28,7 @@ pub mod dictionary;
 #[cfg(feature = "experimental")]
 pub mod framing;
 pub mod io;
+pub mod parallel;
 
 pub use backend::Backend;
 pub use config::{

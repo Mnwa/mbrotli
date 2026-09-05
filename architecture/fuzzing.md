@@ -285,3 +285,17 @@ sets are identical; the corpus takes under two seconds instead of minutes.
   finding.
 - **`cargo afl fuzz` and `cargo afl cmin` need `cargo afl system-config`** on
   macOS, which runs `sudo`. Without it both fail at `shmget()`.
+
+## Parallel boundary target
+
+`parallel` uses the public task API, 64 KiB segments and at most 128 KiB of input. It compares one-task and reverse three-task output, scalar and host backends, retained workers, and independent C decoding. The engine-neutral body and per-quality seeds are replayed by the existing regression runner.
+
+```mermaid
+flowchart LR
+    Input[bounded bytes + quality/expansion controls] --> Plan[public parallel planner]
+    Plan --> One[one task]
+    Plan --> Reverse[three tasks, reverse order]
+    One --> Equal[exact byte equality across tasks and backends]
+    Reverse --> Equal
+    Equal --> C[C decoder: one stream round trip]
+```

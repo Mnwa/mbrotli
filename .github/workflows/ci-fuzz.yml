@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [differential_c, streaming_equivalence, dictionary, serialized_dictionary, framing, compressor_lifecycle]
+        target: [differential_c, streaming_equivalence, dictionary, serialized_dictionary, framing, compressor_lifecycle, parallel]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,6 +47,7 @@ jobs:
             dictionary) seeds=seeds/dictionary ;;
             serialized_dictionary) seeds=seeds/serialized ;;
             framing) seeds=regressions/framing ;;
+            parallel) seeds=regressions/parallel ;;
           esac
           cargo afl fuzz -S ci -i "$seeds" -o findings -V 600 \
             -- "target/release/$TARGET"

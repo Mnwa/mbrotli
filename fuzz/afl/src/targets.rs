@@ -30,6 +30,7 @@ pub type TargetFn = fn(&Context, &[u8]);
 /// through the matching body, so adding a target here is all it takes to give
 /// it a regression corpus.
 pub const TARGETS: &[(&str, TargetFn)] = &[
+    ("parallel", parallel),
     ("q0_roundtrip", q0_roundtrip),
     ("q1_roundtrip", q1_roundtrip),
     ("q3_roundtrip", q3_roundtrip),
@@ -1040,4 +1041,47 @@ fn validate_framing_directory(bytes: &[u8]) {
         cursor += size;
     }
     assert_eq!(cursor, bytes.len());
+}
+
+/// Parallel output must decode once and remain invariant under task grouping,
+/// reverse execution, worker reuse, and scalar versus host dispatch.
+/// Payloads are bounded to two 64 KiB segments; scheduling is deterministic.
+pub fn parallel(ctx: &Context, data: &[u8]) {
+    use mbrotli::compressor::parallel::{
+        BatchConfig, ParallelCompressor, ParallelConfig, SegmentSize, TaskCount,
+    };
+    let control = data.first().copied().unwrap_or(0);
+    let quality = IMPLEMENTED_QUALITIES[usize::from(control % 12)];
+    let payload = cap(data.get(2..).unwrap_or_default());
+    let mut input = payload.to_vec();
+    if data.get(1).is_some_and(|b| b & 1 != 0) && !payload.is_empty() {
+        input.resize(65536 + payload.len().min(65536), 0);
+        for (i, b) in input.iter_mut().enumerate() {
+            *b = payload[i % payload.len()];
+        }
+    }
+    let parallel = ParallelConfig::from(SegmentSize::try_from(65536).unwrap())
+        .with_minimum_parallel_size(0)
+        .with_max_retained_workers(3);
+    let encoder = EncoderConfig::default().with_quality(quality);
+    let mut expected = None;
+    for backend in [mbrotli::Backend::SCALAR, ctx.level] {
+        let mut compressor =
+            ParallelCompressor::with_backend(encoder, parallel.clone(), backend).unwrap();
+        for count in [1, 3] {
+            let config = BatchConfig::memory(TaskCount::try_from(count).unwrap(), 1 << 20);
+            let mut batch = compressor.prepare_slice(&input, config).unwrap();
+            for task in batch.take_tasks().unwrap().into_iter().rev() {
+                task.run();
+            }
+            let mut out = Vec::new();
+            batch.finish_into(&mut out).unwrap();
+            assert_round_trip(&input, &out);
+            if let Some(expected) = &expected {
+                assert_eq!(&out, expected);
+            } else {
+                expected = Some(out);
+            }
+        }
+    }
 }
