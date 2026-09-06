@@ -22,8 +22,8 @@ exclude = [
 ]
 
 [dependencies.fearless_simd]
-version = "=0.7.0"
-features = ["libm", "force_support_fallback"]
+version = "0.7"
+features = ["force_support_fallback"]
 
 [dependencies.thiserror]
 version = "2"
@@ -32,11 +32,11 @@ version = "2"
 # the proc-macro crate into its tree; every `#[hotpath::measure]` anchor in
 # `src/` is written as `#[cfg_attr(feature = "hotpath", hotpath::measure)]`.
 [dependencies.hotpath]
-version = "0.24"
+version = "0.25"
 optional = true
 
 [dev-dependencies]
-rayon = "1.11"
+rayon = "1.12"
 tempfile = "3.27"
 
 [dev-dependencies.criterion]
