@@ -78,19 +78,7 @@ fn hash14(data: &[u8]) -> usize {
     (word.wrapping_mul(HASH_MUL32) >> (32 - 14)) as usize
 }
 
-/// Returns how many leading bytes of `left` and `right` agree, up to `limit`.
-///
-/// Dictionary words are at most twenty-four bytes long, so this stays scalar:
-/// the reference's word-at-a-time loop would not pay for its setup here, and
-/// the result has to be the exact first mismatch either way.
-#[inline(always)]
-pub(super) fn common_prefix_len(left: &[u8], right: &[u8], limit: usize) -> usize {
-    left.iter()
-        .zip(right)
-        .take(limit)
-        .take_while(|(a, b)| a == b)
-        .count()
-}
+pub(super) use crate::compressor::core::shared::match_len::common_prefix_len;
 
 /// Running statistics that decide whether probing is still worth it.
 ///
@@ -200,6 +188,7 @@ fn test_item(
 ///
 /// Mirrors `SearchInStaticDictionary`, including the point at which it gives up
 /// on the dictionary entirely for this stream.
+#[inline(always)]
 pub(crate) fn search(
     stats: &mut DictionaryStats,
     data: &[u8],
@@ -209,9 +198,38 @@ pub(crate) fn search(
     out: &mut SearchResult,
     shallow: bool,
 ) {
+    // The give-up test is inlined into the match finder, which calls this
+    // at every position that found nothing; the probe itself is not. It
+    // works on a copy of the result: handing the caller's out-of-line would
+    // pin the search's result to memory for the whole search.
     if !stats.is_worth_probing() {
         return;
     }
+    let mut probed = *out;
+    probe(
+        stats,
+        data,
+        max_length,
+        max_backward,
+        max_distance,
+        &mut probed,
+        shallow,
+    );
+    *out = probed;
+}
+
+/// Probes the dictionary buckets of `data`'s hash (`SearchInStaticDictionary`
+/// after its give-up test).
+#[inline(never)]
+fn probe(
+    stats: &mut DictionaryStats,
+    data: &[u8],
+    max_length: usize,
+    max_backward: usize,
+    max_distance: usize,
+    out: &mut SearchResult,
+    shallow: bool,
+) {
     let key = hash14(data) << 1;
     let probes = if shallow { 1usize } else { 2 };
     for offset in 0..probes {

@@ -94,23 +94,38 @@ pub(crate) type HistogramDistance = Histogram<NUM_HISTOGRAM_DISTANCE_SYMBOLS>;
 /// order the terms are summed in changes the last bits of the result, and the
 /// block splitter compares those results against thresholds.
 pub(crate) fn bits_entropy(population: &[u32]) -> f64 {
+    bits_entropy_of(population.len(), |index| population[index] as usize)
+}
+
+/// The entropy of two populations summed, without materialising the sum.
+///
+/// Same accumulation order as [`bits_entropy`] over the summed counts, so it
+/// returns exactly what `bits_entropy` would on the combined histogram.
+pub(crate) fn bits_entropy_of_sum(left: &[u32], right: &[u32]) -> f64 {
+    let size = left.len().min(right.len());
+    bits_entropy_of(size, |index| left[index] as usize + right[index] as usize)
+}
+
+/// The shared accumulation of [`bits_entropy`] over `size` counts.
+#[inline(always)]
+fn bits_entropy_of(size: usize, count: impl Fn(usize) -> usize) -> f64 {
+    let population = count;
     let mut sum = 0usize;
     let mut retval = 0f64;
-    let size = population.len();
     let mut index = 0usize;
     if size & 1 == 1 {
         // The reference jumps into the middle of its unrolled loop for an odd
         // length, so the first element is accumulated on its own.
-        let p = population[0] as usize;
+        let p = population(0);
         sum += p;
         retval -= p as f64 * fast_log2(p);
         index = 1;
     }
     while index < size {
-        let p = population[index] as usize;
+        let p = population(index);
         sum += p;
         retval -= p as f64 * fast_log2(p);
-        let q = population[index + 1] as usize;
+        let q = population(index + 1);
         sum += q;
         retval -= q as f64 * fast_log2(q);
         index += 2;

@@ -189,30 +189,35 @@ flowchart TD
     Grow --> Store
 ```
 
-Bucket matchers retain counters and encoded offsets. q7–q9 allocate four starter
-positions on first touch and promote a bucket once to its full reference depth
-when a fifth slot is needed. Promotion copies the four valid positions in place
-and keeps the old starter region allocated. The high offset bit marks sparse
-storage; low bits encode base plus one. Counters determine validity, not stale
-payload bytes. Reset preserves allocations and clears validity; it never demotes
-a promoted bucket. Worst-case abandoned starters add four positions per bucket.
-A fresh matcher's arrays are already initialized. The encoder passes `clear =
-false` to preparation in that state, and after a reset sweep that restored the
-same invariant. Preparation still reports which partial sweep the next reset
-needs. Dirty tables retain the existing full or partial clearing behavior.
+Bucket matchers pick one of three layouts per stream; see the
+[greedy encoder](greedy-encoder.md#23-storage-layouts-runs-and-sweeps) for the
+selection rule. A compact key map or a table of generation-stamped entries
+activates blocks on demand: deep q7–q9 blocks start with four slots and are
+promoted once, in place, to the reference depth when a fifth is stored, with
+the starter left allocated. The dense layout, taken only when the matcher was
+built for a size hint of at least the shape's dense limit (an eighth of the
+table for tagged q5/q6 shapes, half of it for deep q7–q9 shapes, so that a
+256 KiB input takes the dense table on every shape), preallocates every block at
+`key << block_bits`, zeroed once per matcher, and clears only its `u16`
+counters per stream. Counters, or the generation stamp, govern validity; a
+block's stale bytes are never read. Preparation reports `Sweep::SelfCleaning`,
+so a reset neither replays a sweep nor marks the table dirty, and a warmed
+compressor allocates nothing whichever layout its next stream selects.
+The quick matchers' `SmallSlots` map is sized for the input at preparation,
+even on a fresh encoder, so it never rehashes during the stream.
 
 Forgetful-chain matchers materialize banks on first touch rather than allocating
 every bank's slots up front. Their heads/counters likewise govern validity.
 
 q5/q6 use parallel byte tags. One `fearless_simd` comparison covers the complete
-16- or 32-position bucket. Rotating its mask puts the newest position at the
-highest bit; masking unwritten positions and taking the highest remaining bit
-preserves search order. Once half the shallow buckets are occupied, the next
-activation copies positions and tags into arrays indexed directly by hash key.
-The emptied offset directory marks that representation and retains its capacity.
-Counters, slot numbers and candidate order survive the conversion; reset keeps
-the dense representation. The scalar backend deliberately scans without filtering as
-an independent oracle. q7–q9 use untagged bucket scans.
+16- or 32-position bucket; slots fill downwards, so rotating the mask by the
+newest slot and splitting it at that slot yields the newest-to-oldest order as
+two ascending scans. Unfilled slots are masked off. The scalar backend, and any
+four-slot starter block, deliberately scan without filtering as an independent
+oracle. q7–q9 use untagged bucket scans. Per input block the search loop works
+through a `MatchRun` view that holds the tables as slices bound once, the way
+the reference keeps `restrict` pointers, so a store never forces the loop to
+reload the table it is about to read.
 
 Selection dispatch runs when an encoder is created. Its `Box<dyn Kernels>` stores
 the selected proof token; current tokens are zero-sized. Each outer kernel call

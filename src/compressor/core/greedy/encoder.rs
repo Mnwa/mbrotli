@@ -15,7 +15,7 @@ use fearless_simd::Level;
 
 use super::backward_references::ReferenceState;
 use super::context_model::decide_over_literal_context_modeling;
-use super::hashers::{DistanceCache, MatchFinder, NUM_REMEMBERED_DISTANCES};
+use super::hashers::{DistanceCache, MatchFinder, NUM_REMEMBERED_DISTANCES, Sweep};
 use super::metablock::build_meta_block_greedy_into;
 use super::params::{GreedyParams, MAX_NUM_DELAYED_SYMBOLS};
 use crate::compressor::core::rfc9841::context::SharedContextInner;
@@ -40,6 +40,19 @@ const MIN_ENTROPY: f64 = 7.92;
 /// Fraction of a block that has to be literals before it is even sampled.
 const LITERAL_FRACTION: f64 = 0.99;
 
+/// How a reset leaves the match finder clean for the next stream.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum Cleanup {
+    /// Replay the partial sweep of an input this long: it clears exactly the
+    /// slots the stream could have dirtied.
+    Replay(usize),
+    /// The stream dirtied the table in places no cheap sweep could find; the
+    /// next prepare pays for the wipe.
+    Wipe,
+    /// The finder empties itself on every prepare; nothing to do.
+    Nothing,
+}
+
 /// Streaming encoder for qualities three to five.
 pub(crate) struct GreedyEncoder {
     kernels: Box<dyn Kernels>,
@@ -54,11 +67,8 @@ pub(crate) struct GreedyEncoder {
     /// stream has stored into, so a reused encoder that could not clean up
     /// after itself asks for the full sweep instead.
     matcher_dirty: bool,
-    /// Input length of the last partial sweep, when the last prepare took one.
-    ///
-    /// Replaying that same sweep clears exactly the slots the stream could
-    /// have dirtied, which is what lets the next stream keep the shortcut.
-    last_partial_prepare: Option<usize>,
+    /// What the last prepare's sweep left for a reset to do.
+    cleanup: Cleanup,
     input_pos: u64,
     last_processed_pos: u64,
     last_flush_pos: u64,
@@ -135,7 +145,7 @@ impl GreedyEncoder {
             matcher: MatchFinder::for_input(resolved.hasher, size_hint),
             is_prepared: false,
             matcher_dirty: false,
-            last_partial_prepare: None,
+            cleanup: Cleanup::Nothing,
             input_pos: 0,
             last_processed_pos: 0,
             last_flush_pos: 0,
@@ -196,15 +206,14 @@ impl GreedyEncoder {
         // Clean the match finder before the window it read from is dropped:
         // the sweep hashes the very bytes the previous stream stored, and they
         // are still where that stream left them.
-        match self.last_partial_prepare.take() {
-            Some(input_size) => {
+        match std::mem::replace(&mut self.cleanup, Cleanup::Nothing) {
+            Cleanup::Replay(input_size) => {
                 self.matcher
                     .prepare(true, input_size, self.ringbuffer.buffer(), true);
                 self.matcher_dirty = false;
             }
-            // The last stream swept the whole table, so it is dirty in places
-            // no cheap sweep could find. The next prepare pays for the wipe.
-            None => self.matcher_dirty = true,
+            Cleanup::Wipe => self.matcher_dirty = true,
+            Cleanup::Nothing => self.matcher_dirty = false,
         }
         self.ringbuffer.reset();
         self.is_prepared = false;
@@ -575,10 +584,15 @@ impl GreedyEncoder {
         let mask = self.ringbuffer.mask();
         if !self.is_prepared {
             let one_shot = position == 0 && is_last && !self.matcher_dirty;
-            let partial = self
-                .matcher
-                .prepare(one_shot, input_size, data, self.matcher_dirty);
-            self.last_partial_prepare = partial.then_some(input_size);
+            self.cleanup =
+                match self
+                    .matcher
+                    .prepare(one_shot, input_size, data, self.matcher_dirty)
+                {
+                    Sweep::Partial => Cleanup::Replay(input_size),
+                    Sweep::Full => Cleanup::Wipe,
+                    Sweep::SelfCleaning => Cleanup::Nothing,
+                };
             self.matcher_dirty = true;
             self.is_prepared = true;
         }

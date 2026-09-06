@@ -186,15 +186,18 @@ only matchers where the difference is observable.
 ### 2.2. The tagged matchers
 
 The reference builds `H58` and `H68` in place of `H5` and `H6` whenever
-`BROTLI_MAX_SIMD_QUALITY` is defined, which on GCC and Clang covers quality six.
-Those variants store a one-byte tag beside every position and iterate only the
-slots whose tag matches. The bucket matcher keeps these tags in compact
-parallel storage for q5/q6, matching the pinned C build's tag quality ceiling.
-`tags::Candidates` compares a complete 16- or 32-slot shallow bucket once with
-safe `fearless_simd` vectors, rotates its mask into newest-first order, and masks
-unwritten slots. Deeper test configurations retain 16-tag group traversal.
-The scalar backend deliberately retains the unfiltered scan as an independent
-oracle. Filtering preserves the accepted-match sequence:
+`BROTLI_MAX_SIMD_QUALITY` is defined, which on GCC and Clang covers qualities
+five and six. Those variants store a one-byte tag beside every position and
+visit only the slots whose tag matches. The bucket matcher keeps tags for the
+same two qualities (block depth 16 or 32). `tag_equality` compares a whole
+bucket's tags with one safe `fearless_simd` vector; `split_candidates` drops
+unfilled slots and splits the result into the slots at or above the newest
+position and those below it, so visiting each mask by ascending slot walks the
+bucket newest to oldest. Slots fill downwards from the top of a block, as the
+reference's tagged matchers do, which is what makes that walk a plain rotation.
+The scalar backend deliberately keeps the unfiltered scan as an independent
+oracle, and so does a starter block, which is too short for a vector compare.
+Filtering preserves the accepted-match sequence:
 
 - They select the same bucket. The tagged `HashBytes` keeps eight more low bits,
   which the key shifts straight back off.
@@ -210,45 +213,56 @@ The accepted-match sets coincide. `tests/differential_c.rs` checks the
 consequence directly: qualities six and seven are compared against a C library
 that really is using the tagged matchers.
 
-### 2.3. Cold storage and reset
+### 2.3. Storage layouts, runs and sweeps
 
-Quick H2/H3/H4 matchers with size hints of 1–2048 bytes select compact logical-slot
-storage before the scan. The packed open-addressed map returns zero for absent
-keys, and stores exactly the same slot values as the full table. It grows when a
-hint underestimates input. The full-table specialization stays unchanged for other
-hints. See [encoder workspace](encoder-workspace.md#cold-matcher-allocation-and-simd)
-for the map's occupancy, growth and reset invariants.
+The reference allocates every bucket's block up front and never initialises
+it, reading a slot only below the counter that guards it. Safe Rust has to
+initialise what it reads, so the bucket matcher picks a layout per stream from
+what `prepare` is told about it:
 
-Bucket counters and encoded offsets are allocated first. Position/tag payloads
-are materialized one bucket at a time in retained compact vectors. Deep q7–q9
-buckets start with four positions; requesting a fifth promotes once to the full
-reference depth, preserving slot numbers and recent positions. The old four-slot
-starter stays allocated, adding at most four positions per promoted bucket.
-At q5/q6, activating a new bucket after half the directory is occupied converts
-the table into direct arrays: existing positions and tags move to `key * depth`,
-and the offset vector is cleared while retaining its capacity. Future lookups
-use that empty directory as the dense-layout marker. This avoids offset loads on
-inputs that occupy most buckets while retaining compact storage for sparse ones.
-H42 similarly materializes one 512-slot chain bank at a time. Encoded offsets are stable across
-reset; counters and chain addresses alone determine which entries can be read.
-No stale payload is valid merely because its allocation survived.
-Preparation skips clearing when the encoder proves all entries are already empty
-from construction or its previous reset sweep. It still computes the partial-sweep
-classification needed by the next reset. `matcher_dirty` carries that invariant.
+| Layout | Chosen when | Index | Blocks | Cost of a new stream |
+| --- | --- | --- | --- | --- |
+| Compact | one-shot input of at most 1024 bytes | `KeyMap`, sized two entries per input byte | activated on demand | fill a map of at most 16 KiB |
+| Sparse | every other input, including one of unknown length | one packed `u64` per bucket: generation stamp, encoded block offset, counter | activated on demand, deep shapes start with four slots and grow once | bump the generation |
+| Dense | the matcher was built for a size hint of at least the shape's dense limit: an eighth of the table for tagged q5/q6 shapes, half of it for deep q7–q9 shapes | one `u16` counter per bucket | preallocated at `key << block_bits`, zeroed once per matcher | zero the counters |
+
+The dense decision rests on the construction-time size hint rather than on
+`prepare`'s `one_shot` flag: an input longer than one block is not one shot
+at its first block, and choosing the dense table there made every cold
+multi-block call pay for zeroing (and, on WSL2, faulting in) a table of up to
+32 MiB. A sparse entry from an earlier generation still names its block but
+counts as empty, so blocks persist across streams and a warmed compressor
+allocates nothing. Every layout empties itself in time that does not depend
+on what the previous stream stored, which is what the
+[`Sweep::SelfCleaning`] result of `prepare` tells the encoder.
+
+`Matcher::prepare` reports one of three sweeps, and the encoder records what a
+reset then has to do: `Partial` (quick and chain matchers on a short one-shot
+input) is replayed at reset, because it clears exactly the slots the stream
+could have dirtied; `Full` leaves the table dirty, so the next stream is not
+one-shot and pays for a wipe; `SelfCleaning` needs nothing. The quick matchers
+keep their `SmallSlots` map for size hints up to 2048 bytes, sized for the input
+at `prepare` so it never rehashes mid-stream.
+
+The reference hoists its table pointers into `restrict` locals for a whole
+block, so a store through one never makes the compiler reload the others. The
+`MatchRun` trait is the same idea: `Matcher::run` borrows the tables once per
+input block — the dense layout as three slices bound once, an on-demand layout
+as the matcher itself — and the search loop stores through that view rather
+than through the finder, which would otherwise reload every field it needs at
+every position.
 
 ```mermaid
 flowchart LR
-    hash[hash key] --> directory[counter and encoded offset]
-    directory -->|first touch| activate[append initialized bucket or bank]
-    directory -->|already allocated| payload[retained compact payload]
-    activate --> payload
-    activate --> occupied{Half of shallow buckets occupied?}
-    occupied -->|yes| dense[Copy slots and tags to direct arrays]
-    dense --> tags[Rotate 16- or 32-byte tag mask, mask initialized slots]
-    payload --> tags
-    tags --> candidates[newest-to-oldest candidates]
-    reset[reset stream] --> validity[clear counters / chain addresses]
-    validity -.->|payload remains allocated but invalid| payload
+    prepare[prepare: one-shot? input length; size hint] --> compact[Compact: key map]
+    prepare --> sparse[Sparse: stamped entries]
+    prepare -->|size hint at least the dense limit| dense[Dense: counters and key-addressed blocks]
+    compact --> run[Matcher::run borrows the tables for one block]
+    sparse --> run
+    dense --> run
+    run --> search[find_longest_match: cached distances, tag masks, candidates]
+    run --> store[store / store_range through the run]
+    prepare -. Sweep::SelfCleaning .-> reset[reset: nothing to replay]
 ```
 
 ### 2.4. The distance cache
@@ -306,6 +320,17 @@ adapters treat an empty result as normal rather than as end of stream.
 `CreateBackwardReferences`, and its decision order *is* the compression format's
 semantics: which candidate wins, when a match is delayed by a byte, which
 positions are stored and which are skipped are all visible in the output.
+
+The loop body is split in two functions. The search at every position stays in
+the loop; everything a found match entails — the delayed search, the distance
+cache update, the command and the stores — lives in `commit_match`, which
+re-enters the SIMD feature context and is left for the compiler to inline
+(forcing it out of line measured 8–10% slower on q2/q3 text). The loop's state
+(position, insert length, the random-heuristics horizon, the matcher run) is
+held in locals and passed to the commit path by value and back, so nothing in
+the hot loop has an address the compiler must keep current in memory. The
+static-dictionary probe likewise works on a copy of the search result. The
+split changes no decision: the sequence below is the same as the reference's.
 
 ```mermaid
 sequenceDiagram
@@ -449,6 +474,14 @@ Quality five may run the literal splitter per context instead, keeping one
 histogram per context of every block type and deciding on the total entropy
 change across all of them.
 
+The combined histograms are not materialised for the decision:
+`bits_entropy_of_sum` accumulates the summed counts in the same order
+`bits_entropy` would, so the result is bit-identical, and a block that merges
+is added into its neighbour in place. A splitter creates a block type's
+histograms when it first advances into them, so a short input never zeroes
+histograms it will not fill, and a retained buffer keeps whatever the last
+meta-block left in the rest until they are cleared on use.
+
 ### 5.2. Literal context modelling
 
 Only quality five and above reach this, and only when the meta-block is at least
@@ -581,6 +614,18 @@ given prefix cut corresponds to.
 Probing is self-limiting: once a stream has gone a hundred and twenty-eight
 lookups per match, the encoder stops paying for it.
 
+### 8.1. Prefix-length scans
+
+Every "how many leading bytes agree" question — static dictionary words, the
+HQ dictionary matcher and the attached prefix search — goes through
+`shared::match_len`: `common_prefix_len` scans whole eight-byte words and
+then bytes with the bounds established once, which is all a dictionary word
+of at most twenty-four bytes needs, and `common_prefix_len_simd` adds the
+native-vector loop of `find_match_length` for the attached prefix, whose
+matches run as long as the window allows. `SharedContextInner::find_match`
+takes the SIMD token and enters its feature context itself, so the vector
+compare stays inline however it is reached.
+
 ## 9. Error propagation
 
 The greedy tree defines no error type of its own. `GreedyParams::new` reports
@@ -622,6 +667,11 @@ sized by the same `2 * bytes + 503` reservation the reference uses.
   inventing history. See [rfc9841-encoding.md](rfc9841-encoding.md).
 - **Histogram accumulation and context sampling remain scalar.** Match-length
   scans and bucket tag filtering have SIMD implementations.
+- **The bucket matcher still trails the reference on some inputs.** The
+  search loop executes more instructions per candidate than the C build (about
+  30 against 24 at quality six), mostly bounds checks a safe formulation cannot
+  drop and register spills, and a dense table costs a one-time zeroing the
+  reference never pays. See the [benchmark record](../docs/benchmarks/2026-09-06-per-case.md).
 
 ## Independent parallel fragments
 

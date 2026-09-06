@@ -210,37 +210,8 @@ impl PrefixSources {
     }
 }
 
-/// Returns how many leading bytes two windows share, at most `limit`.
-///
-/// Whole eight-byte words first, then single bytes: the same scan the
-/// reference's `FindMatchLengthWithLimit` makes, and it needs no unsafe code
-/// because iterating fixed-size chunks is what removes the bounds check.
-/// Scalar on purpose — see the module comment.
 #[cfg(any(test, feature = "diagnostics"))]
-fn common_prefix_len(left: &[u8], right: &[u8], limit: usize) -> usize {
-    let limit = limit.min(left.len()).min(right.len());
-    let (Some(left), Some(right)) = (left.get(..limit), right.get(..limit)) else {
-        return 0;
-    };
-
-    let (left_words, left_tail) = left.as_chunks::<8>();
-    let (right_words, right_tail) = right.as_chunks::<8>();
-    let mut matched = 0usize;
-    for (left_word, right_word) in left_words.iter().zip(right_words) {
-        let difference = u64::from_le_bytes(*left_word) ^ u64::from_le_bytes(*right_word);
-        if difference != 0 {
-            return matched + (difference.trailing_zeros() as usize >> 3);
-        }
-        matched += 8;
-    }
-
-    matched
-        + left_tail
-            .iter()
-            .zip(right_tail)
-            .take_while(|(left_byte, right_byte)| left_byte == right_byte)
-            .count()
-}
+use crate::compressor::core::shared::match_len::common_prefix_len;
 
 #[cfg(test)]
 mod tests {

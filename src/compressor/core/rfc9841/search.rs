@@ -27,7 +27,10 @@
 //! the whole search runs once per position at qualities five and above; the
 //! measured cost is in the chain walk, not the byte comparison.
 
+use fearless_simd::Simd;
+
 use super::context::SharedContextInner;
+use crate::compressor::core::shared::match_len::{common_prefix_len, common_prefix_len_simd};
 use crate::compressor::core::shared::score::{
     SearchResult, backward_reference_penalty_using_last_distance, backward_reference_score,
     backward_reference_score_using_last_distance,
@@ -67,8 +70,9 @@ impl SharedContextInner {
         clippy::too_many_arguments,
         reason = "mirrors LookupCompoundDictionaryMatch, whose parameters are all needed"
     )]
-    pub(crate) fn find_match(
+    pub(crate) fn find_match<S: Simd>(
         &self,
+        simd: S,
         data: &[u8],
         ring_buffer_mask: usize,
         distance_cache: &[i32],
@@ -78,29 +82,38 @@ impl SharedContextInner {
         max_distance: usize,
         out: &mut SearchResult,
     ) {
-        let sources = self.dictionaries().prefix();
-        // `max_ring_buffer_distance + 1 + total_size - 1`, written the way the
-        // reference writes it, which is the distance of logical address zero.
-        let base_offset = max_ring_buffer_distance + self.total_size();
-        for attachment in 0..sources.segment_count() {
-            let Some(index) = self.prepared_prefix(attachment) else {
-                continue;
-            };
-            let source = sources.segment(attachment);
-            let chunk_start = sources.segment_start(attachment) as usize;
-            find_in_attachment(
-                index,
-                source,
-                data,
-                ring_buffer_mask,
-                distance_cache,
-                cur_ix,
-                max_length,
-                base_offset - chunk_start,
-                max_distance,
-                out,
-            );
-        }
+        // Entered here so the vector prefix scan stays inline whether or not
+        // the caller's feature context reaches this far.
+        simd.vectorize(
+            #[inline(always)]
+            || {
+                let sources = self.dictionaries().prefix();
+                // `max_ring_buffer_distance + 1 + total_size - 1`, written the
+                // way the reference writes it: the distance of logical
+                // address zero.
+                let base_offset = max_ring_buffer_distance + self.total_size();
+                for attachment in 0..sources.segment_count() {
+                    let Some(index) = self.prepared_prefix(attachment) else {
+                        continue;
+                    };
+                    let source = sources.segment(attachment);
+                    let chunk_start = sources.segment_start(attachment) as usize;
+                    find_in_attachment(
+                        simd,
+                        index,
+                        source,
+                        data,
+                        ring_buffer_mask,
+                        distance_cache,
+                        cur_ix,
+                        max_length,
+                        base_offset - chunk_start,
+                        max_distance,
+                        out,
+                    );
+                }
+            },
+        );
     }
 
     /// Collects every attached-dictionary match longer than `min_length`.
@@ -170,7 +183,9 @@ impl SharedContextInner {
     clippy::too_many_arguments,
     reason = "mirrors FindCompoundDictionaryMatch, whose parameters are all needed"
 )]
-fn find_in_attachment(
+#[inline(always)]
+fn find_in_attachment<S: Simd>(
+    simd: S,
     index: &super::prepared::PreparedPrefix,
     source: &[u8],
     data: &[u8],
@@ -209,7 +224,7 @@ fn find_in_attachment(
             continue;
         };
         let limit = candidate.len().min(max_length);
-        let length = common_prefix_len(candidate, target, limit);
+        let length = common_prefix_len_simd(simd, candidate, target, limit);
         if length < MIN_CACHED_MATCH {
             continue;
         }
@@ -261,7 +276,7 @@ fn find_in_attachment(
         if left != right {
             continue;
         }
-        let length = common_prefix_len(candidate, target, limit);
+        let length = common_prefix_len_simd(simd, candidate, target, limit);
         if length < MIN_CHAIN_MATCH {
             continue;
         }
@@ -344,31 +359,4 @@ fn find_all_in_attachment(
         }
     }
     count
-}
-
-/// Returns how many leading bytes two windows share, at most `limit`.
-///
-/// The same whole-word-then-byte scan `FindMatchLengthWithLimit` makes.
-fn common_prefix_len(left: &[u8], right: &[u8], limit: usize) -> usize {
-    let limit = limit.min(left.len()).min(right.len());
-    let (Some(left), Some(right)) = (left.get(..limit), right.get(..limit)) else {
-        return 0;
-    };
-    let (left_words, left_tail) = left.as_chunks::<8>();
-    let (right_words, right_tail) = right.as_chunks::<8>();
-    let mut matched = 0usize;
-    for (left_word, right_word) in left_words.iter().zip(right_words) {
-        let difference = u64::from_le_bytes(*left_word) ^ u64::from_le_bytes(*right_word);
-        if difference != 0 {
-            return matched + (difference.trailing_zeros() >> 3) as usize;
-        }
-        matched += 8;
-    }
-    for (left_byte, right_byte) in left_tail.iter().zip(right_tail) {
-        if left_byte != right_byte {
-            break;
-        }
-        matched += 1;
-    }
-    matched
 }

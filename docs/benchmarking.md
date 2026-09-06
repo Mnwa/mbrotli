@@ -66,8 +66,10 @@ Keep CPU and allocation profiling separate from throughput measurements.
 
 ## Reading results
 
-See the [complete per-case assessment](benchmarks/2026-09-05-per-case.md) for the
-95% target and every measured pass/fail. The earlier
+See the [greedy matcher per-case assessment](benchmarks/2026-09-06-per-case.md)
+for the 95% target and every measured pass/fail, and the
+[previous assessment](benchmarks/2026-09-05-per-case.md) it is compared against.
+The earlier
 [Intel i7-13700KF greedy SIMD comparison](benchmarks/2026-09-05-intel-i7-13700kf.md)
 provides a recorded before/after run with C controls, compressed sizes, confidence
 intervals, and validation results.

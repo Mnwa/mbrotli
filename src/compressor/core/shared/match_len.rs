@@ -20,10 +20,17 @@ pub(crate) const SCALAR_PREFIX_BYTES: usize = 16;
 /// Borrowing a fixed-size chunk instead of copying into a scratch array keeps
 /// this to a single unaligned load in the generated code, while staying inside
 /// safe Rust: the bounds test is the only thing that survives.
+///
+/// Every buffer index in this crate is below 2^32 (positions are 32-bit in
+/// the format), so `offset` is masked to that width: it changes nothing for
+/// a real index and lets the compiler see that `offset + 8` cannot overflow,
+/// which leaves a single compare in front of the load.
 #[inline(always)]
 pub(crate) fn load_u64_le(data: &[u8], offset: usize) -> u64 {
-    match data.get(offset..).and_then(|tail| tail.first_chunk::<8>()) {
-        Some(chunk) => u64::from_le_bytes(*chunk),
+    debug_assert!(offset <= u32::MAX as usize);
+    let offset = offset & u32::MAX as usize;
+    match data.get(offset..offset + 8) {
+        Some(chunk) => u64::from_le_bytes(chunk.try_into().unwrap_or([0; 8])),
         None => 0,
     }
 }
@@ -138,11 +145,55 @@ pub(crate) fn find_match_length<S: Simd>(
     right: usize,
     limit: usize,
 ) -> usize {
-    let (Some(left_window), Some(right_window)) =
-        (data.get(left..left + limit), data.get(right..right + limit))
-    else {
+    // Two plain comparisons bound both windows for the rest of the scan.
+    let (Some(left_window), Some(right_window)) = (data.get(left..), data.get(right..)) else {
         return 0;
     };
+    if limit > left_window.len() || limit > right_window.len() {
+        return 0;
+    }
+    scan_windows(simd, &left_window[..limit], &right_window[..limit])
+}
+
+/// Returns how many leading bytes two windows share, at most `limit`.
+///
+/// Whole eight-byte words first, then single bytes — the scan the reference's
+/// `FindMatchLengthWithLimit` makes — with the bounds established once so the
+/// loops carry no checks. Scalar on purpose: its callers compare static
+/// dictionary words of at most twenty-four bytes, where a vector loop would
+/// not pay for its setup. [`common_prefix_len_simd`] is the wide variant.
+#[inline(always)]
+pub(crate) fn common_prefix_len(left: &[u8], right: &[u8], limit: usize) -> usize {
+    let limit = limit.min(left.len()).min(right.len());
+    let (left, right) = (&left[..limit], &right[..limit]);
+    let whole_words = limit & !7;
+    let matched = match_len_words(&left[..whole_words], &right[..whole_words]);
+    if matched < whole_words {
+        return matched;
+    }
+    matched + match_len_bytes(&left[whole_words..], &right[whole_words..])
+}
+
+/// Returns how many leading bytes two windows share, at most `limit`, with
+/// the vector scan of [`find_match_length`] over long agreements.
+///
+/// For attached-prefix matches, which run as long as the window allows.
+#[inline(always)]
+pub(crate) fn common_prefix_len_simd<S: Simd>(
+    simd: S,
+    left: &[u8],
+    right: &[u8],
+    limit: usize,
+) -> usize {
+    let limit = limit.min(left.len()).min(right.len());
+    scan_windows(simd, &left[..limit], &right[..limit])
+}
+
+/// Counts the leading equal bytes of two windows of the same length.
+#[inline(always)]
+fn scan_windows<S: Simd>(simd: S, left_window: &[u8], right_window: &[u8]) -> usize {
+    let limit = left_window.len().min(right_window.len());
+    let (left_window, right_window) = (&left_window[..limit], &right_window[..limit]);
 
     // Cheap scalar prefix. Most matches the fast qualities find are short, and
     // entering a vector loop for them costs more than it saves.
@@ -301,6 +352,29 @@ mod tests {
         }
         dispatch!(Level::new(), simd => check(simd));
         dispatch!(Level::fallback(), simd => check(simd));
+    }
+
+    #[test]
+    fn common_prefixes_stop_at_the_first_difference_or_the_shortest_bound() {
+        let left: Vec<u8> = (0..100u8).collect();
+        let mut right = left.clone();
+        assert_eq!(common_prefix_len(&left, &right, 100), 100);
+        assert_eq!(common_prefix_len(&left, &right, 37), 37);
+        assert_eq!(common_prefix_len(&left[..20], &right, 100), 20);
+        assert_eq!(common_prefix_len(&[], &right, 100), 0);
+        for mismatch in [0usize, 3, 7, 8, 9, 15, 16, 31, 32, 63, 64, 99] {
+            right[mismatch] ^= 1;
+            assert_eq!(common_prefix_len(&left, &right, 100), mismatch);
+            for level in [Level::new(), Level::fallback()] {
+                let wide =
+                    dispatch!(level, simd => common_prefix_len_simd(simd, &left, &right, 100));
+                assert_eq!(wide, mismatch, "{mismatch}");
+                let bounded =
+                    dispatch!(level, simd => common_prefix_len_simd(simd, &left, &right[..50], 80));
+                assert_eq!(bounded, mismatch.min(50), "{mismatch}");
+            }
+            right[mismatch] ^= 1;
+        }
     }
 
     #[test]
