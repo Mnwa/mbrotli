@@ -10,7 +10,7 @@ flowchart TD
     fast --> semver["Default public API semver compatibility<br/>Against the latest crates.io release"]
     fast --> tests["Release tests: default, all features and experimental<br/>Linux x86-64, Linux ARM64, macOS and MSRV"]
     fast --> replaySetup["Restore Cargo cache without target artifacts<br/>Force reinstall cargo-afl and build runtime"]
-    replaySetup --> replay["AFL formatting, Clippy and regression replay"]
+    replaySetup --> replay["AFL formatting, Clippy and regression replay<br/>Without and with experimental"]
     manual["Independent workflow_dispatch triggers"] --> fuzzSetup["ci-fuzz.yml: restore Cargo cache without target artifacts<br/>Force reinstall cargo-afl and build runtime"]
     fuzzSetup --> fuzz["Seven ten-minute AFL campaigns"]
     manual --> bench["ci-benchmarks.yml<br/>Criterion validation and timing<br/>Linux x86-64 and ARM64"]
@@ -22,7 +22,9 @@ flowchart TD
 `CI` runs on pushes to `master` and on pull requests. Its test matrix executes
 stable Rust on all three operating-system runners and Rust 1.89 on Linux
 x86-64. The separate AFL package keeps its lint checks and committed regression
-replay in this automatic workflow.
+replay in this automatic workflow. Both Clippy and AFL replay run without
+default features, then with `experimental` enabled. Manual fuzz campaigns build
+with `experimental` so their serialized dictionary and framing binaries exist.
 
 The `semver` job uses `obi1kenobi/cargo-semver-checks-action@v2` to check only
 `mbrotli` against its latest published crates.io release, using stable Rust.

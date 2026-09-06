@@ -8,17 +8,26 @@ description = "AFL++ fuzz targets for the mbrotli quality 0 to 11 encoders"
 [dependencies]
 afl = "0.18"
 
-# `experimental` is on so the RFC 9841 serialized dictionary parser — a
-# byte-consuming boundary reached straight from caller-supplied bytes — is
-# fuzzed. It also builds the vendored C library with `BROTLI_EXPERIMENTAL`, so
-# the target has the reference parser to compare against.
 [dependencies.mbrotli]
 path = "../.."
-features = ["experimental"]
 
 [dependencies.google-brotli-ffi]
 path = "../../brotli-ffi"
-features = ["experimental"]
+
+[features]
+default = []
+# Enable the RFC 9841 targets and their independent C parser/decoder oracle.
+experimental = ["mbrotli/experimental", "google-brotli-ffi/experimental"]
+
+[[bin]]
+name = "serialized_dictionary"
+path = "src/bin/serialized_dictionary.rs"
+required-features = ["experimental"]
+
+[[bin]]
+name = "framing"
+path = "src/bin/framing.rs"
+required-features = ["experimental"]
 
 [profile.release]
 debug = true

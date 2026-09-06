@@ -118,6 +118,10 @@ explicitly an upstream-vendor update.
 - Keep fuzz targets and seed corpora in a dedicated `fuzz/afl/` tree. Keep the
   fuzz package isolated from normal workspace builds if needed so ordinary
   `cargo test` and `cargo clippy` remain reliable.
+- Keep the fuzz package's `experimental` feature opt-in. Gate experimental
+  target binaries, bodies, helpers, and regression registry entries together.
+  Test both with and without `experimental`; dependency features must not
+  silently enable it in the stable configuration.
 - Build targets with `cargo afl build`, then run them with
   `cargo afl fuzz -i <seeds> -o <findings> <target-binary>`.
 - Fuzz all byte-consuming and stateful boundaries: one-shot compression,
@@ -167,8 +171,10 @@ affect them. It is not exempt from the checks. After changing anything under
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo afl test
+cargo clippy --all-targets --no-default-features -- -D warnings
+cargo clippy --all-targets --no-default-features --features experimental -- -D warnings
+cargo afl test --no-default-features
+cargo afl test --no-default-features --features experimental
 ```
 
 `cargo afl test` rather than `cargo test`: the fuzz binaries link AFL's

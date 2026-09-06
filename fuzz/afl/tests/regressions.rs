@@ -27,6 +27,17 @@ fn inputs_for(target: &str) -> Vec<PathBuf> {
 }
 
 #[test]
+fn experimental_targets_follow_feature_selection() {
+    for name in ["serialized_dictionary", "framing"] {
+        assert_eq!(
+            targets::TARGETS.iter().any(|(target, _)| *target == name),
+            cfg!(feature = "experimental"),
+            "{name} must only be registered with experimental enabled"
+        );
+    }
+}
+
+#[test]
 fn every_target_has_a_regression_corpus() {
     for &(name, _) in targets::TARGETS {
         assert!(

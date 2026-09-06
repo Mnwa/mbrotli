@@ -9,7 +9,7 @@ and known gaps. For usage examples, start with the [user guide](../docs/README.m
 | Specification | Scope |
 | --- | --- |
 | [Compressor](compressor.md) | Configuration, serial APIs, sessions, I/O adapters, and errors. |
-| [Encoder workspace](encoder-workspace.md) | Retained allocations, incremental ring storage, copy-extension SIMD kernels, reset, and writer backpressure. |
+| [Encoder workspace](encoder-workspace.md) | Retained allocations and profiling-aware accounting tests, incremental ring storage, copy-extension SIMD kernels, reset, and writer backpressure. |
 | [Bit output](bit-output.md) | Fixed and growing initialized storage, direct fast appends, bit operations, and overflow propagation. |
 | [Serial output identity](universal-encoding.md) | Equivalent stream settings, shared scheduling, allocation-free empty finalization, and C compatibility. |
 | [Parallel compression](parallel-compression.md) | Independent segments, caller-run tasks, sources, staging, and assembly. |
@@ -20,8 +20,8 @@ and known gaps. For usage examples, start with the [user guide](../docs/README.m
 | [Serialized dictionaries](serialized-dictionary.md) | Experimental parsing, serialization, transforms, and resource limits. |
 | [Custom encoding and continuations](rfc9841-encoding.md) | Experimental static indexes, context combinations, and stream offsets. |
 | [Framing](framing.md) | Experimental resources, metadata, references, directory, and footer. |
-| [Fuzzing](fuzzing.md) | Isolated AFL package, input models, target oracles, and regression replay. |
-| [Continuous integration](ci.md) | Automatic checks, public API semver compatibility, AFL tool installation and CPU-specific cache boundaries, and manually dispatched validation workflows. |
+| [Fuzzing](fuzzing.md) | Isolated AFL package, stable and experimental target selection, input models, target oracles, and regression replay. |
+| [Continuous integration](ci.md) | Automatic checks, public API semver compatibility, AFL replay with and without experimental features, tool installation and CPU-specific cache boundaries, and manually dispatched validation workflows. |
 
 ## Module map
 

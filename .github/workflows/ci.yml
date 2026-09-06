@@ -105,10 +105,13 @@ jobs:
         working-directory: fuzz/afl
         run: |
           cargo fmt --all -- --check
-          cargo clippy --all-targets -- -D warnings
+          cargo clippy --all-targets --no-default-features -- -D warnings
+          cargo clippy --all-targets --no-default-features --features experimental -- -D warnings
       # `cargo afl test` rather than `cargo test`: the fuzz binaries link AFL's
       # runtime, so plain `cargo test` cannot link them. It replays the
       # committed regression corpus through the target bodies.
       - name: replay the regression corpus
         working-directory: fuzz/afl
-        run: cargo afl test
+        run: |
+          cargo afl test --no-default-features
+          cargo afl test --no-default-features --features experimental

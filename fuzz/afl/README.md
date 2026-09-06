@@ -13,7 +13,13 @@ AFL requires a C compiler and `make`. Run these commands from `fuzz/afl/`:
 cargo install cargo-afl --version 0.18.2 --locked
 cargo afl config --build --force
 cargo afl build --release
+cargo afl build --release --features experimental
 ```
+
+The default build covers 21 stable targets. `experimental` enables the
+`serialized_dictionary` and `framing` targets and the corresponding Rust and C
+features. Their binaries and regression registry entries are omitted without
+that flag; the remaining targets run in both configurations.
 
 Rebuild AFL's runtime when changing Rust toolchains. Some hosts require shared
 memory or crash-reporting configuration; `cargo afl system-config` performs
@@ -57,8 +63,8 @@ the forkserver for `afl-cmin` folder-mode coverage collection.
 | `large_window` | `seeds/large_window` | Header/quality validation, backend identity, and available C decoding |
 | `dictionary` | `seeds/dictionary` | Preparation limits, prefix matching, quality restrictions, and C compatibility |
 | `compressor_lifecycle` | `regressions/compressor_lifecycle` | Reuse, trim, reconfiguration, failures, abandonment, and recovery |
-| `serialized_dictionary` | `regressions/serialized_dictionary` | Parsing, canonical serialization, bounded preparation, and C decoding |
-| `framing` | `regressions/framing` | Resource/metadata sequences, chunking, directory completeness, and payload decoding |
+| `serialized_dictionary` (`experimental`) | `regressions/serialized_dictionary` | Parsing, canonical serialization, bounded preparation, and C decoding |
+| `framing` (`experimental`) | `regressions/framing` | Resource/metadata sequences, chunking, directory completeness, and payload decoding |
 | `parallel` | `regressions/parallel` | Scheduling, source adapters, staging, fragments, and C decoding |
 
 The common parameter decoder reads six bytes before the payload:
@@ -81,6 +87,7 @@ have integration coverage in the root workspace.
 
 ```sh
 cargo afl fuzz -i seeds/params -o findings/differential -- target/release/differential_c
+cargo afl build --release --features experimental --bin framing
 cargo afl fuzz -i regressions/framing -o findings/framing -- target/release/framing
 ```
 
@@ -106,7 +113,7 @@ Minimize a finding and commit a deterministic regression before fixing it:
 cargo afl tmin -i findings/differential/default/crashes/id:000000,... \
   -o regressions/differential_c/crash-short-description.bin \
   -- target/release/differential_c
-cargo afl test
+cargo afl test --features experimental
 ```
 
 Confirm that the regression fails before the fix and passes afterward. Details
@@ -116,8 +123,10 @@ After changes in this package or to a public API its targets call, run:
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo afl test
+cargo clippy --all-targets --no-default-features -- -D warnings
+cargo clippy --all-targets --no-default-features --features experimental -- -D warnings
+cargo afl test --no-default-features
+cargo afl test --no-default-features --features experimental
 ```
 
 Plain `cargo test` cannot link the fuzz binaries' AFL runtime. Workspace checks

@@ -40,7 +40,7 @@ jobs:
         run: ./prepare-seeds.sh
       - name: build the targets
         working-directory: fuzz/afl
-        run: cargo afl build --release
+        run: cargo afl build --release --features experimental
       # `TARGET` comes from this workflow's own literal matrix, but it is passed
       # through the environment rather than interpolated into the shell, which
       # is the pattern that stays correct if the list ever grows a value with a

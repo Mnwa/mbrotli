@@ -30,7 +30,22 @@ graph TD
 capacity rather than length for vectors. It excludes stack fields, caller output,
 shared dictionaries and allocator bookkeeping. The allocator-instrumented
 `compressor_memory` tests compare this sum with live requested heap bytes at all
-qualities. This is allocation accounting, not a process-RSS estimate.
+qualities. With `hotpath` enabled, each quality first runs through a temporary
+compressor to initialize profiling storage outside the measured interval. That
+compressor is dropped before measuring a fresh compressor, so cold workspace
+allocations and their release remain covered. This is allocation accounting,
+not a process-RSS estimate.
+
+```mermaid
+flowchart LR
+    Features{hotpath enabled?} -->|yes| Warm[Compress at this quality with temporary encoder]
+    Warm --> Drop[Drop temporary encoder and clear caller output]
+    Drop --> Baseline[Record live heap bytes]
+    Features -->|no| Baseline
+    Baseline --> Fresh[Create fresh compressor and compress]
+    Fresh --> Count[Compare live byte delta with retained_bytes]
+    Count --> Trim[Trim and verify live bytes return to baseline]
+```
 
 The configured retention policy applies after one-shot completion and when a
 session drops, including through readers/writers. A finished session can retain

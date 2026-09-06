@@ -77,6 +77,18 @@ fn reported_retention_counts_every_owned_heap_allocation() {
         let quality = Quality::try_from(number).expect("quality");
         let mut output =
             Vec::with_capacity(Compressor::max_compressed_size(data.len()).expect("bound"));
+        // Profiling initializes storage outside the compressor on first use.
+        // Warm each quality's instrumentation, then drop its encoder so the
+        // measured compressor still starts with an entirely cold workspace.
+        #[cfg(feature = "hotpath")]
+        {
+            let mut warmup =
+                Compressor::new(EncoderConfig::default().with_quality(quality)).expect("config");
+            warmup
+                .compress_into(&data, &mut output)
+                .expect("warm instrumentation");
+            output.clear();
+        }
         let before = LIVE.get();
         let mut compressor =
             Compressor::new(EncoderConfig::default().with_quality(quality)).expect("config");

@@ -372,6 +372,7 @@ pub fn c_decompress_large_window(input: &[u8], expected_size: usize) -> Option<V
 }
 
 /// Decodes a bounded custom-dictionary stream using the independent C decoder.
+#[cfg(feature = "experimental")]
 pub fn c_decompress_serialized(
     dictionary: &[u8],
     input: &[u8],
@@ -432,6 +433,7 @@ pub fn assert_round_trip(data: &[u8], compressed: &[u8]) {
 /// Wraps `BrotliSharedDictionaryAttach` with the serialized type through this
 /// repository's shim, which is compiled only when the vendored library is built
 /// with `BROTLI_EXPERIMENTAL`.
+#[cfg(feature = "experimental")]
 pub fn c_parse_shared_dictionary(bytes: &[u8]) -> bool {
     let mut info = google_brotli_ffi::MbrotliSharedDictInfo::default();
     // SAFETY: `bytes` is a live slice readable for its own length, and `info`

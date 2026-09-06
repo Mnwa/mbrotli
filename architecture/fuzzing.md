@@ -15,12 +15,29 @@ instrumentation and its runtime never reach an ordinary root `cargo test` or
 Backend selection goes through `mbrotli::Backend`, including its scalar baseline;
 the fuzz package has no direct dependency on the SIMD implementation crate.
 
+The fuzz package has no default features. Its opt-in `experimental` feature
+forwards to both `mbrotli/experimental` and `google-brotli-ffi/experimental`,
+enabling the serialized dictionary parser and its C oracle together. Only
+`serialized_dictionary` and `framing` require it: their Cargo binary entries,
+target bodies, private helpers, C helpers, and `TARGETS` entries share the gate.
+The default build contains 21 targets; enabling the feature contains all 23.
+
+```mermaid
+flowchart TD
+    Build[Fuzz package feature selection] --> Stable[21 stable targets and regression corpora]
+    Build --> Enabled{experimental enabled?}
+    Enabled -->|yes| Dependencies[Rust experimental APIs and C experimental oracle]
+    Dependencies --> Extra[Serialized dictionary and framing binaries and bodies]
+    Extra --> Registry[TARGETS includes both experimental corpora]
+    Enabled -->|no| Omit[Experimental binaries and registry entries omitted]
+```
+
 The package is split so that the AFL dependency stops at the binary layer:
 
 ```mermaid
 graph TD
     subgraph engine["Engine layer (depends on afl)"]
-        bins["src/bin/ — twenty-three afl::fuzz! adapters"]
+        bins["src/bin/ — 21 stable and 2 experimental afl::fuzz! adapters"]
     end
 
     subgraph neutral["Engine-neutral layer (no afl dependency)"]
@@ -201,6 +218,10 @@ stateDiagram-v2
 
 `tests/regressions.rs` walks the `TARGETS` registry, and for each entry replays
 every `.bin` file under `regressions/<name>/` through that target's body. It
+checks that experimental targets are registered exactly when their feature is
+enabled. CI and local completion checks run Clippy and `cargo afl test` both
+with `--no-default-features` and with
+`--no-default-features --features experimental`. The replay
 also asserts that no target has an empty corpus, so adding a target without
 seeding it fails the suite. The corpus holds hand-written `boundary-*.bin`
 cases — empty input, truncated and extreme headers, minimum and maximum window

@@ -6,14 +6,15 @@
 //! committed inputs through the very same functions, so a finding reproduces
 //! identically under AFL, under `cargo afl test` and under a debugger.
 
+#[cfg(feature = "experimental")]
+use crate::c_parse_shared_dictionary;
 use crate::{
     Context, IMPLEMENTED_QUALITIES, assert_round_trip, c_compress_with, c_decompress_large_window,
-    c_parse_shared_dictionary, cap, decode_case,
+    cap, decode_case,
 };
-use mbrotli::dictionary::{
-    DictionaryBuilder, DictionaryError, DictionaryLimits, SerializedDictionary,
-    SerializedDictionaryError,
-};
+use mbrotli::dictionary::{DictionaryBuilder, DictionaryError, DictionaryLimits};
+#[cfg(feature = "experimental")]
+use mbrotli::dictionary::{SerializedDictionary, SerializedDictionaryError};
 use mbrotli::io::FinishError;
 use mbrotli::{
     Compressor, ConfigError, EncodeError, EncoderConfig, EncoderStatus, Operation, Quality,
@@ -24,7 +25,7 @@ use std::io::{Read, Write};
 /// Signature every target body shares: prepared state, then one fuzz input.
 pub type TargetFn = fn(&Context, &[u8]);
 
-/// Every target, addressable by the name of its binary.
+/// Every target enabled by this build's features, addressable by its binary name.
 ///
 /// `tests/regressions.rs` walks `regressions/<name>/` and replays each file
 /// through the matching body, so adding a target here is all it takes to give
@@ -50,7 +51,9 @@ pub const TARGETS: &[(&str, TargetFn)] = &[
     ("parameter_parsing", parameter_parsing),
     ("large_window", large_window),
     ("dictionary", dictionary),
+    #[cfg(feature = "experimental")]
     ("serialized_dictionary", serialized_dictionary),
+    #[cfg(feature = "experimental")]
     ("framing", framing),
     ("compressor_lifecycle", compressor_lifecycle),
 ];
@@ -807,6 +810,7 @@ pub fn compressor_lifecycle(ctx: &Context, input: &[u8]) {
 ///   five-byte limit; accepted dictionaries still require C-valid canonical bytes;
 /// - what parses re-serializes to bytes that parse to an equal dictionary and
 ///   serialize identically again, which is what makes the encoding canonical.
+#[cfg(feature = "experimental")]
 pub fn serialized_dictionary(ctx: &Context, input: &[u8]) {
     let input = cap(input);
     // Most random bytes fail the two magic bytes immediately, which would make
@@ -931,6 +935,7 @@ pub fn serialized_dictionary(ctx: &Context, input: &[u8]) {
 }
 
 /// Resource chunking and metadata sequences remain deterministic across caller writes.
+#[cfg(feature = "experimental")]
 pub fn framing(ctx: &Context, input: &[u8]) {
     use mbrotli::framing::{
         FramingConfig, MetadataEncoding, MetadataField, MetadataKind, MetadataOptions,
@@ -994,6 +999,7 @@ pub fn framing(ctx: &Context, input: &[u8]) {
     }
 }
 
+#[cfg(feature = "experimental")]
 fn framing_number(bytes: &[u8], cursor: &mut usize) -> usize {
     let mut value = 0usize;
     for shift in (0..63).step_by(7) {
@@ -1007,6 +1013,7 @@ fn framing_number(bytes: &[u8], cursor: &mut usize) -> usize {
     panic!("overlong framing varint");
 }
 
+#[cfg(feature = "experimental")]
 fn validate_framing_directory(bytes: &[u8]) {
     let mut cursor = 5;
     let mut content_offsets = Vec::new();

@@ -5,6 +5,11 @@ One directory per fuzz target, named after its binary. Every `.bin` file in
 `tests/regressions.rs`, so these inputs are checked by `cargo afl test` and
 never depend on a running fuzzer.
 
+Run both `cargo afl test --no-default-features` and
+`cargo afl test --no-default-features --features experimental`. The first
+replays the 21 stable targets; the second adds `serialized_dictionary` and
+`framing`. The registry test checks that these two targets follow the feature.
+
 Two kinds of file live here:
 
 - `boundary-*.bin` — hand-written edge cases committed up front: empty input,
@@ -20,7 +25,7 @@ cd fuzz/afl
 cargo afl tmin -i findings/<campaign>/default/crashes/id:000000,... \
     -o regressions/<target>/crash-<short-description>.bin \
     -- target/release/<target>
-cargo afl test
+cargo afl test --features experimental
 ```
 
 The last command must fail on the new input. Fix the bug, then run it again;
