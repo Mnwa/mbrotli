@@ -13,7 +13,10 @@ flowchart TD
     replaySetup --> replay["AFL formatting, Clippy and regression replay<br/>Without and with experimental"]
     manual["Independent workflow_dispatch triggers"] --> fuzzSetup["ci-fuzz.yml: restore Cargo cache without target artifacts<br/>Force reinstall cargo-afl and build runtime"]
     fuzzSetup --> crashSetup["Configure direct core dumps on the disposable Ubuntu runner"]
-    crashSetup --> fuzz["Seven ten-minute AFL campaigns"]
+    crashSetup --> seeds["Select target-specific seeds<br/>Lifecycle, framing and parallel use regressions"]
+    seeds --> fuzz["Seven ten-minute AFL campaigns"]
+    fuzz --> findings["Check saved crashes and hangs"]
+    findings --> archive["Always archive existing findings as tar.gz<br/>Upload archive preserving AFL filenames"]
     manual --> bench["ci-benchmarks.yml<br/>Criterion validation and timing<br/>Linux x86-64 and ARM64"]
     manual --> coverage["ci-coverage.yml<br/>Instrumented workspace tests"]
     coverage --> coverageGate["Print summary and enforce 100% function coverage"]
@@ -63,6 +66,22 @@ an external crash handler, which makes AFL abort during startup because delayed
 crash notifications can be mistaken for timeouts. Direct core dumps preserve
 AFL's crash checking; the workflow does not bypass that check. Regression replay
 in `ci.yml` does not start the fuzzer and needs no host configuration.
+
+CI uses the same seed selection as `fuzz/afl/campaign.sh` for its seven
+targets. Lifecycle, framing, and parallel campaigns start from their own
+`regressions/<target>` directories. Lifecycle inputs describe command sequences;
+the parameter-header corpus used by compression targets can instead produce
+expensive sequences that exceed AFL's initial seed timeout. Dictionary and
+serialized dictionary targets use their respective prepared corpora; differential
+and streaming targets use `seeds/params`.
+
+After a campaign, the job still fails on saved crashes or hangs. Regardless of
+prior step success, it archives an existing findings directory to
+`fuzz/afl/findings.tar.gz` and uploads that file with ZIP compression disabled
+because it is already compressed. The tar archive preserves the complete tree,
+including queue, crash, and hang filenames containing colons, which
+`upload-artifact` refuses as individual files. If setup failed before findings
+were created, archiving skips the missing directory and upload reports no file.
 
 Coverage first cleans previous workspace coverage artifacts, then runs the
 locked, all-feature workspace tests at test optimization level 1. A separate

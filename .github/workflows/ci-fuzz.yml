@@ -60,8 +60,7 @@ jobs:
           case "$TARGET" in
             dictionary) seeds=seeds/dictionary ;;
             serialized_dictionary) seeds=seeds/serialized ;;
-            framing) seeds=regressions/framing ;;
-            parallel) seeds=regressions/parallel ;;
+            compressor_lifecycle|framing|parallel) seeds="regressions/$TARGET" ;;
           esac
           cargo afl fuzz -S ci -i "$seeds" -o findings -V 600 \
             -- "target/release/$TARGET"
@@ -71,8 +70,18 @@ jobs:
           findings_count=$(find findings \( -path '*/crashes/id:*' -o -path '*/hangs/id:*' \) | wc -l)
           echo "crashes and saved hangs: $findings_count"
           test "$findings_count" -eq 0
+      # AFL filenames contain colons, which upload-artifact rejects.
+      # Archive the full findings tree without changing reproducer names.
+      - name: archive AFL findings
+        if: always()
+        working-directory: fuzz/afl
+        run: |
+          if [ -d findings ]; then
+            tar -czf findings.tar.gz findings
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: findings-${{ matrix.target }}
-          path: fuzz/afl/findings
+          path: fuzz/afl/findings.tar.gz
+          compression-level: 0
