@@ -64,6 +64,7 @@ and crash minimization.
 | `tests/` | Public API, compatibility, and integration tests |
 | `examples/` | Runnable usage and profiling examples |
 | `benches/` | Criterion comparisons with C |
+| `benchmarks/comparison/` | Isolated, pinned comparison of five Brotli implementations |
 | `brotli-ffi/` | C bindings, build, and test shims |
 | `fuzz/afl/` | Isolated fuzz package and regression corpus |
 | `docs/` | User and contributor guides |

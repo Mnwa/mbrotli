@@ -755,18 +755,14 @@ sized by the same `2 * bytes + 503` reservation the reference uses.
 - **Histogram accumulation and context sampling remain scalar.** Bucket tag
   filtering and the high-quality match-length scans have SIMD
   implementations; the greedy matchers scan whole words.
-- **The bucket matcher still trails the reference on some inputs.** Its search
-  loop executes about as many instructions per position as the C build on
-  the dense layouts (callgrind, 2026-09-07), but at a lower rate: reused
-  binary input measures 93% (q5), 86% (q6) and 95% (q8) of the reference,
-  text 89–106%. A cold call on a quarter-mebibyte input at quality seven or
-  eight zeroes an 8 or 16 MiB table the reference leaves uninitialised, and
-  measures about 82% in Criterion.
+- **Cold bucket matchers initialize their tables.** A cold call on a
+  quarter-mebibyte input at quality seven or eight zeroes an 8 or 16 MiB
+  table the reference leaves uninitialised. This setup work remains part of
+  cold-call latency; reused benchmarks measure a different allocation policy.
 - **Short one-shot inputs pay for initialised memory.** A cold call on at
   most a kibibyte indexes the compact map and allocates and zeroes its
-  scratch per call; the quick-matcher cases (q2–q4) measure 67–87% of the
-  reference and the bucket-matcher ones 82–99%. See the
-  [benchmark record](../docs/benchmarks/2026-09-07-third-pass.md).
+  scratch per call. See the [benchmark guide](../docs/benchmarking.md) for
+  separate cold and reused measurements.
 
 ## Independent parallel fragments
 

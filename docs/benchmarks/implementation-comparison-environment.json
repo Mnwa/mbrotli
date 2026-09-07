@@ -1,0 +1,52 @@
+{
+  "date": "2026-09-07",
+  "encoder_revision": "452ca706e1720caa2702f0738e4778383e3f70e5",
+  "c_revision": "028fb5a23661f123017c060daa546b55cf4bde29",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8",
+  "c_compiler": "cc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "kernel": "6.18.33.2-microsoft-standard-WSL2",
+  "cpu": "13th Gen Intel(R) Core(TM) i7-13700KF",
+  "affinity": "logical CPU 2",
+  "rustflags": "unset; Cargo release defaults, runtime SIMD dispatch",
+  "features": "default only; no profiling instrumentation",
+  "api_mode": "cold native one-shot helpers, construction/allocation/disposal included",
+  "lgwin": 22,
+  "mode": "generic",
+  "qualities": {
+    "c-brotli": "0-11",
+    "mbrotli": "0-11",
+    "rust-brotli": "0-11",
+    "simd-brotli": "0-11",
+    "burli": "0-5"
+  },
+  "versions": {
+    "c-brotli": "1.2.0",
+    "mbrotli": "0.1.1 local checkout",
+    "rust-brotli": "9.0.0",
+    "simd-brotli": "10.0.1",
+    "burli": "0.3.1"
+  },
+  "sha256": {
+    "benchmarks/comparison/Cargo.lock": "2230db567cad58d0aee632e5ce37863153ce6b7e9a0fc7eedc91e6579a3bcd05",
+    "benchmarks/comparison/src/core.rs": "1a04c0b21b4dbaf7d4668b70b5b1e7e0374c8cda2a82b1165a822014becc722d",
+    "brotli-ffi/vendor/brotli/tests/testdata/alice29.txt": "7467306ee0feed4971260f3c87421154a05be571d944e9cb021a5713700c38f0"
+  },
+  "corpus_generation": "See pinned core.rs: xorshift64 seed 0x243f6a8885a308d3; structured binary ((i/16)^i) mod 256; repeated a; cyclic Alice.",
+  "command": "taskset -c 2 cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench implementations --locked -- --save-baseline comparison-2026-09-07 --sample-size 20 --warm-up-time 0.1 --measurement-time 0.3 --noplot",
+  "sampling": {
+    "samples": 20,
+    "warmup_seconds": 0.1,
+    "requested_measurement_seconds": 0.3,
+    "note": "Criterion can extend slow cases to collect all samples."
+  },
+  "validation": {
+    "workspace_tests_passed": 1003,
+    "comparison_unit_tests_passed": 3,
+    "comparison_validation_cases": 432,
+    "new_rust_functions_covered": 17,
+    "new_rust_functions_total": 17
+  },
+  "measured_cases": 432,
+  "baseline": "comparison-2026-09-07",
+  "plotting": "Matplotlib 3.10.8"
+}

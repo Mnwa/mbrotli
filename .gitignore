@@ -12,3 +12,8 @@ fuzz/afl/seeds/
 # The fuzz package pins its dependencies so a campaign is reproducible; the
 # bare `Cargo.lock` rule above would otherwise swallow it.
 !fuzz/afl/Cargo.lock
+
+# The independent implementation comparison owns its dependency pins and output.
+benchmarks/comparison/target/
+benchmarks/comparison/__pycache__/
+!benchmarks/comparison/Cargo.lock

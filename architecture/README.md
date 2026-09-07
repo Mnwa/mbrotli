@@ -8,6 +8,7 @@ and known gaps. For usage examples, start with the [user guide](../docs/README.m
 
 | Specification | Scope |
 | --- | --- |
+| [Implementation comparison](benchmark-comparison.md) | Isolated five-encoder Criterion suite, validation, version pins, and size/timing export. |
 | [Compressor](compressor.md) | Configuration, serial APIs, sessions, I/O adapters, and errors. |
 | [Encoder workspace](encoder-workspace.md) | Retained allocations and profiling-aware accounting tests, incremental ring storage, copy-extension SIMD kernels, reset, and writer backpressure. |
 | [Bit output](bit-output.md) | Fixed and growing initialized storage, direct fast appends, bit operations, and overflow propagation. |
@@ -48,6 +49,8 @@ graph TD
     Encoders --> Shared[private core::shared: bits, matches, entropy, ring buffer]
     Kernels --> SIMD[fearless_simd]
     C[google-brotli-ffi: development dependency] -. tests and benchmarks .-> API
+    Comparison[isolated benchmarks/comparison] -. native API comparison .-> API
+    Comparison --> Competitors[C, brotli, simd-brotli, burli]
 ```
 
 The public surface uses validated configuration values and high-level errors.

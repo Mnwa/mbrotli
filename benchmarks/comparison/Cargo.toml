@@ -1,0 +1,22 @@
+[package]
+name = "mbrotli-comparison"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# A separate workspace keeps competitors, feature resolution, and Criterion
+# artifacts out of the existing library benchmarks.
+[workspace]
+
+[dependencies]
+mbrotli = { path = "../.." }
+google-brotli-ffi = { path = "../../brotli-ffi" }
+brotli = "=9.0.0"
+simd-brotli = "=10.0.1"
+burli = "=0.3.1"
+criterion = "=0.8.2"
+thiserror = "2"
+
+[[bench]]
+name = "implementations"
+harness = false
