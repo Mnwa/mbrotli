@@ -1,0 +1,87 @@
+{
+  "date": "2026-09-07",
+  "encoder_revision": "ce83e1067ca85a2cb6e7ee4826c91b4ed8d0e072",
+  "source_state": "Clean working tree before benchmark preparation; only reporting code and documentation changed during the run.",
+  "c_revision": "028fb5a23661f123017c060daa546b55cf4bde29",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+  "c_compiler": "cc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "kernel": "6.18.33.2-microsoft-standard-WSL2",
+  "target": "x86_64-unknown-linux-gnu",
+  "cpu": "13th Gen Intel(R) Core(TM) i7-13700KF",
+  "affinity": "logical CPU 2",
+  "rustflags": "unset; Cargo release defaults, runtime SIMD dispatch",
+  "build_environment": {
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null,
+    "CFLAGS": null,
+    "CXXFLAGS": null,
+    "CARGO_BUILD_TARGET": null
+  },
+  "features": "default only; no profiling instrumentation",
+  "api_mode": "cold native one-shot helpers, construction/allocation/disposal included",
+  "lgwin": 22,
+  "mode": "generic",
+  "qualities": {
+    "c-brotli": "0-11",
+    "mbrotli": "0-11",
+    "rust-brotli": "0-11",
+    "simd-brotli": "0-11",
+    "burli": "0-5"
+  },
+  "versions": {
+    "c-brotli": "1.2.0",
+    "mbrotli": "0.1.1 local checkout",
+    "rust-brotli": "9.0.0",
+    "simd-brotli": "10.0.1",
+    "burli": "0.3.1"
+  },
+  "sha256": {
+    "Cargo.toml": "0cf941f70c278a3b964e3f5c1741e63afb8b4c0d6afea57c734cd75d46380254",
+    "Cargo.lock": "c42458ad3d71863d95db7a73b2ebb0d1a9eeb6d2be5b9b8f07fa4c55e51e2ef6",
+    "benchmarks/comparison/Cargo.toml": "e3786e742b9010f04b20546d40ed28b77425bdb713ce4ff12b2b440916371b7a",
+    "benchmarks/comparison/Cargo.lock": "2230db567cad58d0aee632e5ce37863153ce6b7e9a0fc7eedc91e6579a3bcd05",
+    "benchmarks/comparison/src/core.rs": "1a04c0b21b4dbaf7d4668b70b5b1e7e0374c8cda2a82b1165a822014becc722d",
+    "benchmarks/comparison/src/lib.rs": "37124e3930b4d1929186be79ab86c6bde61395b5d00b51e2a7d2260997725ccb",
+    "benchmarks/comparison/benches/implementations.rs": "4235d7819fcae8a1833fcb7fcbe8abccb7e827d25c4e8248cc6955f94ecab045",
+    "brotli-ffi/build.rs": "c2c982f3c5fdf878664ac006b850d8be4885c801ebb37e7c9266a6cc62103064",
+    "brotli-ffi/vendor/brotli/tests/testdata/alice29.txt": "7467306ee0feed4971260f3c87421154a05be571d944e9cb021a5713700c38f0",
+    "docs/benchmarks/library-comparison.csv": "d85cf0005a83657f11ff788e1c3a791da406b1e79b714e1010f60d7df4df3dbe",
+    "benchmarks/comparison/quality_docs.py": "918017b5f3cbba0c3fc2fb47237cc2afb2a39203bc3ed3bb68d782e393740b52",
+    "benchmarks/comparison/report.py": "2d0c14227245d0095578d3ed07f3871becff7904d8bfd3480a05092c5ad5865f",
+    "benchmarks/comparison/plot.py": "19321f6a22f7b8c7f607d3b043586bd2f89af8e28bb581ed18fbc9e263137229"
+  },
+  "binary": "benchmarks/comparison/target/release/deps/implementations-79b5dc97a736884b",
+  "binary_sha256": "a6d3c1a8a95f2492d97163f0d6fc4de4724628b149351cdca3fb9e0edeabb096",
+  "corpus_generation": "See pinned core.rs: xorshift64 seed 0x243f6a8885a308d3; structured binary ((i/16)^i) mod 256; repeated a; cyclic Alice.",
+  "sampling": {
+    "samples": 30,
+    "warmup_seconds": 0.2,
+    "requested_measurement_seconds": 0.5,
+    "note": "Criterion can extend slow cases to collect all samples."
+  },
+  "validation": {
+    "comparison_validation_cases": 432,
+    "command": "cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench implementations --locked -- --test",
+    "timed_sweep_exit_code": 0,
+    "comparison_python_tests_passed": 9,
+    "root_benchmark_script_tests_passed": 1,
+    "exported_cases_checked": 432,
+    "generated_quality_pages_checked": 12,
+    "svg_documents_checked": 111,
+    "local_links_checked": true,
+    "source_hashes_checked": true
+  },
+  "plotting": "Matplotlib 3.10.8",
+  "baseline": "library-refresh-2026-09-07-191328",
+  "command": "taskset -c 2 cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench implementations --locked -- --save-baseline library-refresh-2026-09-07-191328 --sample-size 30 --warm-up-time 0.2 --measurement-time 0.5 --noplot",
+  "started_at_utc": "2026-09-07T19:13:28.117339+00:00",
+  "limitations": [
+    "Single WSL2 host; frequency, thermal state, and host scheduling uncontrolled.",
+    "Fixed encoder order; confidence bounds describe sampling variation, not all environmental bias.",
+    "No matched before/after run; prior timings are historical context only."
+  ],
+  "finished_by_utc": "2026-09-07T19:22:28.234820+00:00",
+  "measured_cases": 432,
+  "local_archive": "benchmarks/comparison/target/run-archives/library-refresh-2026-09-07-191328"
+}

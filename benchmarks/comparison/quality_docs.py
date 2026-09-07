@@ -204,7 +204,7 @@ def quality_page(rows, quality, environment, source_link, environment_link, repo
               "They do not capture all host or allocator variation. Throughput bounds are transformed latency bounds.",
               "Output / input is compressed bytes divided by input bytes; smaller is better, and values above 100% mean expansion.",
               "For empty input, throughput and output / input are undefined (—).",
-              f"See the [optimization tradeoffs and rechecks]({report_link}#final-measurements) for before/after limitations.",
+              f"See the [run analysis]({report_link}#final-measurements) for measurement limitations.",
               "", "</details>", "", "## Dataset details", "",
               "Ordered by mbrotli speed / fastest competing implementation, highest first; all eight datasets are shown.",
               "This order uses recorded mean latency, not statistical significance. Bars start at zero.", "",

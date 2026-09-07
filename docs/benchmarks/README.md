@@ -6,7 +6,7 @@ eight datasets, then open a quality page for individual workloads.
 
 ## Median across all datasets
 
-![Median speed and output relative to C, by quality](competitor-paths-charts/tradeoff.svg)
+![Median speed and output relative to C, by quality](library-comparison-charts/tradeoff.svg)
 
 Each dataset contributes one ratio: **speed / C = C mean time / encoder mean
 time**, and **output / C = encoder bytes / C bytes**. The summary takes the
@@ -24,8 +24,8 @@ are linear and start at zero; exact values accompany the charts.
 ## Results by quality
 
 These pages use the latest recorded five-encoder run,
-`path-review-final-after` (2026-09-07), from the
-[competitor-guided optimization report](competitor-paths.md). Every chart and
+`library-refresh-2026-09-07-191328` (2026-09-07), from the
+[library benchmark refresh](library-comparison.md). Every chart and
 table on a quality page comes from that same run. Burli supports q0–q5 only.
 
 | Encoding family | Quality pages |
@@ -61,18 +61,22 @@ Equal quality numbers express each implementation's effort policy, not equal
 output size. Rust Brotli and SIMD Brotli include their native 4 KiB I/O adapters.
 The lowest recorded mean is not necessarily a statistically significant lead;
 confidence bounds do not capture every source of host or allocator variation.
-See the [tradeoffs and rechecks](competitor-paths.md#final-measurements), including
-the tiny-q1 slowdown and inconclusive random-data before/after results.
+See the [run analysis and limits](library-comparison.md#final-measurements).
+This is a fresh comparison at the recorded revision, not a matched before/after
+experiment.
 
 ## Run reports and raw data
 
 | Record | Contents |
 | --- | --- |
+| [Library benchmark refresh](library-comparison.md) | Current checkout, complete five-library sweep, measurement settings, and limitations |
+| [Latest five-encoder CSV](library-comparison.csv) | All 432 measurements used by the quality pages |
+| [Latest run environment](library-comparison-environment.json) | Revision, versions, compiler, machine, commands, source hashes, and binary identity |
 | [Optimization follow-up](competitor-paths.md) | Source review, targeted changes, matched before/after results, limitations, and charts across qualities |
 | [Quality 11 review against SIMD Brotli](hq-q11-review.md) | Why the fork led at q11, the short-scan and distance-cache changes, matched q10/q11 Criterion pairs, and the remaining leads with their causes |
 | [Burli review](burli-review.md) | Which Burli q0–q5 leads are policy and which were mbrotli overhead; the lazy q0 arena, per-build Huffman pool, first-word match length and array-reference tables; the fuzz oracle fix; the after sweep |
-| [Latest five-encoder CSV](competitor-paths-comparison.csv) | All 432 measurements used by the quality pages |
-| [Latest run environment](competitor-paths-environment.json) | Versions, compiler, machine, commands, source hashes, and binary identities |
+| [Optimization follow-up CSV](competitor-paths-comparison.csv) | Preserved earlier five-encoder measurements |
+| [Optimization follow-up environment](competitor-paths-environment.json) | Provenance for the earlier optimization run |
 | [Matched before/after CSV](competitor-paths-before-after.csv) | Separate 96-case mbrotli comparison; not mixed into quality-page measurements |
 | [Original comparison report](implementation-comparison.md) | Earlier 20-sample run, presented with the same median/bar format |
 | [Original CSV](implementation-comparison.csv) | Preserved earlier measurements |
@@ -86,16 +90,14 @@ from the recorded data with Matplotlib 3.10.8:
 
 ```sh
 python3 benchmarks/comparison/quality_docs.py \
-  --csv docs/benchmarks/competitor-paths-comparison.csv \
-  --environment docs/benchmarks/competitor-paths-environment.json \
-  --report docs/benchmarks/competitor-paths.md \
+  --csv docs/benchmarks/library-comparison.csv \
+  --environment docs/benchmarks/library-comparison-environment.json \
+  --report docs/benchmarks/library-comparison.md \
   --output docs/benchmarks/qualities
 python3 benchmarks/comparison/plot.py \
-  --csv docs/benchmarks/competitor-paths-comparison.csv \
-  --output docs/benchmarks/competitor-paths-charts \
-  --subtitle 'i7-13700KF; optimized checkout; 30 samples' \
-  --before-after docs/benchmarks/competitor-paths-before-after.csv \
-  --before-after-output docs/benchmarks/competitor-paths-speedups.svg
+  --csv docs/benchmarks/library-comparison.csv \
+  --output docs/benchmarks/library-comparison-charts \
+  --subtitle 'i7-13700KF; ce83e10; 30 samples; 2026-09-07'
 ```
 
 The generator validates the complete supported matrix, then groups it by

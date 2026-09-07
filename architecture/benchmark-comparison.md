@@ -103,6 +103,9 @@ unique supported quality/dataset/encoder keys, finite positive timing bounds,
 consistent input lengths, and window settings, then writes twelve Markdown
 pages and a median overview under `docs/benchmarks/qualities/`. Each page starts
 with median speed/size bars and a table, then shows all eight dataset charts.
+The current pages and index use `docs/benchmarks/library-comparison.csv` and its
+environment and run report; earlier comparison and optimization records retain
+their original data. Each page links to its own run's measurement limitations.
 Datasets are ordered by fastest peer mean latency / mbrotli mean latency,
 descending, with declared corpus order breaking ties. The peer excludes mbrotli
 so leads above 1× remain distinguishable. Exact tables and measurement setup
