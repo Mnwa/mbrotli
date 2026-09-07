@@ -4,6 +4,7 @@ use mbrotli::compressor::parallel::*;
 use mbrotli::{Backend, CompressionMode, EncoderConfig, Quality, Window};
 use std::{
     error::Error,
+    hint::black_box,
     io::{self, Write},
     sync::{
         Arc,
@@ -13,9 +14,15 @@ use std::{
 };
 
 fn config() -> ParallelConfig {
-    ParallelConfig::from(SegmentSize::try_from(64 << 10).unwrap())
-        .with_minimum_parallel_size(0)
-        .with_max_retained_workers(4)
+    // Keep the public API call observable to optimized coverage instrumentation.
+    let with_retention = black_box(
+        ParallelConfig::with_max_retained_workers as fn(ParallelConfig, usize) -> ParallelConfig,
+    );
+    with_retention(
+        ParallelConfig::from(SegmentSize::try_from(64 << 10).unwrap())
+            .with_minimum_parallel_size(0),
+        4,
+    )
 }
 fn compressor(q: u8) -> ParallelCompressor {
     ParallelCompressor::new(
@@ -199,7 +206,9 @@ fn detached_and_single_thread_rayon_schedulers_need_no_coordinator_drain() {
     let input = data();
     let mut c = compressor(5);
     let expected = inline(&mut c, &input, 1);
-    let source = Arc::new(ArcBytesSource::from(Arc::<[u8]>::from(input.clone())));
+    // An opaque function pointer preserves the conversion's coverage counter.
+    let from_bytes = black_box(ArcBytesSource::from as fn(Arc<[u8]>) -> ArcBytesSource);
+    let source = Arc::new(from_bytes(Arc::<[u8]>::from(input.clone())));
     assert_eq!(source.as_ref().as_ref(), input);
     assert!(!source.is_empty().unwrap());
     for rayon in [false, true] {
@@ -353,8 +362,11 @@ fn extraction_timeout_abandonment_cancellation_and_parent_reuse() {
         WaitStatus::TimedOut
     );
     assert!(format!("{b:?} {:?}", jobs[0]).contains("ScopedParallelTask"));
-    assert_eq!(u32::from(jobs[0].id()), 0);
-    assert_eq!(u64::from(jobs[0].segment_range().start), 0);
+    // Exercise the conversions at runtime even in optimized coverage builds.
+    let task_number = black_box(u32::from as fn(TaskId) -> u32);
+    let segment_number = black_box(u64::from as fn(SegmentId) -> u64);
+    assert_eq!(task_number(jobs[0].id()), 0);
+    assert_eq!(segment_number(jobs[0].segment_range().start), 0);
     drop(jobs);
     let error = b.wait().unwrap_err();
     assert!(error.to_string().contains("abandoned"));
@@ -538,7 +550,11 @@ fn source_errors_panics_and_length_changes_never_mutate_destination() {
         SourceConsistency::VerifyLength,
         SourceConsistency::AssumeImmutable,
     ] {
-        c.reconfigure_parallel(config().with_source_consistency(policy));
+        let with_consistency = black_box(
+            ParallelConfig::with_source_consistency
+                as fn(ParallelConfig, SourceConsistency) -> ParallelConfig,
+        );
+        c.reconfigure_parallel(with_consistency(config(), policy));
         let source = Arc::new(FaultSource {
             length: AtomicU64::new(65537),
             panic: false,

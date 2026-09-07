@@ -12,9 +12,12 @@ flowchart TD
     fast --> replaySetup["Restore Cargo cache without target artifacts<br/>Force reinstall cargo-afl and build runtime"]
     replaySetup --> replay["AFL formatting, Clippy and regression replay<br/>Without and with experimental"]
     manual["Independent workflow_dispatch triggers"] --> fuzzSetup["ci-fuzz.yml: restore Cargo cache without target artifacts<br/>Force reinstall cargo-afl and build runtime"]
-    fuzzSetup --> fuzz["Seven ten-minute AFL campaigns"]
+    fuzzSetup --> crashSetup["Configure direct core dumps on the disposable Ubuntu runner"]
+    crashSetup --> fuzz["Seven ten-minute AFL campaigns"]
     manual --> bench["ci-benchmarks.yml<br/>Criterion validation and timing<br/>Linux x86-64 and ARM64"]
-    manual --> coverage["ci-coverage.yml<br/>100% function coverage gate"]
+    manual --> coverage["ci-coverage.yml<br/>Instrumented workspace tests"]
+    coverage --> coverageGate["Print summary and enforce 100% function coverage"]
+    coverageGate --> coverageReport["Always render and upload HTML report"]
     manual --> miri["ci-miri.yml<br/>Miri retained-storage checks"]
     manual --> asan["ci-sanitizer.yml<br/>AddressSanitizer integration tests"]
 ```
@@ -53,6 +56,21 @@ The jobs then run `cargo afl config --build --force` before testing or building
 targets. Explicit configuration rebuilds the runtime; `--force` also permits a
 runtime built by a fresh install. Configuration failure stops the job before
 regression replay or campaigns.
+
+Before a fuzz campaign, the disposable Ubuntu runner sets
+`kernel.core_pattern=core` with `sudo sysctl -w`. Hosted images may pipe dumps to
+an external crash handler, which makes AFL abort during startup because delayed
+crash notifications can be mistaken for timeouts. Direct core dumps preserve
+AFL's crash checking; the workflow does not bypass that check. Regression replay
+in `ci.yml` does not start the fuzzer and needs no host configuration.
+
+Coverage first cleans previous workspace coverage artifacts, then runs the
+locked, all-feature workspace tests at test optimization level 1. A separate
+report step prints a summary and enforces the unchanged 100% function threshold.
+HTML rendering and artifact upload run even when tests or the gate fail. Tests
+of small public configuration methods and conversions use opaque function
+pointers where needed to retain runtime coverage counters in optimized builds;
+the existing behavioral assertions still validate their results.
 
 Each heavy workflow runs only when individually dispatched. Select the desired
 workflow in the GitHub Actions tab and use **Run workflow**, or run, for example,

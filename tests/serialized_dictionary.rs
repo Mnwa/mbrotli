@@ -530,8 +530,15 @@ fn custom_index_limits_are_enforced_before_expansion() {
         .add_word_list(WordList::builder().add_word(b"word").build().expect("word"))
         .build()
         .expect("dictionary");
+    // Preserve runtime calls to small APIs in optimized coverage builds.
+    let with_transformed_limit = std::hint::black_box(
+        DictionaryLimits::with_max_transformed_word_bytes
+            as fn(DictionaryLimits, u64) -> DictionaryLimits,
+    );
+    let static_limit =
+        std::hint::black_box(DictionaryLimits::max_static_entries as fn(DictionaryLimits) -> u64);
     for limits in [
-        DictionaryLimits::default().with_max_transformed_word_bytes(1),
+        with_transformed_limit(DictionaryLimits::default(), 1),
         DictionaryLimits::default().with_max_static_entries(1),
         DictionaryLimits::default().with_max_source_bytes(1),
         DictionaryLimits::default().with_max_retained_bytes(1),
@@ -551,9 +558,7 @@ fn custom_index_limits_are_enforced_before_expansion() {
         12
     );
     assert_eq!(
-        DictionaryLimits::default()
-            .with_max_static_entries(34)
-            .max_static_entries(),
+        static_limit(DictionaryLimits::default().with_max_static_entries(34)),
         34
     );
 }

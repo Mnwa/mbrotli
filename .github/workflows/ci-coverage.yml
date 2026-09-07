@@ -23,7 +23,15 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-llvm-cov --version 0.9.0 --locked
-      - run: cargo llvm-cov --workspace --all-features --html --fail-under-functions 100
+      - name: clean previous coverage artifacts
+        run: cargo llvm-cov clean --workspace
+      - name: run instrumented tests
+        run: cargo llvm-cov --workspace --all-features --locked --no-report
+      - name: enforce function coverage
+        run: cargo llvm-cov report --workspace --fail-under-functions 100
+      - name: render coverage report
+        if: always()
+        run: cargo llvm-cov report --workspace --html
       - uses: actions/upload-artifact@v4
         if: always()
         with:

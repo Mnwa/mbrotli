@@ -35,6 +35,10 @@ jobs:
       # --force also makes this succeed when a fresh install built it already.
       - name: build AFL runtime for the active Rust toolchain
         run: cargo afl config --build --force
+      # Hosted Ubuntu runners can pipe core dumps to an external crash handler.
+      # AFL needs synchronous crash notification on this disposable VM.
+      - name: configure direct core dumps for AFL
+        run: sudo sysctl -w kernel.core_pattern=core
       - name: prepare seeds
         working-directory: fuzz/afl
         run: ./prepare-seeds.sh
