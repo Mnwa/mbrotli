@@ -18,16 +18,13 @@ use super::distance::{DistanceParams, MAX_SIMPLE_DISTANCE_ALPHABET_SIZE};
 use super::fast_log::log2_floor_non_zero;
 use super::format::{ContextMode, NUM_BLOCK_LEN_SYMBOLS, PREFIX_CODE_RANGES};
 use super::huffman::{
-    HuffmanNode, build_and_store_huffman_tree, build_and_store_huffman_tree_fast, tree_capacity,
+    HuffmanNode, build_and_store_huffman_tree, build_and_store_huffman_tree_fast,
 };
 use super::metablock::{DISTANCE_CONTEXT_BITS, LITERAL_CONTEXT_BITS, MetaBlockSplit};
 use super::tables::{
     STATIC_COMMAND_CODE_BITS, STATIC_COMMAND_CODE_DEPTH, STATIC_DISTANCE_CODE_BITS,
     STATIC_DISTANCE_CODE_DEPTH,
 };
-
-/// Nodes a prefix-code build over the largest alphabet needs.
-const MAX_HUFFMAN_TREE_SIZE: usize = tree_capacity(NUM_COMMAND_SYMBOLS);
 
 /// Symbols a context map may use (`BROTLI_MAX_CONTEXT_MAP_SYMBOLS`).
 const MAX_CONTEXT_MAP_SYMBOLS: usize = MAX_NUMBER_OF_BLOCK_TYPES + 16;
@@ -201,7 +198,7 @@ impl BlockSplitCode {
 /// Mirrors `BuildAndStoreBlockSplitCode`.
 fn build_and_store_block_split_code(
     split: &BlockSplit,
-    tree: &mut [HuffmanNode],
+    tree: &mut Vec<HuffmanNode>,
     code: &mut BlockSplitCode,
     w: &mut BitWriter,
 ) {
@@ -360,7 +357,7 @@ fn encode_context_map(
     arena: &mut ContextMapArena,
     context_map: &[u32],
     num_clusters: usize,
-    tree: &mut [HuffmanNode],
+    tree: &mut Vec<HuffmanNode>,
     w: &mut BitWriter,
 ) {
     store_var_len_uint8(num_clusters - 1, w);
@@ -413,7 +410,7 @@ fn store_trivial_context_map(
     arena: &mut ContextMapArena,
     num_types: usize,
     context_bits: usize,
-    tree: &mut [HuffmanNode],
+    tree: &mut Vec<HuffmanNode>,
     w: &mut BitWriter,
 ) {
     store_var_len_uint8(num_types - 1, w);
@@ -505,7 +502,7 @@ impl<'a> BlockEncoder<'a> {
     fn build_and_store_block_switch_codes(
         &mut self,
         split: &BlockSplit,
-        tree: &mut [HuffmanNode],
+        tree: &mut Vec<HuffmanNode>,
         w: &mut BitWriter,
     ) {
         build_and_store_block_split_code(split, tree, &mut self.split_code, w);
@@ -518,7 +515,7 @@ impl<'a> BlockEncoder<'a> {
         &mut self,
         histograms: &[super::histogram::Histogram<N>],
         alphabet_size: usize,
-        tree: &mut [HuffmanNode],
+        tree: &mut Vec<HuffmanNode>,
         w: &mut BitWriter,
     ) {
         let table_size = histograms.len() * self.histogram_length;
@@ -595,21 +592,16 @@ pub(crate) struct MetaBlockWriter {
 }
 
 impl MetaBlockWriter {
-    /// Ensures room for one literal code, bounded by the number of literals.
-    fn prepare_literals(&mut self, num_literals: usize) {
-        let nodes = tree_capacity(num_literals.min(NUM_LITERAL_SYMBOLS));
-        if self.tree.len() < nodes {
-            self.tree.resize(nodes, HuffmanNode::default());
-        }
+    /// Ensures room for one literal code. The node pool sizes itself per
+    /// build, so only the depth and bit tables are prepared here.
+    fn prepare_literals(&mut self) {
         self.literal_depth.resize(NUM_LITERAL_SYMBOLS, 0);
         self.literal_bits.resize(NUM_LITERAL_SYMBOLS, 0);
     }
 
     /// Ensures room for the three codes used without block splitting.
     fn prepare_simple_codes(&mut self) {
-        self.prepare_literals(NUM_LITERAL_SYMBOLS);
-        self.tree
-            .resize(MAX_HUFFMAN_TREE_SIZE, HuffmanNode::default());
+        self.prepare_literals();
         self.command_depth.resize(NUM_COMMAND_SYMBOLS, 0);
         self.command_bits.resize(NUM_COMMAND_SYMBOLS, 0);
         self.distance_depth
@@ -657,8 +649,6 @@ impl MetaBlockWriter {
         mb: &MetaBlockSplit,
         w: &mut BitWriter,
     ) {
-        self.tree
-            .resize(MAX_HUFFMAN_TREE_SIZE, HuffmanNode::default());
         let num_distance_symbols = dist.alphabet_size_max as usize;
         let num_effective_distance_symbols = dist.alphabet_size_limit as usize;
 
@@ -849,7 +839,7 @@ impl MetaBlockWriter {
                 num_literals += command.insert_len as usize;
                 pos += command.copy_len() as usize;
             }
-            self.prepare_literals(num_literals);
+            self.prepare_literals();
             build_and_store_huffman_tree_fast(
                 &mut self.tree,
                 &literals,

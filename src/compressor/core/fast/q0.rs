@@ -142,7 +142,7 @@ const fn words_match(left: u64, right: u64) -> bool {
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn build_and_store_literal_prefix_code(
     histogram: &mut [u32; NUM_LITERAL_SYMBOLS],
-    tree: &mut [HuffmanNode],
+    tree: &mut Vec<HuffmanNode>,
     input: &[u8],
     depths: &mut [u8; NUM_LITERAL_SYMBOLS],
     bits: &mut [u16; NUM_LITERAL_SYMBOLS],
@@ -196,7 +196,7 @@ fn build_and_store_command_prefix_code(
     bits: &mut [u16; 128],
     tmp_depth: &mut [u8; NUM_COMMAND_SYMBOLS],
     tmp_bits: &mut [u16; 64],
-    tree: &mut [HuffmanNode],
+    tree: &mut Vec<HuffmanNode>,
     w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
 ) {
     tmp_depth.fill(0);
@@ -264,6 +264,36 @@ const fn should_use_uncompressed_mode(
     literal_ratio > Q0_MIN_RATIO
 }
 
+/// Returns whether a fragment needs no match scan at all.
+///
+/// An empty fragment is just the closing block. Otherwise the serial
+/// compressed header alone costs at least 19 + 13 bits plus the retained
+/// command code, so below this bound the size guard necessarily rewrites the
+/// fragment verbatim. Only a final fragment qualifies: a non-final one must
+/// still train the command code for its successor, and an independent one
+/// carries no retained code to compare against.
+pub(crate) const fn stores_verbatim(
+    cmd_code_numbits: usize,
+    independent: bool,
+    len: usize,
+    is_last: bool,
+) -> bool {
+    is_last && (len == 0 || (!independent && len <= cmd_code_numbits / 8))
+}
+
+/// Writes a final fragment verbatim and closes the stream.
+///
+/// This is the whole output for a fragment [`stores_verbatim`] accepts, so
+/// the caller needs neither an arena nor a hash table.
+pub(crate) fn store_final_verbatim(data: &[u8], w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>) {
+    if !data.is_empty() {
+        emit_uncompressed_meta_block(data, 0, data.len(), w.position(), w);
+    }
+    w.write(1, 1); // is_last
+    w.write(1, 1); // is_empty
+    w.align();
+}
+
 /// Rewinds to `start_position` and rewrites `data[begin..end]` verbatim.
 fn emit_uncompressed_meta_block(
     data: &[u8],
@@ -282,23 +312,23 @@ fn emit_uncompressed_meta_block(
 
 /// Compresses one fragment with a table width baked in.
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
-fn compress_fragment_impl<S: Simd, const TABLE_BITS: usize, const INDEPENDENT: bool>(
+fn compress_fragment_impl<
+    S: Simd,
+    const TABLE_BITS: usize,
+    const ENTRIES: usize,
+    const INDEPENDENT: bool,
+>(
     simd: S,
     arena: &mut OnePassArena,
     data: &[u8],
     is_last: bool,
-    table: &mut [i32],
+    table: &mut [i32; ENTRIES],
     w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
 ) {
     // Specialize the complete scan inside the selected SIMD feature context.
     simd.vectorize(
         #[inline(always)]
         || {
-            // Re-slicing to the compile-time width lets the bounds checks on every
-            // hash lookup fold away: the hash is a `64 - TABLE_BITS` shift, so its
-            // range is already known to be inside a table of exactly this length.
-            let table = &mut table[..1 << TABLE_BITS];
-
             let OnePassArena {
                 lit_depth,
                 lit_bits,
@@ -665,38 +695,39 @@ pub(crate) fn compress_fragment<S: Simd, const INDEPENDENT: bool>(
 
     if data.is_empty() {
         debug_assert!(is_last);
-        w.write(1, 1); // is_last
-        w.write(1, 1); // is_empty
-        w.align();
+        store_final_verbatim(data, w);
+        return;
+    }
+    if stores_verbatim(arena.cmd_code_numbits, INDEPENDENT, data.len(), is_last) {
+        store_final_verbatim(data, w);
         return;
     }
 
-    // The serial compressed header alone costs at least 19 + 13 bits plus
-    // the retained command code. Below this bound the size guard necessarily
-    // rewrites the fragment verbatim. Only skip a final fragment: a non-final
-    // fragment must still train the command code for its successor.
-    if is_last && !INDEPENDENT && data.len() <= arena.cmd_code_numbits / 8 {
-        emit_uncompressed_meta_block(data, 0, data.len(), initial_position, w);
-    } else {
-        match table_bits {
-            TableBits::B9 => {
-                compress_fragment_impl::<S, 9, INDEPENDENT>(simd, arena, data, is_last, table, w)
+    // The table is handed on as an array reference of its compile-time
+    // width: the hash is a `64 - TABLE_BITS` shift, so every slot it yields is
+    // inside the array and no lookup carries a bounds check. A slice of the
+    // same length does not give the compiler that proof once the scan loop
+    // is compiled inside the backend-specific function.
+    macro_rules! run {
+        ($bits:literal) => {{
+            debug_assert_eq!(table_bits.bits(), $bits);
+            if let Some(table) = table[..1 << $bits].first_chunk_mut::<{ 1 << $bits }>() {
+                compress_fragment_impl::<S, $bits, { 1 << $bits }, INDEPENDENT>(
+                    simd, arena, data, is_last, table, w,
+                );
             }
-            TableBits::B11 => {
-                compress_fragment_impl::<S, 11, INDEPENDENT>(simd, arena, data, is_last, table, w)
-            }
-            TableBits::B13 => {
-                compress_fragment_impl::<S, 13, INDEPENDENT>(simd, arena, data, is_last, table, w)
-            }
-            TableBits::B15 => {
-                compress_fragment_impl::<S, 15, INDEPENDENT>(simd, arena, data, is_last, table, w)
-            }
-        }
+        }};
+    }
+    match table_bits {
+        TableBits::B9 => run!(9),
+        TableBits::B11 => run!(11),
+        TableBits::B13 => run!(13),
+        TableBits::B15 => run!(15),
+    }
 
-        // Rewrite the fragment verbatim when compressing made it larger.
-        if w.position() - initial_position > 31 + (data.len() << 3) {
-            emit_uncompressed_meta_block(data, 0, data.len(), initial_position, w);
-        }
+    // Rewrite the fragment verbatim when compressing made it larger.
+    if w.position() - initial_position > 31 + (data.len() << 3) {
+        emit_uncompressed_meta_block(data, 0, data.len(), initial_position, w);
     }
 
     if is_last {
@@ -722,7 +753,7 @@ mod tests {
                                 let prefix = b"a small repeated prefix ".repeat(40);
                                 for arena in [&mut actual_arena, &mut reference_arena] {
                                     let mut storage = Vec::new();
-                                    compress_fragment_impl::<S, 11, INDEPENDENT>(
+                                    compress_fragment_impl::<S, 11, 2048, INDEPENDENT>(
                                         simd,
                                         arena,
                                         &prefix,
@@ -743,7 +774,7 @@ mod tests {
                             let mut actual = vec![seed];
                             let mut reference = vec![seed];
                             let mut writer = BitWriter::append(&mut reference, offset);
-                            compress_fragment_impl::<S, 9, INDEPENDENT>(
+                            compress_fragment_impl::<S, 9, 512, INDEPENDENT>(
                                 simd,
                                 &mut reference_arena,
                                 &data,

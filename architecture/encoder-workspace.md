@@ -143,7 +143,9 @@ flowchart TD
 ## Reusable entropy and search storage
 
 Fast arena resets clear fixed tables in place while retaining command, literal
-and tree vectors. Before its first wrap, the ring buffer allocates only the
+and tree vectors. The quality 0 arena itself is created by the first fragment
+that scans for matches, not by the constructor, so a stream stored verbatim
+never allocates it. Before its first wrap, the ring buffer allocates only the
 written prefix plus seven lookahead bytes. Its logical size and mask remain fixed.
 Before reaching the last two window bytes or reading into the tail, it allocates
 the complete layout and replays deferred tail copies. A short first write retains
@@ -151,10 +153,15 @@ the reference's omitted tail range and sentinel. Reset retains capacity and
 restores the prefix-growth state; subsequent writes restore head and margin bytes.
 The shared meta-block writer starts with empty vectors and no context-map arena.
 It materializes scratch only when an entropy code needs it, then retains it. A q2
-block using static command/distance codes allocates only literal depths/bits and
-a tree bounded by its literal count. Full and trivial codes prepare their larger
-tables; the context-map arena is initialized on first use. Block encoders borrow
-the retained tables. Move-to-front uses bounded stack
+block using static command/distance codes allocates only literal depths/bits.
+Full and trivial codes prepare their larger depth and bit tables; the
+context-map arena is initialized on first use. The Huffman node pool is shared
+by every code and is never pre-sized: each build counts the symbols it uses
+and grows the pool to `2 * used + 1` nodes (`huffman::nodes_for`), so a cold
+encoder writing a block with a few dozen literals never zero-fills the
+1,409-node pool the full command alphabet would need. Nothing in the pool is
+cleared between builds, because every build writes each node it reads. Block
+encoders borrow the retained tables. Move-to-front uses bounded stack
 scratch. Greedy splitters accept their previous split and histogram storage.
 HQ retains split/cluster/literal-cost storage and the full meta-block shape.
 

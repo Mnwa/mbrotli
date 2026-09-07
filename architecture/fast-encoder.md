@@ -70,10 +70,19 @@ statically specialized bit writer; slice and I/O output retain their existing
 fixed-buffer paths. [Bit output](bit-output.md) specifies initialization,
 reservation, overflow and partial-byte handling.
 
+The quality 0 arena is not built by the constructor. `FastCore::OnePass`
+holds an `Option<Box<OnePassArena>>` that the first fragment needing a match
+scan fills in; a stream whose only fragment is stored verbatim (§5) never
+allocates it, never clears a hash table, and never touches the Huffman node
+pool. The encoder also records whether its kernels are the fragment-only ones
+of an independent worker (`independent`), because that decides whether the
+verbatim shortcut applies.
+
 ```mermaid
 classDiagram
     class FastEncoder {
         -Box~dyn Kernels~ kernels
+        -bool independent
         -FastCore core
         -usize block_size_limit
         -u16 last_bytes
@@ -85,8 +94,8 @@ classDiagram
     }
     class FastCore {
         <<enum>>
-        OnePass
-        TwoPass
+        OnePass: Option~Box~OnePassArena~~
+        TwoPass: Box~TwoPassState~
     }
     class OnePassArena {
         +lit_depth [u8;256]
@@ -119,7 +128,7 @@ classDiagram
     }
 
     FastEncoder *-- FastCore
-    FastCore *-- OnePassArena : Q0
+    FastCore o-- OnePassArena : Q0, built on first scan
     FastCore *-- TwoPassState : Q1
     TwoPassState *-- TwoPassArena
 ```
@@ -127,7 +136,9 @@ classDiagram
 The hash table and the scratch output buffer grow but never shrink. Only the
 active table range is cleared between fragments; unused capacity is left
 untouched. A buffer that has to grow is replaced by a freshly zeroed
-allocation.
+allocation. The Huffman node pools (`tree`, `tmp_tree`) start empty and are
+sized by each build to the symbols it actually uses, see
+[encoder-workspace.md](encoder-workspace.md).
 
 ## 3. Fragment lifecycle
 
@@ -138,6 +149,8 @@ bytes, mirroring `BrotliEncoderCompressStreamFast`.
 stateDiagram-v2
     [*] --> Sized: reserve 2 * len + 503 + 8 bytes
     Sized --> Seeded: storage[0..2] = last_bytes
+    Seeded --> Verbatim: FastCore::stores_verbatim (final q0 fragment within the bound)
+    Verbatim --> Encoded: raw meta-block and closing bits, no table, no arena
     Seeded --> Tabled: clear the active hash table range
     Tabled --> Dispatched: retained kernel, S::vectorize
     Dispatched --> Encoded: q0 or q1 writes meta-blocks
@@ -194,15 +207,24 @@ The scan follows this order:
 - the final size guard rewrites the whole fragment verbatim when the compressed
   form exceeds `31 + 8 * len` bits.
 
-For a nonempty serial **final** fragment, the encoder first checks
-`len <= cmd_code_numbits / 8`. The compressed form needs at least 19 header bits,
+For a serial **final** fragment, `q0::stores_verbatim` checks
+`len <= cmd_code_numbits / 8` (an empty final fragment always qualifies: it is
+just the closing block). The compressed form needs at least 19 header bits,
 13 block/context bits, and the retained command code, already exceeding the
-rewrite threshold at that length. It can therefore emit the same uncompressed
-block immediately, without building literal codes or scanning matches. The
-initial command code has 448 bits, giving a 56-byte bound; a trained command
-code supplies its own bound. Non-final fragments still train the successor's
-code, and independent parallel fragments retain their separate command tree.
-Empty input and final marker/alignment handling keep their existing paths.
+rewrite threshold at that length. `q0::store_final_verbatim` therefore emits
+the same uncompressed block and the closing bits immediately, without building
+literal codes or scanning matches. The initial command code has 448 bits,
+giving a 56-byte bound; a trained command code supplies its own bound.
+Non-final fragments still train the successor's code, and independent parallel
+fragments retain their separate command tree.
+
+The decision is taken twice, from the same predicate: `FastCore::stores_verbatim`
+answers it before `prepare_table`, so no hash table is cleared, and again in
+`encode_fragment` before the arena is created, so a fresh encoder whose only
+fragment qualifies allocates nothing beyond the output. Without an arena the
+predicate uses the initial 448-bit bound, which is exactly what a fresh arena
+would carry. `compress_fragment` itself still applies the predicate, so the
+per-fragment kernels behave identically when they are called directly.
 
 ```mermaid
 flowchart TD
@@ -309,8 +331,9 @@ graph TD
     kernel -->|"S::vectorize, no re-selection"| B["encode_fragment&lt;S: Simd&gt;"]
     B --> C["q0::compress_fragment&lt;S&gt;"]
     B --> D["q1::compress_fragment&lt;S&gt;"]
-    C --> E["find_match_length&lt;S&gt;"]
-    D --> E
+    C --> E0["match_len_at: first word settled scalar"]
+    D --> E0
+    E0 -->|"first word equal"| E["match_len_windows&lt;S&gt; over the rest"]
     E --> F{"S::u8s::N"}
     F -->|16| G["u8x16 loop, stride 16"]
     F -->|32| H["u8x32 loop, stride 32"]
@@ -338,6 +361,13 @@ bounds check nor a length assertion in the loop.
 then native vectors, then whole words, then single bytes. The staging only
 changes how a length is discovered, never which length it is, so every backend
 emits identical bytes.
+
+`match_len_at`, the entry point the q0, q1 and greedy scans call, settles the
+first word before any window is cut: it bounds the candidate window once,
+loads eight bytes from each side, and answers a difference inside them with a
+trailing-zero count — the reference's whole scan for the short matches that
+dominate. Only a match running through the whole word pays for the slicing of
+the staged pipeline, which then continues from byte eight.
 
 ### 7.1. The stride invariant
 
@@ -367,15 +397,25 @@ flowchart LR
     C -->|1| E["8 .. 17"]
     D --> F["q0::TableBits"]
     E --> G["q1::TableBits"]
-    F --> H["compress_fragment_impl&lt;S, TABLE_BITS&gt;"]
-    G --> I["compress_fragment_impl&lt;S, TABLE_BITS, MIN_MATCH&gt;"]
+    F --> H["compress_fragment_impl&lt;S, TABLE_BITS, ENTRIES&gt;(table: &amp;mut [i32; ENTRIES])"]
+    G --> I["compress_fragment_impl&lt;S, TABLE_BITS, ENTRIES, MIN_MATCH&gt;(table: &amp;mut [i32; ENTRIES])"]
 ```
 
 The table width and, for quality 1, the minimum match length are const
 parameters, so the shift and the match predicate are compile-time constants
-inside the hot loop. Re-slicing the table to `1 << TABLE_BITS` at the top of
-the implementation lets the bounds check on every hash lookup fold away,
-because the hash is a `64 - TABLE_BITS` shift.
+inside the hot loop. The table itself is handed to the specialised body as an
+array reference `&mut [i32; 1 << TABLE_BITS]` (`first_chunk_mut` on the
+prepared slice), so every hash index — a `64 - TABLE_BITS` shift — is provably
+inside it and no lookup carries a bounds check. A slice re-cut to the same
+length does not give the compiler that proof once the scan is compiled inside
+the backend-specific `vectorize` function, which is why the earlier re-slicing
+form left a compare on every table access.
+
+Inside q1's `create_commands` the pass-one command and literal vectors are
+moved into locals for the duration of the scan and moved back at its end:
+behind the caller's references their headers live in memory the compiler
+cannot tell apart from the table, so every push would reload the length and
+capacity after each table store.
 
 ## 9. Data-processing loops
 

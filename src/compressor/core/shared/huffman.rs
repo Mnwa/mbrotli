@@ -21,6 +21,21 @@ pub(crate) const fn tree_capacity(symbols: usize) -> usize {
     2 * symbols + 1
 }
 
+/// Returns node scratch for a build over `leaves` used symbols.
+///
+/// The pool only ever grows: a build over more leaves than any earlier one
+/// extends it, and everything else reuses what is there. Nothing is cleared,
+/// because every build writes each node it reads. Sizing by the used symbols
+/// rather than the alphabet keeps a cold encoder from zeroing the full
+/// command-alphabet pool for a block that uses a few dozen symbols.
+fn nodes_for(tree: &mut Vec<HuffmanNode>, leaves: usize) -> &mut [HuffmanNode] {
+    let needed = tree_capacity(leaves);
+    if tree.len() < needed {
+        tree.resize(needed, HuffmanNode::default());
+    }
+    tree
+}
+
 /// One node of an in-construction Huffman tree.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct HuffmanNode {
@@ -176,15 +191,21 @@ fn merge_nodes(tree: &mut [HuffmanNode], n: usize) -> usize {
 
 /// Builds a depth-limited Huffman code over `data[..length]`.
 ///
-/// `tree` must hold at least [`tree_capacity(length)`] nodes and `depth` at
-/// least `length` entries.
+/// `tree` is node scratch that grows to fit the used symbols; `depth` must
+/// hold at least `length` entries.
 pub(crate) fn create_huffman_tree(
     data: &[u32],
     length: usize,
     tree_limit: i32,
-    tree: &mut [HuffmanNode],
+    tree: &mut Vec<HuffmanNode>,
     depth: &mut [u8],
 ) {
+    let leaves = data
+        .iter()
+        .take(length)
+        .filter(|&&count| count != 0)
+        .count();
+    let tree = nodes_for(tree, leaves);
     let mut count_limit: u32 = 1;
     loop {
         let mut n = 0usize;
@@ -442,7 +463,7 @@ fn store_code_length_code(
 pub(crate) fn store_huffman_tree(
     depths: &[u8],
     num: usize,
-    tree: &mut [HuffmanNode],
+    tree: &mut Vec<HuffmanNode>,
     w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
 ) {
     debug_assert!(num <= NUM_COMMAND_SYMBOLS);
@@ -521,7 +542,7 @@ fn store_simple_code(
 /// the static code-length code.
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn build_and_store_huffman_tree_fast(
-    tree: &mut [HuffmanNode],
+    tree: &mut Vec<HuffmanNode>,
     histogram: &[u32],
     histogram_total: usize,
     max_bits: u32,
@@ -553,6 +574,7 @@ pub(crate) fn build_and_store_huffman_tree_fast(
     }
 
     depth[..length].fill(0);
+    let tree = nodes_for(tree, count);
     let mut count_limit: u32 = 1;
     loop {
         let mut n = 0usize;
@@ -630,7 +652,7 @@ pub(crate) fn build_and_store_huffman_tree(
     histogram: &[u32],
     histogram_length: usize,
     alphabet_size: usize,
-    tree: &mut [HuffmanNode],
+    tree: &mut Vec<HuffmanNode>,
     depth: &mut [u8],
     bits: &mut [u16],
     w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,

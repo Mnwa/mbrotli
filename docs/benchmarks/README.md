@@ -70,6 +70,7 @@ the tiny-q1 slowdown and inconclusive random-data before/after results.
 | --- | --- |
 | [Optimization follow-up](competitor-paths.md) | Source review, targeted changes, matched before/after results, limitations, and charts across qualities |
 | [Quality 11 review against SIMD Brotli](hq-q11-review.md) | Why the fork led at q11, the short-scan and distance-cache changes, matched q10/q11 Criterion pairs, and the remaining leads with their causes |
+| [Burli review](burli-review.md) | Which Burli q0–q5 leads are policy and which were mbrotli overhead; the lazy q0 arena, per-build Huffman pool, first-word match length and array-reference tables; the fuzz oracle fix; the after sweep |
 | [Latest five-encoder CSV](competitor-paths-comparison.csv) | All 432 measurements used by the quality pages |
 | [Latest run environment](competitor-paths-environment.json) | Versions, compiler, machine, commands, source hashes, and binary identities |
 | [Matched before/after CSV](competitor-paths-before-after.csv) | Separate 96-case mbrotli comparison; not mixed into quality-page measurements |

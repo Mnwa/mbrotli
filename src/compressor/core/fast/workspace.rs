@@ -5,7 +5,7 @@
 //! block, so no allocation happens inside a match scan or a command replay.
 
 use super::constants::{NUM_COMMAND_SYMBOLS, NUM_LITERAL_SYMBOLS};
-use super::huffman::{HuffmanNode, tree_capacity};
+use super::huffman::HuffmanNode;
 use super::tables::{
     DEFAULT_COMMAND_BITS, DEFAULT_COMMAND_CODE, DEFAULT_COMMAND_CODE_NUM_BITS,
     DEFAULT_COMMAND_DEPTHS,
@@ -30,7 +30,8 @@ pub(crate) struct OnePassArena {
     pub(crate) cmd_code: [u8; COMMAND_CODE_CAPACITY],
     /// Number of valid bits in [`OnePassArena::cmd_code`].
     pub(crate) cmd_code_numbits: usize,
-    /// Node pool shared by every prefix-code build.
+    /// Node pool shared by every prefix-code build; each build grows it to
+    /// the symbols it uses, so it starts empty.
     pub(crate) tree: Vec<HuffmanNode>,
     /// Literal histogram, reused as the block-merge sample histogram.
     pub(crate) histogram: [u32; NUM_LITERAL_SYMBOLS],
@@ -71,7 +72,7 @@ impl Default for OnePassArena {
             cmd_histo: [0; 128],
             cmd_code,
             cmd_code_numbits: DEFAULT_COMMAND_CODE_NUM_BITS,
-            tree: vec![HuffmanNode::default(); tree_capacity(NUM_LITERAL_SYMBOLS)],
+            tree: Vec::new(),
             histogram: [0; NUM_LITERAL_SYMBOLS],
             tmp_depth: [0; NUM_COMMAND_SYMBOLS],
             tmp_bits: [0; 64],
@@ -93,7 +94,8 @@ pub(crate) struct TwoPassArena {
     pub(crate) cmd_depth: [u8; 128],
     /// Bit patterns of the command and distance prefix codes.
     pub(crate) cmd_bits: [u16; 128],
-    /// Node pool shared by every prefix-code build.
+    /// Node pool shared by every prefix-code build; each build grows it to
+    /// the symbols it uses, so it starts empty.
     pub(crate) tmp_tree: Vec<HuffmanNode>,
     /// Scratch depths for the reordered command alphabet.
     pub(crate) tmp_depth: [u8; NUM_COMMAND_SYMBOLS],
@@ -125,7 +127,7 @@ impl Default for TwoPassArena {
             cmd_histo: [0; 128],
             cmd_depth: [0; 128],
             cmd_bits: [0; 128],
-            tmp_tree: vec![HuffmanNode::default(); tree_capacity(NUM_LITERAL_SYMBOLS)],
+            tmp_tree: Vec::new(),
             tmp_depth: [0; NUM_COMMAND_SYMBOLS],
             tmp_bits: [0; 64],
         }
@@ -144,7 +146,10 @@ mod tests {
         assert!(arena.cmd_code[57..].iter().all(|&b| b == 0));
         assert_eq!(arena.cmd_depth, DEFAULT_COMMAND_DEPTHS);
         assert_eq!(arena.cmd_bits, DEFAULT_COMMAND_BITS);
-        assert_eq!(arena.tree.len(), 513);
+        assert!(
+            arena.tree.is_empty(),
+            "the node pool is sized by its first build"
+        );
     }
 
     #[test]
@@ -152,6 +157,9 @@ mod tests {
         let arena = TwoPassArena::default();
         assert!(arena.lit_histo.iter().all(|&c| c == 0));
         assert!(arena.cmd_histo.iter().all(|&c| c == 0));
-        assert_eq!(arena.tmp_tree.len(), 513);
+        assert!(
+            arena.tmp_tree.is_empty(),
+            "the node pool is sized by its first build"
+        );
     }
 }

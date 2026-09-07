@@ -406,10 +406,12 @@ written back once at the end, and the two measuring steps —
 are out of line and return by value: the candidate loop is a filter that
 rejects most of what it sees, and it stays in registers only while it holds
 about a dozen values. The greedy matchers measure a match with
-`match_len_windows`, a whole-word scan with one overlapping word at the tail
-(§8.1), which is the reference's `FindMatchLengthWithLimit` without its byte
-loop. None of this changes a decision: the sequence below is the same as the
-reference's.
+`match_len_at`, which settles the first eight bytes with one load per side
+and a trailing-zero count before cutting any window, and only then continues
+with `match_len_windows`, a whole-word scan with one overlapping word at the
+tail (§8.1) — together the reference's `FindMatchLengthWithLimit` without its
+byte loop. None of this changes a decision: the sequence below is the same as
+the reference's.
 
 ```mermaid
 sequenceDiagram
@@ -643,7 +645,7 @@ graph TD
     E --> V["SearchLoop::visit&lt;R&gt;<br/>G::vectorize over the specialized loop"]
     V --> F["find_longest_match(simd, ...)"]
     F --> G1["tag_equality(simd, ...)"]
-    F --> G2["match_len_windows (scalar words)"]
+    F --> G2["match_len_at: first word, then match_len_windows (scalar words)"]
 
     classDef once fill:#d9ead3,stroke:#38761d;
     class D once;

@@ -156,6 +156,28 @@ Custom static search and framing have separate compatibility checks.
 Declared windows above 30 bits lack an independent end-to-end decoder check in
 this repository.
 
+## Correctness
+
+Each claim this crate makes about its bytes is checked by a machine against an
+oracle it does not own: the pinned C encoder for the bytes, the C decoder for
+validity, and the crate's own alternative paths for internal agreement. The
+[correctness proof](docs/correctness.md) states every claim, names the oracle
+that checks it, and records one complete run of all of them, over both the
+standard and the `experimental` flow, with the commands to repeat it.
+
+| Layer | Latest run, 2026-09-07 |
+| --- | --- |
+| Byte identity | Qualities 0–11 and windows 10–24 match Google Brotli v1.2.0 under equivalent streaming settings, over structural, boundary, vendor and randomised corpora |
+| Independent decoding | Standard, Large Window, dictionary, parallel and RFC 9841 streams decode with the C decoder |
+| Internal identity | Every entry point, chunk schedule, SIMD backend and reuse pattern emits the same bytes |
+| Memory | `#![forbid(unsafe_code)]` outside tests, plus Miri and AddressSanitizer over retained storage and streaming state |
+| Coverage | 2259 of 2259 functions executed by the test suite, gated at 100% |
+| Fuzzing | 44 AFL++ workers across both feature builds for two hours: 24.3 million executions, no crash, hang or timeout |
+
+The proof also states its limits: a defect shared with Google Brotli v1.2.0
+would not be detected, byte identity is claimed only for equivalent C streaming
+settings, and fuzzing is evidence for the inputs it executed.
+
 ## Documentation
 
 - [User guide](docs/README.md): configuration, buffers, streaming, and errors.
@@ -163,6 +185,7 @@ this repository.
 - [Parallel compression](docs/parallel.md): task scheduling, input sources, and staging.
 - [Benchmark results](docs/benchmarks/README.md): median comparisons and vertical speed/size charts by quality and dataset.
 - [Benchmarks and profiling](docs/benchmarking.md): workloads and reproducible commands.
+- [Correctness proof](docs/correctness.md): every claim, the oracle that checks it, and one complete run of all of them.
 - [Development](docs/development.md): build, checks, coverage, and fuzzing.
 - [Architecture](architecture/README.md): implementation mechanics and diagrams.
 

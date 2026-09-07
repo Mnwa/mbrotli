@@ -1,22 +1,32 @@
 #!/bin/sh
 # Runs one AFL++ instance per fuzz target, for both feature configurations.
 #
-# Phase 1 fuzzes the 21 stable targets from a --no-default-features build.
-# Phase 2 fuzzes all 23 targets, the stable ones included, from a
-# --features experimental build: the feature reaches into the encoder, so the
-# two builds run different code even for the shared targets. Every worker in
-# a phase runs in parallel for the same fixed duration, from that target's
-# seed corpus, into its own output directory; the two builds live in separate
-# target directories so the shared binaries do not overwrite each other.
+# The stable phase fuzzes the 21 stable targets from a --no-default-features
+# build. The experimental phase fuzzes all 23 targets, the stable ones
+# included, from a --features experimental build: the feature reaches into the
+# encoder, so the two builds run different code even for the shared targets.
+# Every worker in a phase runs in parallel for the same fixed duration, from
+# that target's seed corpus, into its own output directory; the two builds live
+# in separate target directories so the shared binaries do not overwrite each
+# other.
+#
+# The phases run one after the other by default, so each worker owns a hardware
+# thread. Set CAMPAIGN_PARALLEL=1 to run both phases at once: the campaign then
+# takes the duration of a single phase in wall clock, at the cost of
+# oversubscribing the host (44 workers) and the lower executions per second
+# that follows.
 #
 # Run prepare-seeds.sh and minimise-seeds.sh first. Both builds are produced
 # here if they are missing. The findings root must not exist yet; AFL will
 # not reuse it and the phases would otherwise mix. A DONE file is written into
 # the findings root when both phases have ended.
 #
-# Usage: fuzz/afl/campaign.sh <findings-root> <seconds-per-phase> [timeout-ms]
+# Usage: [CAMPAIGN_PARALLEL=1] fuzz/afl/campaign.sh <findings-root> \
+#            <seconds-per-phase> [timeout-ms]
 #
-# The six-hour campaign recorded in docs/correctness.md was
+# The two-hour campaign recorded in docs/correctness.md was
+#   CAMPAIGN_PARALLEL=1 ./campaign.sh findings/campaign-2026-09-07-2h 7200
+# The earlier six-hour, sequential campaign was
 #   ./campaign.sh findings/campaign-2026-09-07-6h 10800 10000
 # Its three saved hangs were quality 11 mutations of a 128 KiB seed run
 # through three backends by simd_equivalence: 7.4 seconds standalone under
@@ -88,6 +98,12 @@ phase() {
 build stable ""
 build experimental "--features experimental"
 
-phase stable "$stable"
-phase experimental "$experimental"
+if [ "${CAMPAIGN_PARALLEL:-0}" = 1 ]; then
+    phase stable "$stable" &
+    phase experimental "$experimental" &
+    wait
+else
+    phase stable "$stable"
+    phase experimental "$experimental"
+fi
 touch "$root/DONE"

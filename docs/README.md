@@ -147,5 +147,6 @@ preserves the writer in `FinishError`.
 - [Parallel compression](parallel.md)
 - [Benchmark results by compression quality](benchmarks/README.md)
 - [Running benchmarks and profiling](benchmarking.md)
+- [Correctness proof](correctness.md)
 - [Development checks](development.md)
 - [Compressor mechanics](../architecture/compressor.md)

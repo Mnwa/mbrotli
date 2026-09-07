@@ -19,7 +19,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: miri
+      # Filters name modules rather than single tests: a renamed test would
+      # leave a single-name filter matching nothing, and `cargo miri test`
+      # exits successfully when it runs no tests at all.
       - run: cargo miri test --lib compressor::core::shared::ringbuffer::tests
-      - run: cargo miri test --lib prefix_merge_preserves_prior_arena_entries_and_tree_ties
-      - run: cargo miri test --lib a_sparse_bucket_promotes_without_losing_its_recent_positions
+      - run: cargo miri test --lib compressor::core::hq::zopfli::tests::prefix_merge_preserves_prior_arena_entries_and_tree_ties
+      - run: cargo miri test --lib compressor::core::greedy::hashers::tests
+      - run: cargo miri test --lib compressor::core::fast::workspace::tests
       - run: cargo miri test --lib compressor::core::stream::tests

@@ -105,6 +105,27 @@ directories after changing instrumentation or target semantics. Record the
 revision, toolchain, corpus, duration, executions, stability, crashes, and hangs.
 Bounded smoke runs only provide evidence for the inputs they execute.
 
+`campaign.sh` fuzzes every target in both feature configurations, one worker
+per target, each from its own seed corpus into its own output directory:
+
+```sh
+./prepare-seeds.sh
+cargo afl build --release --no-default-features --target-dir target/stable
+TARGET_DIR=target/stable/release ./minimise-seeds.sh
+CAMPAIGN_PARALLEL=1 ./campaign.sh findings/campaign 7200
+```
+
+Its arguments are a findings root, which must not already exist, the seconds
+each phase runs, and an optional execution timeout in milliseconds, 30000 by
+default. The stable phase fuzzes the 21 targets of a `--no-default-features`
+build; the experimental phase fuzzes all 23 targets of a
+`--features experimental` build, because the feature reaches into the encoder.
+The phases run one after the other so every worker owns a hardware thread.
+`CAMPAIGN_PARALLEL=1` runs them together instead: the campaign then costs one
+phase of wall clock and oversubscribes the host, which lowers executions per
+second per worker. Results belong in the
+[correctness proof](../../docs/correctness.md).
+
 ## Triage and required checks
 
 Minimize a finding and commit a deterministic regression before fixing it:

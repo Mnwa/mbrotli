@@ -580,11 +580,14 @@ pub fn dictionary(ctx: &Context, input: &[u8]) {
         builder = builder.add_prefix(attachment);
     }
 
+    // A payload shorter than `requested` chunks, or one that cuts unevenly,
+    // yields fewer attachments than asked for; the limit applies to what was
+    // actually attached, which is also what the error reports.
     let prepared = match builder.build() {
         Ok(prepared) => {
             assert!(
-                requested <= MAX_ATTACHMENTS,
-                "{requested} attachments should have been refused"
+                attached <= MAX_ATTACHMENTS,
+                "{attached} attachments should have been refused"
             );
             assert!(
                 source_size > 0,

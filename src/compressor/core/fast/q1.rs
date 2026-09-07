@@ -167,11 +167,12 @@ const fn words_match<const MIN_MATCH: usize>(left: u64, right: u64) -> bool {
 #[inline(always)]
 fn update_hashes_after_copy<
     const TABLE_BITS: usize,
+    const ENTRIES: usize,
     const MIN_MATCH: usize,
     const FIRST_UPDATE: bool,
 >(
     data: &[u8],
-    table: &mut [i32],
+    table: &mut [i32; ENTRIES],
     ip: usize,
 ) -> usize {
     if MIN_MATCH == Q1_MIN_MATCH_SMALL {
@@ -219,12 +220,13 @@ struct Pass1<'a> {
 fn create_commands<
     S: Simd,
     const TABLE_BITS: usize,
+    const ENTRIES: usize,
     const MIN_MATCH: usize,
     const INDEPENDENT: bool,
 >(
     simd: S,
     block: &Block<'_>,
-    table: &mut [i32],
+    table: &mut [i32; ENTRIES],
     out: &mut Pass1<'_>,
 ) {
     // Specialize the complete scan inside the selected SIMD feature context.
@@ -237,7 +239,13 @@ fn create_commands<
                 block_size,
                 input_size,
             } = *block;
-            let Pass1 { literals, commands } = out;
+            // The buffers are owned by locals for the duration of the scan:
+            // behind the caller's references their headers live in memory the
+            // compiler cannot tell apart from the table, so every push would
+            // reload the length and capacity after each table store.
+            let mut literal_buffer = core::mem::take(out.literals);
+            let mut command_buffer = core::mem::take(out.commands);
+            let (literals, commands) = (&mut literal_buffer, &mut command_buffer);
             let mut ip = input;
             let ip_end = input + block_size;
             let mut next_emit = input;
@@ -344,9 +352,10 @@ fn create_commands<
                         break 'scan;
                     }
                     candidate = {
-                        let current = update_hashes_after_copy::<TABLE_BITS, MIN_MATCH, true>(
-                            data, table, ip,
-                        );
+                        let current =
+                            update_hashes_after_copy::<TABLE_BITS, ENTRIES, MIN_MATCH, true>(
+                                data, table, ip,
+                            );
                         let candidate = table[current] as usize;
                         table[current] = ip as i32;
                         candidate
@@ -372,9 +381,10 @@ fn create_commands<
                         if ip >= ip_limit {
                             break 'scan;
                         }
-                        let current = update_hashes_after_copy::<TABLE_BITS, MIN_MATCH, false>(
-                            data, table, ip,
-                        );
+                        let current =
+                            update_hashes_after_copy::<TABLE_BITS, ENTRIES, MIN_MATCH, false>(
+                                data, table, ip,
+                            );
                         candidate = table[current] as usize;
                         table[current] = ip as i32;
                     }
@@ -395,6 +405,8 @@ fn create_commands<
                     literals.extend_from_slice(block);
                 }
             }
+            *out.literals = literal_buffer;
+            *out.commands = command_buffer;
         },
     );
 }
@@ -407,7 +419,7 @@ fn build_and_store_command_prefix_code<const INDEPENDENT: bool>(
     bits: &mut [u16; 128],
     tmp_depth: &mut [u8; NUM_COMMAND_SYMBOLS],
     tmp_bits: &mut [u16; 64],
-    tree: &mut [HuffmanNode],
+    tree: &mut Vec<HuffmanNode>,
     w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
 ) {
     tmp_depth.fill(0);
@@ -601,20 +613,16 @@ impl TwoPassState {
 fn compress_fragment_impl<
     S: Simd,
     const TABLE_BITS: usize,
+    const ENTRIES: usize,
     const MIN_MATCH: usize,
     const INDEPENDENT: bool,
 >(
     simd: S,
     state: &mut TwoPassState,
     data: &[u8],
-    table: &mut [i32],
+    table: &mut [i32; ENTRIES],
     w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
 ) {
-    // Re-slicing to the compile-time width lets the bounds checks on every
-    // hash lookup fold away: the hash is a `64 - TABLE_BITS` shift, so its
-    // range is already known to be inside a table of exactly this length.
-    let table = &mut table[..1 << TABLE_BITS];
-
     let TwoPassState {
         arena,
         commands,
@@ -627,7 +635,7 @@ fn compress_fragment_impl<
         let block_size = input_size.min(Q1_BLOCK_SIZE);
         commands.clear();
         literals.clear();
-        create_commands::<S, TABLE_BITS, MIN_MATCH, INDEPENDENT>(
+        create_commands::<S, TABLE_BITS, ENTRIES, MIN_MATCH, INDEPENDENT>(
             simd,
             &Block {
                 data,
@@ -671,11 +679,20 @@ pub(crate) fn compress_fragment<S: Simd, const INDEPENDENT: bool>(
 ) {
     let initial_position = w.position();
 
+    // The table is handed on as an array reference of its compile-time
+    // width: the hash is a `64 - TABLE_BITS` shift, so every slot it yields is
+    // inside the array and no lookup carries a bounds check. A slice of the
+    // same length does not give the compiler that proof once the scan loop
+    // is compiled inside the backend-specific function.
     macro_rules! run {
         ($bits:literal, $min_match:literal) => {{
             debug_assert_eq!(table_bits.bits(), $bits);
             debug_assert_eq!(table_bits.min_match(), $min_match);
-            compress_fragment_impl::<S, $bits, $min_match, INDEPENDENT>(simd, state, data, table, w)
+            if let Some(table) = table[..1 << $bits].first_chunk_mut::<{ 1 << $bits }>() {
+                compress_fragment_impl::<S, $bits, { 1 << $bits }, $min_match, INDEPENDENT>(
+                    simd, state, data, table, w,
+                );
+            }
         }};
     }
     match table_bits {
@@ -771,11 +788,13 @@ mod tests {
     #[test]
     fn first_update_reproduces_the_reference_offset_quirk() {
         let data: Vec<u8> = (0..64u8).collect();
-        let mut first = vec![0i32; 1 << 12];
-        let mut chained = vec![0i32; 1 << 12];
+        let mut first = [0i32; 1 << 12];
+        let mut chained = [0i32; 1 << 12];
         let ip = 20usize;
-        let first_current = update_hashes_after_copy::<12, 4, true>(&data, &mut first, ip);
-        let chained_current = update_hashes_after_copy::<12, 4, false>(&data, &mut chained, ip);
+        let first_current =
+            update_hashes_after_copy::<12, { 1 << 12 }, 4, true>(&data, &mut first, ip);
+        let chained_current =
+            update_hashes_after_copy::<12, { 1 << 12 }, 4, false>(&data, &mut chained, ip);
         let word = load_u64_le(&data, ip - 3);
         assert_eq!(first_current, chained_current);
         assert_ne!(first, chained, "the reference quirk must be preserved");
@@ -790,7 +809,10 @@ mod tests {
         let data: Vec<u8> = (0..64u8).collect();
         let mut table = vec![0i32; 1 << 17];
         let ip = 20usize;
-        let current = update_hashes_after_copy::<17, 6, true>(&data, &mut table, ip);
+        let Some(table) = table.first_chunk_mut::<{ 1 << 17 }>() else {
+            panic!("table holds 1 << 17 entries");
+        };
+        let current = update_hashes_after_copy::<17, { 1 << 17 }, 6, true>(&data, table, ip);
         let stored: Vec<i32> = table.iter().copied().filter(|&v| v != 0).collect();
         assert_eq!(stored.len(), 5);
         assert!(current < table.len());

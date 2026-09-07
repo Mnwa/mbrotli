@@ -235,11 +235,12 @@ vendored submodule at `brotli-ffi/vendor/brotli/tests/testdata`, and
 `minimise-seeds.sh` reduces each corpus with `cargo afl cmin`, keeping the
 unminimised original alongside as `seeds/*.raw`. `seeds/generic` is the raw
 test data (24 files, minimised to 21); `seeds/params` is the same files behind
-a parameter header (114, minimised to 47 — most headers reach the same code);
+a parameter header (127, minimised to 85 — most headers reach the same code);
 `seeds/dictionary` is each parameter seed behind two more bytes, at four
 attachment counts (0, 1, 15, 16 — the refused-empty path, one dictionary, the
 format's limit and one past it) crossed with a generous and an impossible
-budget.
+budget (1016 files, minimised to 90). `seeds/large_window` reduces to 101 of
+its 508.
 
 `seeds/serialized` is the exception: RFC 9841 dictionary streams have no
 counterpart in the upstream test data, so the seeds are copies of the committed
@@ -258,7 +259,38 @@ consume arbitrary payload bytes rather than a token grammar.
 
 `minimise-seeds.sh` exports `AFL_NO_FORKSRV=1` for `afl-cmin` folder-mode
 coverage collection. This runs the target once per input and avoids persistent
-forkserver timeouts during corpus minimization.
+forkserver timeouts during corpus minimization. It measures coverage with the
+`target/release` build unless `TARGET_DIR` names another one.
+
+## Campaign structure
+
+`campaign.sh` is the whole-suite campaign: one AFL++ worker per target per
+feature configuration, each with its own seed corpus and output directory, all
+bounded by the same wall-clock duration and a fixed execution timeout. The
+`experimental` feature reaches into the encoder, so the 21 stable targets are
+fuzzed twice — once from each build — and the two experimental-only targets
+once. The builds occupy separate target directories, because the shared
+binaries have the same names.
+
+```mermaid
+flowchart TD
+    Prepare["prepare-seeds.sh<br/>vendored testdata → seeds/*"] --> Minimise
+    Minimise["minimise-seeds.sh<br/>cargo afl cmin per corpus"] --> Builds
+    Builds["cargo afl build --release<br/>target/stable, target/experimental"] --> Choice
+    Choice{"CAMPAIGN_PARALLEL"}
+    Choice -->|"unset: phases in sequence,<br/>one thread per worker"| Stable
+    Choice -->|"1: phases together,<br/>44 workers oversubscribed"| Both
+    Stable["stable phase: 21 workers"] --> Experimental["experimental phase: 23 workers"]
+    Experimental --> Findings
+    Both["stable 21 + experimental 23"] --> Findings
+    Findings["findings/&lt;root&gt;/&lt;build&gt;/&lt;target&gt;<br/>queue, crashes, hangs, fuzzer_stats"] --> Triage["tmin → regressions/ → cargo afl test"]
+```
+
+A fixed `-t` matters: with a trailing `+` AFL++ calibrates the timeout from the
+seeds and treats the value only as a ceiling, which discards slow quality 10
+and 11 mutations as timeouts instead of executing them. The default is 30000
+milliseconds, about four times the slowest observed instrumented execution of a
+128 KiB payload at quality 11 across three backends.
 
 ## Known gaps
 

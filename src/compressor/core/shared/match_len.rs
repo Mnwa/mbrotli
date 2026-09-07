@@ -50,12 +50,25 @@ pub(crate) fn current_window(data: &[u8], cur_ix_masked: usize, max_length: usiz
 /// Counts the leading bytes `data[prev_ix..]` shares with `cur`.
 ///
 /// Zero when the buffer cannot hold a window as long as `cur` at `prev_ix`.
+///
+/// The first word is settled before any window is cut: most candidates a
+/// matcher measures differ within eight bytes, and the reference's scan
+/// answers those with one load per side, an XOR and a trailing-zero count.
+/// Only a match that runs through the whole word pays for the slicing that
+/// the longer scan of [`match_len_windows`] needs.
 #[inline(always)]
 pub(crate) fn match_len_at<S: Simd>(simd: S, data: &[u8], prev_ix: usize, cur: &[u8]) -> usize {
-    match data.get(prev_ix..prev_ix + cur.len()) {
-        Some(left) => match_len_windows(simd, left, cur),
-        None => 0,
+    let Some(left) = data.get(prev_ix..prev_ix + cur.len()) else {
+        return 0;
+    };
+    if let (Some(left_word), Some(cur_word)) = (left.first_chunk::<8>(), cur.first_chunk::<8>()) {
+        let difference = u64::from_le_bytes(*left_word) ^ u64::from_le_bytes(*cur_word);
+        if difference != 0 {
+            return difference.trailing_zeros() as usize >> 3;
+        }
+        return 8 + match_len_windows(simd, &left[8..], &cur[8..]);
     }
+    match_len_windows(simd, left, cur)
 }
 
 /// Counts the leading bytes two windows of the same length share.

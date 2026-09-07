@@ -26,6 +26,7 @@ use fearless_simd::{Level, Simd};
 use self::bits::{BYTE_PADDING_SLACK, BitWriter, ByteBuffer, inject_byte_padding};
 use self::constants::{OUTPUT_RESERVE_CONST, OUTPUT_SLACK, WINDOW_BITS_FAST};
 use self::q1::TwoPassState;
+use self::tables::DEFAULT_COMMAND_CODE_NUM_BITS;
 use self::workspace::OnePassArena;
 use crate::compressor::core::rfc9841::window::ResolvedWindow;
 use crate::compressor::shared::SharedBrotliError;
@@ -60,8 +61,10 @@ impl TryFrom<QualityLevel> for FastQuality {
 
 /// Quality-specific scratch state.
 pub(crate) enum FastCore {
-    /// Quality 0 state.
-    OnePass { arena: Box<OnePassArena> },
+    /// Quality 0 state. The arena is built by the first fragment that scans
+    /// for matches; a stream whose only fragment is stored verbatim never
+    /// allocates one.
+    OnePass { arena: Option<Box<OnePassArena>> },
     /// Quality 1 state, including the pass-one command and literal buffers.
     TwoPass { state: Box<TwoPassState> },
 }
@@ -70,10 +73,10 @@ impl FastCore {
     /// Counts boxed state and every allocation owned by that state.
     fn retained_bytes(&self) -> usize {
         match self {
-            Self::OnePass { arena } => {
+            Self::OnePass { arena } => arena.as_ref().map_or(0, |arena| {
                 size_of::<OnePassArena>()
                     + arena.tree.capacity() * size_of::<huffman::HuffmanNode>()
-            }
+            }),
             Self::TwoPass { state } => {
                 size_of::<TwoPassState>()
                     + size_of::<workspace::TwoPassArena>()
@@ -87,9 +90,7 @@ impl FastCore {
     /// Creates the state for `quality`.
     fn new(quality: FastQuality) -> Self {
         match quality {
-            FastQuality::Q0 => Self::OnePass {
-                arena: Box::default(),
-            },
+            FastQuality::Q0 => Self::OnePass { arena: None },
             FastQuality::Q1 => Self::TwoPass {
                 state: Box::default(),
             },
@@ -112,8 +113,30 @@ impl FastCore {
     /// scratch that the next fragment would have overwritten regardless.
     fn reset(&mut self) {
         match self {
-            Self::OnePass { arena } => arena.reset(),
+            Self::OnePass { arena } => {
+                if let Some(arena) = arena {
+                    arena.reset();
+                }
+            }
             Self::TwoPass { state } => state.reset(),
+        }
+    }
+
+    /// Returns whether a final fragment of `len` bytes is stored verbatim.
+    ///
+    /// Such a fragment needs neither the arena nor a hash table, so the
+    /// encoder skips preparing both. Quality 1 always scans.
+    fn stores_verbatim(&self, independent: bool, len: usize, is_last: bool) -> bool {
+        match self {
+            Self::OnePass { arena } => {
+                let cmd_code_numbits = arena
+                    .as_ref()
+                    .map_or(DEFAULT_COMMAND_CODE_NUM_BITS, |arena| {
+                        arena.cmd_code_numbits
+                    });
+                q0::stores_verbatim(cmd_code_numbits, independent, len, is_last)
+            }
+            Self::TwoPass { .. } => false,
         }
     }
 
@@ -139,16 +162,22 @@ pub(crate) fn encode_fragment<S: Simd, const INDEPENDENT: bool>(
     table: &mut [i32],
     w: &mut BitWriter<'_, impl ByteBuffer + ?Sized>,
 ) {
+    if core.stores_verbatim(INDEPENDENT, input.len(), is_last) {
+        q0::store_final_verbatim(input, w);
+        return;
+    }
     match core {
-        FastCore::OnePass { arena } => q0::compress_fragment::<_, INDEPENDENT>(
-            simd,
-            arena,
-            input,
-            is_last,
-            q0::TableBits::for_input(input.len()),
-            table,
-            w,
-        ),
+        FastCore::OnePass { arena } => {
+            q0::compress_fragment::<_, INDEPENDENT>(
+                simd,
+                arena.get_or_insert_with(Box::default),
+                input,
+                is_last,
+                q0::TableBits::for_input(input.len()),
+                table,
+                w,
+            );
+        }
         FastCore::TwoPass { state } => q1::compress_fragment::<_, INDEPENDENT>(
             simd,
             state,
@@ -168,6 +197,8 @@ pub(crate) fn encode_fragment<S: Simd, const INDEPENDENT: bool>(
 /// command replay.
 pub(crate) struct FastEncoder {
     kernels: Box<dyn Kernels>,
+    /// Whether `kernels` are the fragment-only ones of an independent worker.
+    independent: bool,
     core: FastCore,
     block_size_limit: usize,
     /// The stream header, kept so a reused encoder can start over from it.
@@ -183,6 +214,7 @@ impl FastEncoder {
     /// Installs fragment-only kernels when constructing an independent worker.
     pub(crate) fn select_fragment_kernels(&mut self, level: Level) {
         self.kernels = dispatch::select_independent(level);
+        self.independent = true;
     }
 
     /// Resets the header and seeds only this segment's literal context/history.
@@ -222,6 +254,7 @@ impl FastEncoder {
         let (last_bytes, last_bytes_bits) = window.at_least(WINDOW_BITS_FAST).header();
         Ok(Self {
             kernels: dispatch::select(level),
+            independent: false,
             core: FastCore::new(quality),
             block_size_limit: 1usize << lgwin,
             header: (last_bytes, last_bytes_bits),
@@ -301,7 +334,17 @@ impl FastEncoder {
     }
 
     /// Clears the hash table for a fragment of `input_len` bytes.
-    fn prepare_table(&mut self, input_len: usize) -> usize {
+    ///
+    /// A final fragment the core stores verbatim gets no table at all: the
+    /// kernel never reads one, and clearing it would be the whole cost of
+    /// such a call.
+    fn prepare_table(&mut self, input_len: usize, is_last: bool) -> usize {
+        if self
+            .core
+            .stores_verbatim(self.independent, input_len, is_last)
+        {
+            return 0;
+        }
         let entries = self.core.table_entries(input_len);
         if self.table.len() < entries {
             // A fresh zeroed allocation, rather than growing in place: the
@@ -367,7 +410,7 @@ impl FastEncoder {
             .and_then(|bits| bits.checked_add(self.last_bytes_bits as usize))
             .ok_or(BrotliCompressError::BufferOverflow)?;
         output.extend_from_slice(&self.last_bytes.to_le_bytes());
-        let entries = self.prepare_table(input.len());
+        let entries = self.prepare_table(input.len(), is_last);
         let mut writer = BitWriter::append(output, position);
         self.kernels.fast_append(
             &mut self.core,
@@ -404,7 +447,7 @@ impl FastEncoder {
         if self.storage.len() < reserve {
             self.storage = vec![0u8; reserve];
         }
-        let entries = self.prepare_table(input.len());
+        let entries = self.prepare_table(input.len(), is_last);
 
         let mut storage = core::mem::take(&mut self.storage);
         let outcome = self.run_fragment(input, is_last, entries, &mut storage);
@@ -457,7 +500,7 @@ impl FastEncoder {
         let complete = if input.is_empty() {
             0
         } else {
-            let entries = self.prepare_table(input.len());
+            let entries = self.prepare_table(input.len(), false);
             self.run_fragment(input, false, entries, storage)?
         };
 
@@ -497,7 +540,7 @@ impl FastEncoder {
         if dst.len() < Self::fragment_reserve(input.len())? {
             return Err(BrotliCompressError::OutputTooSmall);
         }
-        let entries = self.prepare_table(input.len());
+        let entries = self.prepare_table(input.len(), is_last);
         self.run_fragment(input, is_last, entries, dst)
     }
 }

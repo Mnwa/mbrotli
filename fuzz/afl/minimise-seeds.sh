@@ -8,9 +8,11 @@
 # fixtures do carry coverage the small ones miss, so they survive. Per-iteration
 # cost is bounded by MAX_PAYLOAD in src/lib.rs, not by this script.
 #
-# Run this after prepare-seeds.sh and after `cargo afl build --release`. The
-# original corpora are kept as seeds/generic.raw and seeds/params.raw so that
-# nothing is destroyed by a minimisation that turns out to be too aggressive.
+# Run this after prepare-seeds.sh and after `cargo afl build --release`. Set
+# TARGET_DIR to measure coverage with another build, for example the
+# target/stable/release tree campaign.sh produces. The original corpora are
+# kept as seeds/<corpus>.raw so that nothing is destroyed by a minimisation
+# that turns out to be too aggressive.
 #
 # afl-cmin measures coverage with `afl-showmap -I`, whose folder mode stalls
 # against these binaries: they are persistent-mode with a deferred forkserver,
@@ -20,7 +22,7 @@
 # way its single-file mode already does; the captured edge sets are identical
 # and the whole corpus takes well under a second.
 #
-# Usage: fuzz/afl/minimise-seeds.sh
+# Usage: [TARGET_DIR=target/stable/release] fuzz/afl/minimise-seeds.sh
 
 set -eu
 
@@ -31,11 +33,17 @@ here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 cd "$here"
 
 # The target used to measure coverage for each corpus. Any target reading the
-# same input shape will do; these two touch the most encoder code per byte.
-generic_target=target/release/q1_roundtrip
-params_target=target/release/params_roundtrip
+# same input shape will do; the generic and parameter corpora are measured
+# with the targets that touch the most encoder code per byte, and the two
+# corpora carrying an extra leading byte with the targets that read it.
+target_dir=${TARGET_DIR:-target/release}
+generic_target=$target_dir/q1_roundtrip
+params_target=$target_dir/params_roundtrip
+large_window_target=$target_dir/large_window
+dictionary_target=$target_dir/dictionary
 
-for target in "$generic_target" "$params_target"; do
+for target in "$generic_target" "$params_target" "$large_window_target" \
+    "$dictionary_target"; do
     if [ ! -x "$target" ]; then
         echo "missing $target" >&2
         echo "run: cargo afl build --release" >&2
@@ -64,3 +72,5 @@ minimise() {
 
 minimise generic "$generic_target"
 minimise params "$params_target"
+minimise large_window "$large_window_target"
+minimise dictionary "$dictionary_target"
