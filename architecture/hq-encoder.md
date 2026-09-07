@@ -328,7 +328,8 @@ in the Zopfli cost loop.
 ## 9. SIMD dispatch
 
 `core::dispatch::select` resolves a token once when `HqEncoder` is constructed.
-The retained `Selected<S>` kernel handles stitching and Zopfli reference search
+The retained `Selected<S, G, INDEPENDENT>` kernel handles stitching, block
+assignment, and Zopfli reference search
 through feature-enabled `S::vectorize` calls. Each inner search is monomorphized
 on that concrete token; no block reselects the backend. `update_nodes` and
 `BinaryTreeMatcher::find_all_matches` also enter their specialized feature
@@ -341,11 +342,13 @@ these separately compiled functions. The tree traversal is always inlined into
 graph LR
     selected[retained Selected S] --> stitch[boundary stitching]
     selected --> search[Zopfli search]
+    selected --> assignment[SIMD block-assignment forward pass]
     search --> arena[flat retained match arena]
     prefix[retained prefix scratch] --> merge[backwards in-place merge]
     arena --> merge
     merge --> costs[retained costs and nodes]
     costs --> mb[retained MetaBlockSplit and builder]
+    mb --> assignment
     mb --> writer[retained entropy-code arrays]
 ```
 
@@ -355,11 +358,24 @@ dictionary length codes. No temporary merged vector or `split_off` allocation
 is needed. Meta-block splits, histogram clusters, entropy-code arrays and cost
 histograms survive reset and are included in retained-byte accounting.
 
-The only SIMD-accelerated primitive on this path is `find_match_length`, shared
-with every other quality. Everything that makes a decision — the tree traversal,
-the cost comparisons, the clustering — is scalar, because the reference's tie
-behaviour depends on evaluation order that a vector reduction would not preserve.
-`every_backend_produces_the_same_stream` checks the consequence directly.
+Alongside shared `find_match_length`, the block splitter vectorizes its forward
+assignment pass. `MetaBlockBuilder::build`, `BlockSplitter::split`, and
+`find_blocks` borrow the retained `Kernels` boundary. Once insertion costs are
+prepared, one `assign_blocks` call enters a feature-enabled loop over the entire
+symbol stream. No backend detection or dynamic dispatch occurs per symbol.
+
+The borrowed `BlockCosts` holds finite f64 insertion costs, mutable accumulated
+costs, switch bits, and block ids; histogram counts fit in a byte and each symbol
+addresses a complete row. Eight histogram lanes update independently with
+`fearless_simd::f64x8`. Lane minima retain their histogram indices; reduction
+chooses the lowest index among equal minima. Subtraction and clamping retain
+the scalar arithmetic order, including the first 2000 symbols' switch-cost
+adjustment. Each eight-lane comparison supplies one switch bitmap byte, and
+remaining histograms use scalar operations. The fallback backend executes the
+original scalar pass. Traceback and clustering stay scalar. No extra allocation
+or public API is introduced. Differential tests compare cost bits, ids, and
+switch bitmaps on every available backend, including ties, tails, empty streams,
+and the prologue boundary; full encoder tests also check C output identity.
 
 Copy-length codes below 2118 use a compile-time table derived from the format's
 copy-length bases. Lengths below ten retain their direct subtraction, and longer
@@ -467,9 +483,10 @@ the reference's `limit`; only `extend_last_command` runs on across seams.
   long transforms' base lengths intact. Headerless continuations shift logical
   dictionary placement but not history availability. See
   [rfc9841-encoding.md](rfc9841-encoding.md) for both flows and their limits.
-- **`hotpath` instrumentation.** Only `encode_block`, `encode_block_with` and
-  `flush_block` are annotated on this path; the inner stages are not yet
-  measured.
+- **`hotpath` instrumentation.** Encoder block operations, Zopfli search passes,
+  literal-cost estimation, and `find_blocks` have timing hooks. Individual
+  per-candidate updates and clustering do not have separate timing hooks;
+  sampling or instruction profiling is needed to resolve their costs.
 ## Independent parallel fragments
 
 The parallel fragment adapter installs `Selected<S, true>` once per worker.

@@ -140,6 +140,7 @@ preserves the writer in `FinishError`.
 
 - [Dictionaries and extended formats](dictionaries.md)
 - [Parallel compression](parallel.md)
-- [Benchmarks and profiling](benchmarking.md)
+- [Benchmark results by compression quality](benchmarks/README.md)
+- [Running benchmarks and profiling](benchmarking.md)
 - [Development checks](development.md)
 - [Compressor mechanics](../architecture/compressor.md)

@@ -158,6 +158,7 @@ fn decide_multi_byte_stats_level(block: &[u8]) -> usize {
 ///
 /// Mirrors `BrotliEstimateBitCostsForLiterals`, choosing between its UTF-8 and
 /// its single-histogram model. `cost` must be at least `len` long.
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(crate) fn estimate_bit_costs_for_literals(
     pos: usize,
     len: usize,

@@ -18,6 +18,10 @@ graph TD
     Core --> Criterion[isolated target/criterion]
     Criterion --> Export[report.py: complete matrix CSV]
     Export --> Plot[plot.py: throughput, size, tradeoff SVGs]
+    Export --> QualityDocs[quality_docs.py: validate and group recorded rows]
+    QualityDocs --> Pages[12 quality pages and 96 dataset SVGs]
+    Index[docs/benchmarks/README.md] --> Pages
+    Index --> Reports[dated run reports and raw data]
     Old[existing benches] --> OldResults[root target/criterion]
 ```
 
@@ -74,6 +78,18 @@ SVG figures covering six nontrivial corpora. Throughput bands transform the
 reported latency confidence bounds; size curves show actual compressed bytes.
 Tradeoff curves relate throughput to compressed fraction and label selected
 qualities. No timings are computed from charts or pooled across corpora.
+
+`quality_docs.py` reads one complete CSV and its environment record, validates
+unique supported quality/dataset/encoder keys, finite positive timing bounds,
+consistent input lengths, and window settings, then writes twelve Markdown
+pages under `docs/benchmarks/qualities/`. Each page contains an eight-dataset
+summary plus individual charts and tables. Charts show mean latency for empty
+and tiny input, throughput for larger inputs, and compressed bytes from a zero
+baseline. Timing whiskers retain the recorded confidence bounds. Empty input
+has no defined throughput or compressed fraction; Burli is omitted above q5.
+Summaries preserve ties and label lowest means without claiming significance.
+The results index connects these pages to the existing reports and raw data;
+generation does not run encoders, alter measurements, or replace older reports.
 
 ## Known gaps
 

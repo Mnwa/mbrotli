@@ -13,8 +13,11 @@
 //! multiplier, and the sequence is part of the output: change it and a
 //! different partition falls out.
 
+use fearless_simd::{Level, Select, Simd, SimdBase, SimdMask, f64x8, u64x8};
+
 use super::cluster::{HistogramPair, combine_batch, move_cost};
 use super::params::HqParams;
+use crate::compressor::core::dispatch::Kernels;
 use crate::compressor::core::shared::bit_cost::population_cost;
 use crate::compressor::core::shared::block_split::{BlockSplit, MAX_NUMBER_OF_BLOCK_TYPES};
 use crate::compressor::core::shared::command::Command;
@@ -239,6 +242,144 @@ fn refine_entropy_codes<const N: usize>(
     }
 }
 
+/// Borrowed rows for the block-assignment forward pass. Costs are finite,
+/// histogram ids fit in a byte, and every symbol addresses a complete row.
+pub(crate) struct BlockCosts<'a> {
+    pub(crate) data: &'a [u16],
+    pub(crate) block_switch_bitcost: f64,
+    pub(crate) insert_cost: &'a [f64],
+    pub(crate) cost: &'a mut [f64],
+    pub(crate) switch_signal: &'a mut [u8],
+    pub(crate) block_id: &'a mut [u8],
+}
+
+/// Scalar oracle, retaining the reference's operation and tie order.
+fn assign_blocks_scalar(input: BlockCosts<'_>) {
+    let BlockCosts {
+        data,
+        block_switch_bitcost,
+        insert_cost,
+        cost,
+        switch_signal,
+        block_id,
+    } = input;
+    let num_histograms = cost.len();
+    let bitmap_len = num_histograms.div_ceil(8);
+    for byte_ix in 0..data.len() {
+        let ix = byte_ix * bitmap_len;
+        let symbol = usize::from(data[byte_ix]);
+        let insert_cost_ix = symbol * num_histograms;
+        let mut min_cost = 1e99f64;
+        let mut block_switch_cost = block_switch_bitcost;
+
+        for k in 0..num_histograms {
+            cost[k] += insert_cost[insert_cost_ix + k];
+            if cost[k] < min_cost {
+                min_cost = cost[k];
+                block_id[byte_ix] = k as u8;
+            }
+        }
+        // Switching is cheaper near the start, which lets the partition adapt
+        // quickly before the statistics settle.
+        if byte_ix < PROLOGUE_LENGTH {
+            block_switch_cost *= PROLOGUE_BASE + PROLOGUE_MULTIPLIER * byte_ix as f64;
+        }
+        for k in 0..num_histograms {
+            cost[k] -= min_cost;
+            if cost[k] >= block_switch_cost {
+                cost[k] = block_switch_cost;
+                switch_signal[ix + (k >> 3)] |= 1u8 << (k & 7);
+            }
+        }
+    }
+}
+
+/// Assigns histogram ids with the already-selected encoder token. Each lane
+/// retains f64 addition/subtraction order; equal minima choose the first id.
+pub(crate) fn assign_blocks<S: Simd>(simd: S, input: BlockCosts<'_>) {
+    if matches!(simd.level(), Level::Fallback(_)) {
+        assign_blocks_scalar(input);
+        return;
+    }
+    simd.vectorize(
+        #[inline(always)]
+        || {
+            let BlockCosts {
+                data,
+                block_switch_bitcost,
+                insert_cost,
+                cost,
+                switch_signal,
+                block_id,
+            } = input;
+            let num_histograms = cost.len();
+            let bitmap_len = num_histograms.div_ceil(8);
+            let vector_end = num_histograms / 8 * 8;
+            for (byte_ix, &symbol) in data.iter().enumerate() {
+                let row = &insert_cost[usize::from(symbol) * num_histograms..][..num_histograms];
+                let mut minima = f64x8::splat(simd, 1e99);
+                let mut ids = u64x8::splat(simd, u64::MAX);
+                let lanes = u64x8::load_array(simd, [0, 1, 2, 3, 4, 5, 6, 7]);
+                for (chunk_ix, (values, prices)) in cost[..vector_end]
+                    .as_chunks_mut::<8>()
+                    .0
+                    .iter_mut()
+                    .zip(row[..vector_end].as_chunks::<8>().0)
+                    .enumerate()
+                {
+                    let updated =
+                        f64x8::load_array_ref(simd, values) + f64x8::load_array_ref(simd, prices);
+                    updated.store_array(values);
+                    let improved = updated.simd_lt(minima);
+                    minima = improved.select(updated, minima);
+                    ids = improved.select(lanes + (chunk_ix * 8) as u64, ids);
+                }
+                let mut min_cost = 1e99;
+                let mut best_id = u64::MAX;
+                for (value, id) in minima.as_array().into_iter().zip(ids.as_array()) {
+                    if value < min_cost || (value == min_cost && id < best_id) {
+                        min_cost = value;
+                        best_id = id;
+                    }
+                }
+                for k in vector_end..num_histograms {
+                    cost[k] += row[k];
+                    if cost[k] < min_cost {
+                        min_cost = cost[k];
+                        best_id = k as u64;
+                    }
+                }
+                block_id[byte_ix] = best_id as u8;
+                let mut switch_cost = block_switch_bitcost;
+                if byte_ix < PROLOGUE_LENGTH {
+                    switch_cost *= PROLOGUE_BASE + PROLOGUE_MULTIPLIER * byte_ix as f64;
+                }
+                let minimum = f64x8::splat(simd, min_cost);
+                let limit = f64x8::splat(simd, switch_cost);
+                let signal = &mut switch_signal[byte_ix * bitmap_len..][..bitmap_len];
+                for (values, signal) in cost[..vector_end]
+                    .as_chunks_mut::<8>()
+                    .0
+                    .iter_mut()
+                    .zip(signal.iter_mut())
+                {
+                    let delta = f64x8::load_array_ref(simd, values) - minimum;
+                    let switches = delta.simd_ge(limit);
+                    switches.select(limit, delta).store_array(values);
+                    *signal |= switches.to_bitmask() as u8;
+                }
+                for k in vector_end..num_histograms {
+                    cost[k] -= min_cost;
+                    if cost[k] >= switch_cost {
+                        cost[k] = switch_cost;
+                        signal[k >> 3] |= 1 << (k & 7);
+                    }
+                }
+            }
+        },
+    );
+}
+
 /// Assigns each symbol the entropy code that codes it most cheaply.
 ///
 /// Mirrors `FindBlocks`. The forward pass keeps, for every code, how much
@@ -249,7 +390,9 @@ fn refine_entropy_codes<const N: usize>(
     clippy::too_many_arguments,
     reason = "mirrors FindBlocks, whose parameters are all needed"
 )]
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn find_blocks<const N: usize>(
+    kernels: &dyn Kernels,
     data: &[u16],
     block_switch_bitcost: f64,
     num_histograms: usize,
@@ -285,33 +428,14 @@ fn find_blocks<const N: usize>(
 
     cost[..num_histograms].fill(0.0);
     switch_signal[..length * bitmap_len].fill(0);
-    for byte_ix in 0..length {
-        let ix = byte_ix * bitmap_len;
-        let symbol = usize::from(data[byte_ix]);
-        let insert_cost_ix = symbol * num_histograms;
-        let mut min_cost = 1e99f64;
-        let mut block_switch_cost = block_switch_bitcost;
-
-        for k in 0..num_histograms {
-            cost[k] += insert_cost[insert_cost_ix + k];
-            if cost[k] < min_cost {
-                min_cost = cost[k];
-                block_id[byte_ix] = k as u8;
-            }
-        }
-        // Switching is cheaper near the start, which lets the partition adapt
-        // quickly before the statistics settle.
-        if byte_ix < PROLOGUE_LENGTH {
-            block_switch_cost *= PROLOGUE_BASE + PROLOGUE_MULTIPLIER * byte_ix as f64;
-        }
-        for k in 0..num_histograms {
-            cost[k] -= min_cost;
-            if cost[k] >= block_switch_cost {
-                cost[k] = block_switch_cost;
-                switch_signal[ix + (k >> 3)] |= 1u8 << (k & 7);
-            }
-        }
-    }
+    kernels.assign_blocks(BlockCosts {
+        data,
+        block_switch_bitcost,
+        insert_cost,
+        cost: &mut cost[..num_histograms],
+        switch_signal,
+        block_id,
+    });
 
     {
         // Trace back, switching where the forward pass marked it.
@@ -552,6 +676,7 @@ fn cluster_blocks<const N: usize>(
     reason = "mirrors SplitByteVector, whose parameters are all needed"
 )]
 fn split_byte_vector<const N: usize>(
+    kernels: &dyn Kernels,
     data: &[u16],
     alphabet_size: usize,
     symbols_per_histogram: usize,
@@ -614,6 +739,7 @@ fn split_byte_vector<const N: usize>(
     let mut num_blocks = 0usize;
     for _ in 0..iterations {
         num_blocks = find_blocks(
+            kernels,
             data,
             block_switch_cost,
             num_histograms,
@@ -669,6 +795,7 @@ impl BlockSplitter {
     )]
     pub(crate) fn split(
         &mut self,
+        kernels: &dyn Kernels,
         commands: &[Command],
         data: &[u8],
         pos: usize,
@@ -692,6 +819,7 @@ impl BlockSplitter {
             from_pos = (from_pos + insert_len + command.copy_len() as usize) & mask;
         }
         split_byte_vector(
+            kernels,
             &self.literals,
             NUM_LITERAL_SYMBOLS,
             SYMBOLS_PER_LITERAL_HISTOGRAM,
@@ -708,6 +836,7 @@ impl BlockSplitter {
         self.commands
             .extend(commands.iter().map(|command| command.cmd_prefix));
         split_byte_vector(
+            kernels,
             &self.commands,
             NUM_COMMAND_SYMBOLS,
             SYMBOLS_PER_COMMAND_HISTOGRAM,
@@ -728,6 +857,7 @@ impl BlockSplitter {
                 .map(Command::distance_code),
         );
         split_byte_vector(
+            kernels,
             &self.distances,
             NUM_HISTOGRAM_DISTANCE_SYMBOLS,
             SYMBOLS_PER_DISTANCE_HISTOGRAM,
@@ -746,6 +876,64 @@ mod tests {
     use super::*;
     use crate::compressor::{CompressParams, QualityLevel, WindowBits};
 
+    #[test]
+    fn assignments_match_scalar_bits_ties_tails_and_prologue_on_every_backend() {
+        for count in [1usize, 2, 7, 8, 9, 15, 16, 17, 31, 32, 33, 50, 99, 100] {
+            for length in [0, 1, 127, PROLOGUE_LENGTH - 1, PROLOGUE_LENGTH + 3] {
+                let data: Vec<u16> = (0..length).map(|i| ((i * 73 + i / 7) % 3) as u16).collect();
+                for pattern in 0..4 {
+                    let prices: Vec<f64> = (0..3 * count)
+                        .map(|i| match pattern {
+                            0 => 0.0,
+                            1 => (i % 3) as f64,
+                            2 => ((i * 71 + i / 3) % 151) as f64 / 13.0,
+                            _ => 1.0 + (i % 7) as f64 * f64::EPSILON,
+                        })
+                        .collect();
+                    let initial: Vec<f64> = (0..count)
+                        .map(|i| if pattern == 1 { (i % 7) as f64 } else { 0.0 })
+                        .collect();
+                    let mut expected_cost = initial.clone();
+                    let mut expected_signal = vec![0; length * count.div_ceil(8)];
+                    let mut expected_ids = vec![0; length];
+                    assign_blocks_scalar(BlockCosts {
+                        data: &data,
+                        block_switch_bitcost: 13.5,
+                        insert_cost: &prices,
+                        cost: &mut expected_cost,
+                        switch_signal: &mut expected_signal,
+                        block_id: &mut expected_ids,
+                    });
+                    for backend in crate::Backend::available() {
+                        let mut cost = initial.clone();
+                        let mut signal = vec![0; expected_signal.len()];
+                        let mut ids = vec![0; length];
+                        crate::compressor::core::dispatch::select(backend.0).assign_blocks(
+                            BlockCosts {
+                                data: &data,
+                                block_switch_bitcost: 13.5,
+                                insert_cost: &prices,
+                                cost: &mut cost,
+                                switch_signal: &mut signal,
+                                block_id: &mut ids,
+                            },
+                        );
+                        assert_eq!(
+                            cost.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                            expected_cost
+                                .iter()
+                                .map(|x| x.to_bits())
+                                .collect::<Vec<_>>(),
+                            "backend={backend} histograms={count} length={length} pattern={pattern}"
+                        );
+                        assert_eq!(signal, expected_signal);
+                        assert_eq!(ids, expected_ids);
+                    }
+                }
+            }
+        }
+    }
+
     /// Resolves quality eleven's parameters.
     fn params() -> HqParams {
         HqParams::new(&CompressParams::new(QualityLevel::Q11, WindowBits::DEFAULT))
@@ -757,6 +945,7 @@ mod tests {
         let mut arena = SplitArena::<NUM_LITERAL_SYMBOLS>::default();
         let mut split = BlockSplit::default();
         split_byte_vector(
+            &*crate::compressor::core::dispatch::select(fearless_simd::Level::fallback()),
             data,
             NUM_LITERAL_SYMBOLS,
             SYMBOLS_PER_LITERAL_HISTOGRAM,
@@ -867,6 +1056,7 @@ mod tests {
             crate::compressor::core::hq::params::HqQuality::Q11
         };
         splitter.split(
+            &*crate::compressor::core::dispatch::select(fearless_simd::Level::fallback()),
             commands,
             data,
             0,
@@ -1033,6 +1223,7 @@ mod tests {
         let mut command = BlockSplit::default();
         let mut distance = BlockSplit::default();
         splitter.split(
+            &*crate::compressor::core::dispatch::select(fearless_simd::Level::fallback()),
             &commands,
             &data,
             0,
@@ -1135,6 +1326,7 @@ mod tests {
         let mut fresh = BlockSplitter::default();
         let (mut l1, mut c1, mut d1) = Default::default();
         fresh.split(
+            &*crate::compressor::core::dispatch::select(fearless_simd::Level::fallback()),
             &commands,
             &data,
             0,
@@ -1148,6 +1340,7 @@ mod tests {
         let mut reused = BlockSplitter::default();
         let (mut l0, mut c0, mut d0) = Default::default();
         reused.split(
+            &*crate::compressor::core::dispatch::select(fearless_simd::Level::fallback()),
             &other,
             &data,
             0,
@@ -1159,6 +1352,7 @@ mod tests {
         );
         let (mut l2, mut c2, mut d2) = Default::default();
         reused.split(
+            &*crate::compressor::core::dispatch::select(fearless_simd::Level::fallback()),
             &commands,
             &data,
             0,

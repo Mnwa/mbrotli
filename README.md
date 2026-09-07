@@ -147,6 +147,7 @@ this repository.
 - [User guide](docs/README.md): configuration, buffers, streaming, and errors.
 - [Dictionaries and extended formats](docs/dictionaries.md): preparation, limits, and experimental features.
 - [Parallel compression](docs/parallel.md): task scheduling, input sources, and staging.
+- [Benchmark results](docs/benchmarks/README.md): quality-by-quality dataset charts and summary tables.
 - [Benchmarks and profiling](docs/benchmarking.md): workloads and reproducible commands.
 - [Development](docs/development.md): build, checks, coverage, and fuzzing.
 - [Architecture](architecture/README.md): implementation mechanics and diagrams.

@@ -671,24 +671,32 @@ pub(crate) fn compress_fragment<S: Simd, const INDEPENDENT: bool>(
         return;
     }
 
-    match table_bits {
-        TableBits::B9 => {
-            compress_fragment_impl::<S, 9, INDEPENDENT>(simd, arena, data, is_last, table, w)
-        }
-        TableBits::B11 => {
-            compress_fragment_impl::<S, 11, INDEPENDENT>(simd, arena, data, is_last, table, w)
-        }
-        TableBits::B13 => {
-            compress_fragment_impl::<S, 13, INDEPENDENT>(simd, arena, data, is_last, table, w)
-        }
-        TableBits::B15 => {
-            compress_fragment_impl::<S, 15, INDEPENDENT>(simd, arena, data, is_last, table, w)
-        }
-    }
-
-    // Rewrite the fragment verbatim when compressing made it larger.
-    if w.position() - initial_position > 31 + (data.len() << 3) {
+    // The serial compressed header alone costs at least 19 + 13 bits plus
+    // the retained command code. Below this bound the size guard necessarily
+    // rewrites the fragment verbatim. Only skip a final fragment: a non-final
+    // fragment must still train the command code for its successor.
+    if is_last && !INDEPENDENT && data.len() <= arena.cmd_code_numbits / 8 {
         emit_uncompressed_meta_block(data, 0, data.len(), initial_position, w);
+    } else {
+        match table_bits {
+            TableBits::B9 => {
+                compress_fragment_impl::<S, 9, INDEPENDENT>(simd, arena, data, is_last, table, w)
+            }
+            TableBits::B11 => {
+                compress_fragment_impl::<S, 11, INDEPENDENT>(simd, arena, data, is_last, table, w)
+            }
+            TableBits::B13 => {
+                compress_fragment_impl::<S, 13, INDEPENDENT>(simd, arena, data, is_last, table, w)
+            }
+            TableBits::B15 => {
+                compress_fragment_impl::<S, 15, INDEPENDENT>(simd, arena, data, is_last, table, w)
+            }
+        }
+
+        // Rewrite the fragment verbatim when compressing made it larger.
+        if w.position() - initial_position > 31 + (data.len() << 3) {
+            emit_uncompressed_meta_block(data, 0, data.len(), initial_position, w);
+        }
     }
 
     if is_last {
@@ -701,6 +709,96 @@ pub(crate) fn compress_fragment<S: Simd, const INDEPENDENT: bool>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn check_small_fragments<S: Simd, const INDEPENDENT: bool>(simd: S) {
+        for trained in [false, true] {
+            for offset in 0..8 {
+                for pattern in [0u8, 1, 2] {
+                    for len in 1..=80 {
+                        for is_last in [false, true] {
+                            let mut actual_arena = OnePassArena::default();
+                            let mut reference_arena = OnePassArena::default();
+                            if trained {
+                                let prefix = b"a small repeated prefix ".repeat(40);
+                                for arena in [&mut actual_arena, &mut reference_arena] {
+                                    let mut storage = Vec::new();
+                                    compress_fragment_impl::<S, 11, INDEPENDENT>(
+                                        simd,
+                                        arena,
+                                        &prefix,
+                                        false,
+                                        &mut [0; 2048],
+                                        &mut BitWriter::append(&mut storage, 0),
+                                    );
+                                }
+                            }
+                            let data: Vec<u8> = (0..len)
+                                .map(|i| match pattern {
+                                    0 => b'a',
+                                    1 => i as u8,
+                                    _ => (i as u8).wrapping_mul(73) ^ (i >> 2) as u8,
+                                })
+                                .collect();
+                            let seed = ((1u16 << offset) - 1) as u8;
+                            let mut actual = vec![seed];
+                            let mut reference = vec![seed];
+                            let mut writer = BitWriter::append(&mut reference, offset);
+                            compress_fragment_impl::<S, 9, INDEPENDENT>(
+                                simd,
+                                &mut reference_arena,
+                                &data,
+                                is_last,
+                                &mut [0; 512],
+                                &mut writer,
+                            );
+                            if writer.position() - offset > 31 + (len << 3) {
+                                emit_uncompressed_meta_block(&data, 0, len, offset, &mut writer);
+                            }
+                            if is_last {
+                                writer.write(2, 3);
+                                writer.align();
+                            }
+                            let expected_bits = writer.position();
+                            let mut writer = BitWriter::append(&mut actual, offset);
+                            compress_fragment::<S, INDEPENDENT>(
+                                simd,
+                                &mut actual_arena,
+                                &data,
+                                is_last,
+                                TableBits::B9,
+                                &mut [0; 512],
+                                &mut writer,
+                            );
+                            assert_eq!(writer.position(), expected_bits);
+                            let bytes = expected_bits.div_ceil(8);
+                            assert_eq!(
+                                actual[..bytes],
+                                reference[..bytes],
+                                "trained={trained} offset={offset} pattern={pattern} len={len} last={is_last}"
+                            );
+                            if !is_last {
+                                assert_eq!(actual_arena.cmd_code, reference_arena.cmd_code);
+                                assert_eq!(
+                                    actual_arena.cmd_code_numbits,
+                                    reference_arena.cmd_code_numbits
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn small_final_fragments_match_full_encoding_on_every_backend() {
+        for backend in crate::Backend::available() {
+            fearless_simd::dispatch!(backend.0, simd => {
+                check_small_fragments::<_, false>(simd);
+                check_small_fragments::<_, true>(simd);
+            });
+        }
+    }
 
     #[test]
     fn table_width_follows_the_reference_selection() {

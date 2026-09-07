@@ -1,9 +1,9 @@
 //! Every SIMD backend must produce the same bytes as the scalar fallback.
 //!
-//! The SIMD work is confined to the exact match-length scan, which only changes
-//! how a length is discovered, never which length it is. Comparing decoded
-//! output would not catch a divergence, so the streams are compared byte for
-//! byte, including their bit length.
+//! Match scans and high-quality histogram assignment preserve exact decisions,
+//! including floating-point costs and histogram ties. Comparing decoded output
+//! would not catch a divergence, so streams are compared byte for byte,
+//! including their bit length.
 
 mod support;
 

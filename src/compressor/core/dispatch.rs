@@ -9,6 +9,7 @@ use super::fast::{FastCore, encode_fragment};
 use super::greedy::backward_references::{ReferenceState, create_backward_references};
 use super::greedy::hashers::{MatchFinder, with_matcher};
 use super::greedy::params::GreedyParams;
+use super::hq::block_splitter::{BlockCosts, assign_blocks};
 use super::hq::h10::BinaryTreeMatcher;
 use super::hq::params::{HqParams, HqQuality};
 use super::hq::zopfli::{
@@ -64,6 +65,7 @@ pub(crate) trait Kernels: Send + Sync {
     );
     fn greedy(&self, input: GreedyInput<'_>);
     fn hq(&self, input: HqInput<'_>);
+    fn assign_blocks(&self, input: BlockCosts<'_>);
     fn stitch(
         &self,
         matcher: &mut BinaryTreeMatcher,
@@ -203,6 +205,10 @@ impl<S: Simd, G: Simd, const INDEPENDENT: bool> Kernels for Selected<S, G, INDEP
                 }
             },
         );
+    }
+
+    fn assign_blocks(&self, input: BlockCosts<'_>) {
+        assign_blocks(self.simd, input);
     }
 
     fn hq(&self, input: HqInput<'_>) {

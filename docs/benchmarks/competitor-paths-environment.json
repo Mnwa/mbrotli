@@ -1,0 +1,100 @@
+{
+  "date": "2026-09-07",
+  "encoder_revision": "33b70146e05de4cd81ed409f6f1cd7a940d861b5",
+  "c_revision": "028fb5a23661f123017c060daa546b55cf4bde29",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8",
+  "c_compiler": "cc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "kernel": "6.18.33.2-microsoft-standard-WSL2",
+  "cpu": "13th Gen Intel(R) Core(TM) i7-13700KF",
+  "affinity": "logical CPU 2",
+  "rustflags": "unset; Cargo release defaults, runtime SIMD dispatch",
+  "features": "default only; no profiling instrumentation",
+  "api_mode": "cold native one-shot helpers, construction/allocation/disposal included",
+  "lgwin": 22,
+  "mode": "generic",
+  "qualities": {
+    "c-brotli": "0-11",
+    "mbrotli": "0-11",
+    "rust-brotli": "0-11",
+    "simd-brotli": "0-11",
+    "burli": "0-5"
+  },
+  "versions": {
+    "c-brotli": "1.2.0",
+    "mbrotli": "0.1.1 local checkout",
+    "rust-brotli": "9.0.0",
+    "simd-brotli": "10.0.1",
+    "burli": "0.3.1"
+  },
+  "sha256": {
+    "benchmarks/comparison/Cargo.lock": "2230db567cad58d0aee632e5ce37863153ce6b7e9a0fc7eedc91e6579a3bcd05",
+    "benchmarks/comparison/src/core.rs": "1a04c0b21b4dbaf7d4668b70b5b1e7e0374c8cda2a82b1165a822014becc722d",
+    "brotli-ffi/vendor/brotli/tests/testdata/alice29.txt": "7467306ee0feed4971260f3c87421154a05be571d944e9cb021a5713700c38f0",
+    "src/compressor/core/dispatch.rs": "87308d8f63eeba4c99abf9fb9519cff4e8df0a11e7631d0fcdced6dd9e3d45cc",
+    "src/compressor/core/fast/q0.rs": "dfc3eef702b015c24e36de99740dfbb3576d633fbd415b7c60429796881a483b",
+    "src/compressor/core/hq/block_splitter.rs": "5ce2aa224ac843be18de173dd96e3cbe5ffac0c6f0dad7c6c425e1fc3285690f",
+    "src/compressor/core/hq/encoder.rs": "47aa2a18dda0b2befb2e3f57d45f7f592dc9ccfd9ca9d7f333c1a7d02858262d",
+    "src/compressor/core/hq/literal_cost.rs": "ae2e00a770b43e66d8af1f3ee2df972d8204902ce0a0259cdfc8a83bc63d2b85",
+    "src/compressor/core/hq/metablock.rs": "0c1ae5340b4d735369069bdd9ca11ec1ea193d10693c0ab45bf52b552c14fb94",
+    "tests/simd_backends.rs": "55d72bf9e5fb4150882f7506559e0e5cf10ee589a3d5f7c605d0f231de2cdd00"
+  },
+  "corpus_generation": "See pinned core.rs: xorshift64 seed 0x243f6a8885a308d3; structured binary ((i/16)^i) mod 256; repeated a; cyclic Alice.",
+  "command": "taskset -c 2 benchmarks/comparison/target/release/deps/implementations-79b5dc97a736884b --bench --save-baseline path-review-final-after --sample-size 30 --warm-up-time 0.2 --measurement-time 0.5 --noplot",
+  "sampling": {
+    "samples": 30,
+    "warmup_seconds": 0.2,
+    "requested_measurement_seconds": 0.5,
+    "note": "Criterion can extend slow cases to collect all samples."
+  },
+  "validation": {
+    "workspace_tests_passed": 1005,
+    "comparison_validation_cases": 432,
+    "changed_implementation_files_with_100_percent_function_coverage": 6,
+    "afl_simd_executions": 40349,
+    "afl_c_executions": 46842,
+    "afl_saved_crashes": 0,
+    "afl_saved_hangs": 0
+  },
+  "measured_cases": 432,
+  "baseline": "path-review-final-after",
+  "plotting": "Matplotlib 3.10.8",
+  "after_revision": "before revision plus working-tree source hashes below",
+  "before_baseline": "path-review-final-before",
+  "before_measured_cases": 96,
+  "before_command": "taskset -c 2 /tmp/mbrotli-path-review/before-comparison 'mbrotli$' --bench --save-baseline path-review-final-before --sample-size 30 --warm-up-time 0.2 --measurement-time 0.5 --noplot",
+  "clones": {
+    "burli": "fd93d1b7fbc380383872f6e0d6986613e0580bd4",
+    "simd-brotli": "76fea392876916b9f4d29f5ceaf99e930a7e2440"
+  },
+  "binary_sha256": {
+    "before": "55ed30464e2d86259740bb1a755c2ec59edff8904a93e3491b9b0916b71381aa",
+    "after": "2c1e1a36267ff286cbe3f01144b850fb37b9a014712c6681b47d2cf18c44895b"
+  },
+  "matched_after_baseline": "path-review-final-mbrotli",
+  "matched_after_measured_cases": 96,
+  "matched_after_command": "taskset -c 2 benchmarks/comparison/target/release/deps/implementations-79b5dc97a736884b 'mbrotli$' --bench --save-baseline path-review-final-mbrotli --sample-size 30 --warm-up-time 0.2 --measurement-time 0.5 --noplot",
+  "rechecks": {
+    "tiny_q1": {
+      "order": [
+        "before1",
+        "after1",
+        "after2",
+        "before2"
+      ],
+      "samples": 100,
+      "warmup_seconds": 0.5,
+      "measurement_seconds": 2
+    },
+    "random_1m_q0_q2_q5": {
+      "order": [
+        "before1",
+        "after1",
+        "after2",
+        "before2"
+      ],
+      "samples": 60,
+      "warmup_seconds": 0.3,
+      "measurement_seconds": 1
+    }
+  }
+}

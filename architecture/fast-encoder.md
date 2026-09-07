@@ -194,6 +194,29 @@ The scan follows this order:
 - the final size guard rewrites the whole fragment verbatim when the compressed
   form exceeds `31 + 8 * len` bits.
 
+For a nonempty serial **final** fragment, the encoder first checks
+`len <= cmd_code_numbits / 8`. The compressed form needs at least 19 header bits,
+13 block/context bits, and the retained command code, already exceeding the
+rewrite threshold at that length. It can therefore emit the same uncompressed
+block immediately, without building literal codes or scanning matches. The
+initial command code has 448 bits, giving a 56-byte bound; a trained command
+code supplies its own bound. Non-final fragments still train the successor's
+code, and independent parallel fragments retain their separate command tree.
+Empty input and final marker/alignment handling keep their existing paths.
+
+```mermaid
+flowchart TD
+    Input[Quality 0 fragment] --> Empty{Empty?}
+    Empty -->|yes| Final[Write final empty marker and align]
+    Empty -->|no| Bound{Serial, final, and length within command-code bound?}
+    Bound -->|yes| Raw[Emit uncompressed block]
+    Bound -->|no| Encode[Build codes and scan matches]
+    Encode --> Guard{Compressed bits exceed size threshold?}
+    Guard -->|yes| Raw
+    Guard -->|no| Finish[Finalize if last]
+    Raw --> Finish
+```
+
 ## 5. Quality 1: two passes
 
 ```mermaid

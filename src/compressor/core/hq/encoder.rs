@@ -639,6 +639,7 @@ impl HqEncoder {
         let mb = &mut self.metablock;
         mb.clear();
         builder.build(
+            &*self.kernels,
             data,
             wrapped_last_flush_pos,
             mask,

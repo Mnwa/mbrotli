@@ -1,5 +1,7 @@
 # Brotli implementation comparison — 2026-09-07
 
+[Benchmark index](README.md) · [Latest results by compression quality](README.md#results-by-quality)
+
 This new suite compares cold compression in `mbrotli`, Google C Brotli, Rust
 `brotli`, `simd-brotli`, and `burli`. Each result includes both speed and output
 size. The original benchmark harnesses and their Criterion data are independent.
