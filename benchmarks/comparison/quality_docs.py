@@ -11,6 +11,7 @@ import json
 import math
 import os
 from pathlib import Path
+from statistics import median
 
 ENCODERS = {
     "c-brotli": ("Google C", "#475569"),
@@ -73,18 +74,61 @@ def throughput(row):
     return row["input_bytes"] * 1e9 / row["mean_ns"] / 1048576
 
 
-def summary(rows, quality):
-    lines = ["| Dataset | Input bytes | Lowest mean latency | mbrotli / fastest speed | Smallest output, bytes | mbrotli output, bytes |",
-             "| --- | ---: | --- | ---: | ---: | ---: |"]
+def medians(rows, quality):
+    """Give each dataset equal weight after normalizing to its own C result."""
+    reference = {r["corpus"]: r for r in rows
+                 if r["quality"] == quality and r["implementation"] == "c-brotli"}
+    result = {}
+    for encoder in ENCODERS:
+        group = [r for r in rows if r["quality"] == quality and r["implementation"] == encoder]
+        if group:
+            result[encoder] = {
+                "speed": median(reference[r["corpus"]]["mean_ns"] / r["mean_ns"] for r in group),
+                "size": median(r["compressed_bytes"] / reference[r["corpus"]]["compressed_bytes"] for r in group),
+            }
+    return result
+
+
+def dataset_order(rows, quality):
+    """Rank by mbrotli speed / fastest peer speed; retain corpus order on ties."""
+    scores = {}
     for corpus in CORPORA:
         group = cases(rows, quality, corpus)
-        fastest = min(r["mean_ns"] for r in group)
-        winners = ", ".join(ENCODERS[r["implementation"]][0] for r in group if r["mean_ns"] == fastest)
         own = next(r for r in group if r["implementation"] == "mbrotli")
-        size = min(r["compressed_bytes"] for r in group)
-        lines.append(f"| [{corpus}](#{corpus}) | {own['input_bytes']:,} | {winners} | "
-                     f"{fastest / own['mean_ns']:.3f}× | {size:,} | {own['compressed_bytes']:,} |")
+        scores[corpus] = min(r["mean_ns"] for r in group if r["implementation"] != "mbrotli") / own["mean_ns"]
+    return sorted(CORPORA, key=lambda corpus: -scores[corpus])
+
+
+def quality_order(rows):
+    """Put qualities with the highest median mbrotli speed relative to C first."""
+    return sorted(range(12), key=lambda q: -medians(rows, q)["mbrotli"]["speed"])
+
+
+def summary(rows, quality):
+    lines = ["| Implementation | Median speed / C ↑ | Median output / C ↓ | Datasets |",
+             "| --- | ---: | ---: | ---: |"]
+    for encoder, values in medians(rows, quality).items():
+        lines.append(f"| {ENCODERS[encoder][0]} | {values['speed']:.3f}× | {values['size']:.3f}× | 8 |")
     return lines
+
+
+def bars(ax, names, values, colors, label, low=None, high=None, ratio=False):
+    """Draw labeled vertical bars with a linear zero baseline and optional bounds."""
+    errors = None if low is None else [[v - lo for v, lo in zip(values, low)],
+                                      [hi - v for v, hi in zip(values, high)]]
+    rectangles = ax.bar(range(len(values)), values, color=colors, width=.62,
+                        yerr=errors, capsize=4, error_kw={"elinewidth": 1.2})
+    labels = [f"{v:.3f}×" if ratio else f"{v:,.4g}" for v in values]
+    ax.bar_label(rectangles, labels=labels, padding=7, fontsize=10,
+                 bbox={"facecolor": "white", "edgecolor": "none", "alpha": .9, "pad": 1})
+    ax.set_xticks(range(len(names)), names, fontsize=10)
+    ax.set_ylim(0, max(high if high is not None else values) * 1.25)
+    ax.set_ylabel(label)
+    ax.ticklabel_format(axis="y", style="plain", useOffset=False)
+    ax.grid(axis="y", alpha=.18)
+    ax.set_axisbelow(True)
+    if ratio:
+        ax.axhline(1, color="#64748b", linestyle="--", linewidth=1)
 
 
 def chart(group, quality, corpus, path):
@@ -109,37 +153,18 @@ def chart(group, quality, corpus, path):
         low = [length * 1e9 / r["mean_upper_ns"] / 1048576 for r in group]
         high = [length * 1e9 / r["mean_lower_ns"] / 1048576 for r in group]
         label = "Throughput (MiB/s) · higher is better"
-    fig, (speed, size) = plt.subplots(1, 2, figsize=(12, 3.6), sharey=True)
+    fig, (speed, size) = plt.subplots(1, 2, figsize=(13, 4.8))
     colors = [ENCODERS[r["implementation"]][1] for r in group]
     names = [ENCODERS[r["implementation"]][0] for r in group]
-    for i, (value, lo, hi, color) in enumerate(zip(values, low, high, colors)):
-        speed.errorbar(value, i, xerr=[[value - lo], [hi - value]], fmt="o", color=color,
-                       capsize=4, markersize=7, elinewidth=1.5)
-        speed.annotate(f"{value:,.4g}", (value, i), xytext=(8, 7),
-                       textcoords="offset points", fontsize=9)
-    if max(high) / min(low) > 20:
-        speed.set_xscale("log")
-        speed.set_xlim(min(low) / 1.8, max(high) * 2)
-        label += " · log scale"
-    else:
-        speed.set_xlim(0, max(high) * 1.3)
-    speed.set_xlabel(label)
-    speed.set_yticks(range(len(group)), names)
+    bars(speed, names, values, colors, label, low, high)
     sizes = [r["compressed_bytes"] for r in group]
-    size.barh(range(len(group)), sizes, color=colors, height=.55)
-    for i, value in enumerate(sizes):
-        size.annotate(f"{value:,}", (value, i), xytext=(5, 0), textcoords="offset points",
-                      va="center", fontsize=10)
-    size.set_xlim(0, max(sizes) * 1.35)
-    size.xaxis.set_major_locator(MaxNLocator(nbins=4, integer=True))
-    size.ticklabel_format(axis="x", style="plain", useOffset=False)
-    size.set_xlabel("Compressed bytes · lower is better · zero baseline")
-    speed.set_ylim(len(group) - .5, -.65)
-    for ax in (speed, size):
-        ax.grid(axis="x", alpha=.18)
-        ax.set_axisbelow(True)
+    bars(size, names, sizes, colors, "Compressed bytes · lower is better")
+    size.yaxis.set_major_locator(MaxNLocator(nbins=5, integer=True))
+    # Preserve exact byte counts even where the axis uses compact ticks.
+    for annotation, value in zip(size.texts, sizes):
+        annotation.set_text(f"{value:,}")
     fig.suptitle(f"Quality {quality} · {corpus} · {length:,} input bytes", fontsize=15)
-    fig.text(.5, .015, "Cold native APIs · window 22 · timing whiskers: 95% mean confidence bounds",
+    fig.text(.5, .015, "Linear axes from zero · cold APIs · window 22 · whiskers: 95% mean confidence bounds",
              ha="center", fontsize=10)
     fig.tight_layout(rect=(0, .045, 1, .95))
     fig.savefig(path, metadata={"Date": None})
@@ -149,7 +174,7 @@ def chart(group, quality, corpus, path):
 def quality_page(rows, quality, environment, source_link, environment_link, report_link):
     versions = environment["versions"]
     sampling = environment["sampling"]
-    navigation = ["[Benchmark index](../README.md)"]
+    navigation = ["[Benchmark index](../README.md)", "[Median overview](README.md)"]
     if quality > 0:
         navigation.append(f"[← Quality {quality - 1}](q{quality - 1}.md)")
     if quality < 11:
@@ -157,6 +182,14 @@ def quality_page(rows, quality, environment, source_link, environment_link, repo
     lines = [f"# Compression quality {quality}", "", " · ".join(navigation), "",
              f"Recorded run: **{environment['baseline']}** ({environment['date']}).",
              f"[Raw results]({source_link}) · [Environment]({environment_link}) · [Run analysis]({report_link}).", "",
+             "## Median across all datasets", "",
+             "Each of the eight datasets has equal weight, including empty and tiny input.",
+             "Speed / C = C mean latency / implementation mean latency; output / C = implementation bytes / C bytes.",
+             "We take the median of these eight per-dataset ratios separately for speed and size.",
+             "1× matches C; higher speed and lower output are better. These are medians across datasets,",
+             "not median sample latencies, and do not imply equal compressed size or statistical significance.", "",
+             f"![Median speed and output relative to C at quality {quality}](charts/q{quality}-summary.svg)", "",
+             *summary(rows, quality), "", "<details>", "<summary>Measurement setup and interpretation</summary>", "",
              f"Google C Brotli {versions['c-brotli']}, mbrotli at the recorded optimized checkout, Rust brotli {versions['rust-brotli']},",
              f"and SIMD Brotli {versions['simd-brotli']} are compared at this quality.",
              f"Burli {versions['burli']} is also included." if quality <= 5 else
@@ -167,24 +200,29 @@ def quality_page(rows, quality, environment, source_link, environment_link, repo
              f"at least {sampling['requested_measurement_seconds']:g} s measurement.",
              f"Host: {environment['cpu']}, {environment['affinity']}; {environment['rustflags']}.",
              "Rust brotli and SIMD Brotli include their native 4 KiB I/O adapters.", "",
-             "## Dataset summary", "",
-             "Lowest latency means the lowest recorded mean, not a statistically established winner.",
-             "`mbrotli / fastest speed` is fastest mean latency divided by mbrotli mean latency; 1× is fastest.",
-             "Smallest output includes stream overhead. Equal quality numbers do not imply equal output size.", ""]
-    lines.extend(summary(rows, quality))
-    lines += ["", "## Dataset details", "",
               "Chart whiskers and table intervals describe 95% confidence bounds on mean timing.",
               "They do not capture all host or allocator variation. Throughput bounds are transformed latency bounds.",
               "Output / input is compressed bytes divided by input bytes; smaller is better, and values above 100% mean expansion.",
               "For empty input, throughput and output / input are undefined (—).",
-              f"See the [optimization tradeoffs and rechecks]({report_link}#final-measurements) for before/after limitations.", ""]
-    for corpus, description in CORPORA.items():
+              f"See the [optimization tradeoffs and rechecks]({report_link}#final-measurements) for before/after limitations.",
+              "", "</details>", "", "## Dataset details", "",
+              "Ordered by mbrotli speed / fastest competing implementation, highest first; all eight datasets are shown.",
+              "This order uses recorded mean latency, not statistical significance. Bars start at zero.", "",
+              " · ".join(f"[{corpus}](#{corpus})" for corpus in dataset_order(rows, quality)), ""]
+    for corpus in dataset_order(rows, quality):
+        description = CORPORA[corpus]
         group = cases(rows, quality, corpus)
         c_time = next(r["mean_ns"] for r in group if r["implementation"] == "c-brotli")
         length = group[0]["input_bytes"]
         scale, unit = (1, "ns") if length == 0 else (1000, "µs")
+        own = next(r for r in group if r["implementation"] == "mbrotli")
+        peer = min((r for r in group if r["implementation"] != "mbrotli"), key=lambda r: r["mean_ns"])
         lines += [f"### {corpus}", "", f"{description} **Input: {length:,} bytes.**", "",
+                  f"mbrotli speed / fastest peer ({ENCODERS[peer['implementation']][0]}): "
+                  f"**{peer['mean_ns'] / own['mean_ns']:.3f}×**; "
+                  f"output: {own['compressed_bytes']:,} / {peer['compressed_bytes']:,} bytes.", "",
                   f"![Quality {quality}: {corpus} speed and compressed size](charts/q{quality}-{corpus}.svg)", "",
+                  "<details>", "<summary>Exact measurements and confidence bounds</summary>", "",
                   f"| Implementation | Mean, {unit} | 95% mean interval, {unit} | MiB/s | Output bytes | Output / input | Speed / C |",
                   "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
         for r in group:
@@ -193,11 +231,13 @@ def quality_page(rows, quality, environment, source_link, environment_link, repo
             lines.append(f"| {ENCODERS[r['implementation']][0]} | {r['mean_ns'] / scale:,.4g} | "
                          f"{r['mean_lower_ns'] / scale:,.4g}–{r['mean_upper_ns'] / scale:,.4g} | "
                          f"{speed} | {r['compressed_bytes']:,} | {fraction} | {c_time / r['mean_ns']:.3f}× |")
-        lines.append("")
+        lines.extend(["", "</details>", ""])
     return "\n".join(lines)
 
 
 def main():
+    from plot import median_chart
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--csv", type=Path, required=True)
     parser.add_argument("--environment", type=Path, required=True)
@@ -212,10 +252,27 @@ def main():
     links = [Path(os.path.relpath(path.resolve(), args.output.resolve())).as_posix()
              for path in (args.csv, args.environment, args.report)]
     for quality in range(12):
+        median_chart(rows, quality, charts / f"q{quality}-summary.svg")
         for corpus in CORPORA:
             chart(cases(rows, quality, corpus), quality, corpus, charts / f"q{quality}-{corpus}.svg")
         (args.output / f"q{quality}.md").write_text(quality_page(rows, quality, environment, *links))
-    print("Generated 12 quality pages and 96 dataset charts from 432 recorded cases.")
+    overview = ["# Median results by quality", "", "[Benchmark index](../README.md)", "",
+                f"Recorded run: **{environment['baseline']}** ({environment['date']}).",
+                f"[Raw results]({links[0]}) · [Environment]({links[1]}) · [Run analysis]({links[2]}).", "",
+                "All eight datasets contribute equally to each median, including empty and tiny input.",
+                "For each dataset, speed / C = C mean latency / implementation mean latency;",
+                "output / C = implementation bytes / C bytes. Medians are taken over those ratios.",
+                "Qualities are ordered by mbrotli median speed / C, highest first. Burli supports q0–q5 only.", "",
+                "| Quality | mbrotli speed / C ↑ | mbrotli output / C ↓ | Datasets |",
+                "| --- | ---: | ---: | ---: | ---: |"]
+    for quality in quality_order(rows):
+        values = medians(rows, quality)["mbrotli"]
+        overview.append(f"| [Quality {quality}](q{quality}.md) | {values['speed']:.3f}× | {values['size']:.3f}× | 8 |")
+    for quality in quality_order(rows):
+        overview.extend(["", f"## [Quality {quality}](q{quality}.md)", "",
+                         f"![Quality {quality}: median across all datasets](charts/q{quality}-summary.svg)"])
+    (args.output / "README.md").write_text("\n".join(overview) + "\n")
+    print("Generated quality overview, 12 quality pages, 12 median charts and 96 dataset charts from 432 cases.")
 
 
 if __name__ == "__main__":

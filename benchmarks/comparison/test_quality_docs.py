@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from quality_docs import CORPORA, load_rows, quality_page, summary
+from quality_docs import CORPORA, dataset_order, load_rows, medians, quality_order, quality_page, summary
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -49,20 +49,49 @@ class QualityDocsTests(unittest.TestCase):
             self.assertEqual(page.count("### "), 8)
             self.assertIn("test-version", page)
             self.assertIn("| — |", page)
-            self.assertEqual(page.count("\n| Burli |"), 8 if quality <= 5 else 0)
-            self.assertEqual(page.count("\n| mbrotli |"), 8)
+            self.assertEqual(page.count("\n| Burli |"), 9 if quality <= 5 else 0)
+            self.assertEqual(page.count("\n| mbrotli |"), 9)
+            self.assertIn("Median across all datasets", page)
+            self.assertIn(f"charts/q{quality}-summary.svg", page)
+            headings = [line[4:] for line in page.splitlines() if line.startswith("### ")]
+            self.assertEqual(headings, dataset_order(rows, quality))
             for corpus in CORPORA:
                 self.assertIn(f"charts/q{quality}-{corpus}.svg", page)
             if quality > 5:
                 self.assertIn("has no results at this quality", page)
 
-    def test_summary_preserves_exact_ties_instead_of_choosing_an_arbitrary_winner(self):
+    def test_median_uses_all_eight_normalized_datasets_with_equal_weight(self):
+        rows = load_rows(SOURCE)
+        # The two central ratios are 4 and 6. An outlier and widely varying
+        # reference times distinguish the median of ratios from pooled timing.
+        ratios = dict(zip(CORPORA, [1, 2, 3, 4, 6, 7, 8, 1000]))
+        for row in rows:
+            ratio = ratios[row["corpus"]]
+            row["mean_ns"] = ratio * ratio if row["implementation"] == "c-brotli" else ratio
+            row["compressed_bytes"] = 10 if row["implementation"] == "c-brotli" else 10 * ratio
+        values = medians(rows, 11)
+        self.assertEqual(values["mbrotli"], {"speed": 5, "size": 5})
+        self.assertEqual(values["c-brotli"], {"speed": 1, "size": 1})
+        self.assertNotIn("burli", values)
+        self.assertIn("burli", medians(rows, 5))
+        table = "\n".join(summary(rows, 11))
+        self.assertIn("| mbrotli | 5.000× | 5.000× | 8 |", table)
+
+    def test_dataset_order_uses_fastest_peer_and_keeps_all_tied_cases(self):
         rows = load_rows(SOURCE)
         for row in rows:
-            if row["quality"] == 11 and row["corpus"] == "alice29":
-                row["mean_ns"] = 100
-        table = "\n".join(summary(rows, 11))
-        self.assertIn("Google C, mbrotli, Rust brotli, SIMD Brotli | 1.000×", table)
+            row["mean_ns"] = 10 if row["implementation"] == "mbrotli" else 20
+            if row["corpus"] == "empty" and row["implementation"] == "rust-brotli":
+                row["mean_ns"] = 1
+        self.assertEqual(dataset_order(rows, 0), list(CORPORA)[1:] + ["empty"])
+        for row in rows:
+            row["mean_ns"] = 10
+        self.assertEqual(dataset_order(rows, 0), list(CORPORA))
+        self.assertEqual(quality_order(rows), list(range(12)))
+        for row in rows:
+            if row["quality"] == 11 and row["implementation"] == "mbrotli":
+                row["mean_ns"] = 1
+        self.assertEqual(quality_order(rows), [11] + list(range(11)))
 
 
 if __name__ == "__main__":

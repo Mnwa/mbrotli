@@ -10,6 +10,20 @@ Brotli compression in safe Rust, with qualities 0–11, reusable encoder storage
 streaming I/O, and caller-scheduled parallel compression. This crate provides
 compression only; it does not include a decoder.
 
+## Benchmark results
+
+![Median compression speed and output size by quality](docs/benchmarks/competitor-paths-charts/tradeoff.svg)
+
+Median across all eight datasets, with each dataset weighted equally after
+normalizing to Google C Brotli. Higher speed and lower output are better;
+1× matches C. Qualities with the strongest mbrotli median speed / C appear first.
+Cold serial APIs, window 22, i7-13700KF / WSL2; recorded 2026-09-07.
+Burli supports q0–q5. Equal quality does not imply equal output size.
+
+Explore the [median results](docs/benchmarks/qualities/README.md),
+[dataset charts](docs/benchmarks/README.md#results-by-quality), and
+[measurement method and raw data](docs/benchmarks/README.md#datasets-and-measurement-contract).
+
 ## Getting started
 
 Requires Rust 1.89 or later.
@@ -147,7 +161,7 @@ this repository.
 - [User guide](docs/README.md): configuration, buffers, streaming, and errors.
 - [Dictionaries and extended formats](docs/dictionaries.md): preparation, limits, and experimental features.
 - [Parallel compression](docs/parallel.md): task scheduling, input sources, and staging.
-- [Benchmark results](docs/benchmarks/README.md): quality-by-quality dataset charts and summary tables.
+- [Benchmark results](docs/benchmarks/README.md): median comparisons and vertical speed/size charts by quality and dataset.
 - [Benchmarks and profiling](docs/benchmarking.md): workloads and reproducible commands.
 - [Development](docs/development.md): build, checks, coverage, and fuzzing.
 - [Architecture](architecture/README.md): implementation mechanics and diagrams.

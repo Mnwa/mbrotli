@@ -4,9 +4,23 @@
 
 This follow-up reviews the competitors that beat mbrotli in the original
 [implementation comparison](implementation-comparison.md). The original suite,
-results, charts, and Criterion baseline remain unchanged. The before revision is
+raw results and Criterion baseline are preserved; charts use the current
+vertical-bar presentation. The before revision is
 `33b7014` (`add benches`); the after revision is that checkout plus the changes
 in this report. No production dependency or public API changes were made.
+
+## Median results across all datasets
+
+![Median speed and output relative to C by quality](competitor-paths-charts/tradeoff.svg)
+
+Each bar is a median across all eight datasets, including empty and tiny input.
+Speed / C = C mean latency / encoder mean latency; output / C = encoder bytes /
+C bytes. Ratios are calculated per dataset before taking the median, with equal
+weight. Higher speed and lower output are better. Qualities with the highest
+mbrotli median speed / C appear first; all qualities are retained.
+
+Open the [median table](qualities/README.md) or [individual dataset charts](README.md#results-by-quality)
+for exact results. The matched before/after run below is a separate experiment.
 
 ## Source review
 
@@ -145,7 +159,9 @@ python3 benchmarks/comparison/report.py --baseline path-review-final-after \
 python3 benchmarks/comparison/plot.py \
   --csv docs/benchmarks/competitor-paths-comparison.csv \
   --output docs/benchmarks/competitor-paths-charts \
-  --subtitle 'i7-13700KF; optimized checkout; 30 samples'
+  --subtitle 'i7-13700KF; optimized checkout; 30 samples' \
+  --before-after docs/benchmarks/competitor-paths-before-after.csv \
+  --before-after-output docs/benchmarks/competitor-paths-speedups.svg
 ```
 
 ## Final measurements
@@ -200,15 +216,19 @@ Raw results, including slower cases and confidence bounds, remain available:
 - [Isolated tiny-q1 recheck](competitor-paths-q1-recheck.csv).
 - [Environment, source hashes, and binary identities](competitor-paths-environment.json).
 
-![All qualities: raw before/after speed ratios](competitor-paths-speedups.svg)
+![All qualities: raw before/after speed ratios as vertical bars](competitor-paths-speedups.svg)
 
-The full five-encoder diagrams cover qualities 0–11, with Burli stopping at q5:
+The matched panels are ordered by median speedup across qualities, highest
+first. The 1× line marks unchanged speed; all 96 cases are shown.
 
-![Throughput by quality](competitor-paths-charts/throughput.svg)
+The five-encoder diagrams below show medians across all eight datasets at each
+quality, with Burli stopping at q5. They use the same ordering as the overview.
+Individual confidence bounds remain in the dataset tables and raw CSV; no
+confidence interval is inferred for these medians.
 
-![Compressed size by quality](competitor-paths-charts/size.svg)
+![Median speed relative to C by quality](competitor-paths-charts/throughput.svg)
 
-![Speed versus size](competitor-paths-charts/tradeoff.svg)
+![Median output size relative to C by quality](competitor-paths-charts/size.svg)
 
 ## Correctness and limits
 

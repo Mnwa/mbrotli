@@ -8,7 +8,7 @@ and known gaps. For usage examples, start with the [user guide](../docs/README.m
 
 | Specification | Scope |
 | --- | --- |
-| [Implementation comparison](benchmark-comparison.md) | Isolated five-encoder Criterion suite, validation, size/timing export, and quality-by-quality dataset reports. |
+| [Implementation comparison](benchmark-comparison.md) | Isolated five-encoder Criterion suite, validated exports, equal-weight dataset medians, and ranked vertical-bar reports. |
 | [Compressor](compressor.md) | Configuration, serial APIs, sessions, I/O adapters, and errors. |
 | [Encoder workspace](encoder-workspace.md) | Retained allocations and profiling-aware accounting tests, incremental ring storage, copy-extension SIMD kernels, reset, and writer backpressure. |
 | [Bit output](bit-output.md) | Fixed and growing initialized storage, direct fast appends, bit operations, and overflow propagation. |

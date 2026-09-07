@@ -3,7 +3,9 @@
 The independent [implementation comparison](../benchmarks/comparison/Cargo.toml)
 measures `mbrotli`, Google C Brotli, Rust `brotli`, `simd-brotli`, and `burli`.
 Browse the [benchmark results index](benchmarks/README.md) for one page per
-compression quality, with dataset charts, summary tables, and complete timings.
+compression quality, with medians across all eight datasets, vertical speed/size
+bars, and complete timings. The strongest mbrotli comparisons appear first;
+the pages explain the ranking and retain every dataset.
 The index also links the recorded run reports, raw data, and limitations.
 
 The [competitor-guided optimization follow-up](benchmarks/competitor-paths.md)

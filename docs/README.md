@@ -4,6 +4,11 @@
 [README example](../README.md#getting-started), then choose the output API
 that fits your application.
 
+[Benchmark results](benchmarks/README.md) compare speed and output size using
+medians across all datasets, with a chart and exact measurements for each
+quality and workload. For specialized use, see [dictionaries](dictionaries.md)
+and [parallel compression](parallel.md).
+
 ## Configuration
 
 `EncoderConfig` holds settings shared by successive streams:

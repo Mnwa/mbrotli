@@ -10,9 +10,20 @@ size. The original benchmark harnesses and their Criterion data are independent.
 
 The complete [432-case CSV](implementation-comparison.csv) records individual
 mean timings, 95% confidence bounds, throughput, and compressed bytes. All cases
-passed the C decoder oracle. Empty and tiny-input latency is included in the CSV;
-the diagrams show the six larger corpora. Throughput and output-size axes use
-logarithmic scales, as labeled.
+passed the C decoder oracle. The diagrams summarize all eight datasets,
+including empty and tiny input, using vertical bars on linear axes from zero.
+This is the earlier run; [current results](README.md) use the later 30-sample run.
+
+### Median speed and size
+
+![Median speed and output relative to C across all datasets](implementation-comparison/tradeoff.svg)
+
+For each dataset, speed / C is C mean latency divided by the encoder's mean
+latency; output / C is encoder bytes divided by C bytes. Each summary is the
+median of eight ratios with equal dataset weight. Qualities are ordered by
+mbrotli median speed / C, highest first. Burli has results only through q5.
+The medians describe datasets, not Criterion timing samples; they do not imply
+statistical significance or equal compressed size.
 
 On **Alice at q5** (152,089 input bytes):
 
@@ -31,31 +42,23 @@ measured 4,544.82 MiB/s versus C's 1,980.79 MiB/s, both producing 13 bytes.
 At q11 on Alice, SIMD Brotli measured 1.33 MiB/s versus C's 1.09 MiB/s, producing
 46,493 versus 46,487 bytes. These are individual measurements from this run.
 
-### Throughput by quality
+### Median speed by quality
 
-Higher is faster. Shading transforms each latency mean's 95% confidence bounds
-into throughput bounds. Burli's line ends at q5 because q6–q11 are unsupported.
+Higher is faster; 1× matches C. These are medians of per-dataset timing ratios.
+Individual timing confidence bounds remain in the CSV; no confidence interval
+is inferred for an across-dataset median.
 
-![Throughput by quality across six corpora](implementation-comparison/throughput.svg)
+![Median speed relative to C by quality](implementation-comparison/throughput.svg)
 
-### Compressed size by quality
+### Median output size by quality
 
-Lower is smaller. These are validated output lengths, with no timing uncertainty.
-Size panels avoid zooming in on sub-percent differences in incompressible data.
+Lower is smaller; 1× matches C. Each bar is the median of output / C across all
+eight datasets. Exact byte lengths remain available in the CSV.
 For example, Alice at q0 produces 65,795 bytes with C and `mbrotli`, 78,217 with
 Rust Brotli and SIMD Brotli, and 82,431 with Burli. Native API scheduling matters
 to the comparison, as explained below.
 
-![Compressed output bytes by quality across six corpora](implementation-comparison/size.svg)
-
-### Speed versus size
-
-Upward is faster; leftward is smaller. Each point is a measured quality;
-selected `mbrotli` points are labeled to keep overlapping labels legible.
-Lines connect qualities within one implementation;
-they do not imply interpolation between supported settings.
-
-![Throughput versus compressed fraction across six corpora](implementation-comparison/tradeoff.svg)
+![Median output size relative to C by quality](implementation-comparison/size.svg)
 
 ## Reproduction
 

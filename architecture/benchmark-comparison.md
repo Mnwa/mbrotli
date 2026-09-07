@@ -17,10 +17,17 @@ graph TD
     Core --> Competitors[brotli, simd-brotli, burli]
     Core --> Criterion[isolated target/criterion]
     Criterion --> Export[report.py: complete matrix CSV]
-    Export --> Plot[plot.py: throughput, size, tradeoff SVGs]
+    Export --> Plot[plot.py: median speed, size, paired overview bars]
     Export --> QualityDocs[quality_docs.py: validate and group recorded rows]
-    QualityDocs --> Pages[12 quality pages and 96 dataset SVGs]
+    QualityDocs --> Medians[per-dataset ratios to C, then median across all 8 datasets]
+    Medians --> Order[qualities sorted by mbrotli median speed / C]
+    Order --> Overview[generated median overview and 12 median SVGs]
+    QualityDocs --> Rank[datasets sorted by mbrotli speed / fastest peer]
+    Rank --> Pages[12 quality pages and 96 vertical dataset SVGs]
+    Plot --> Medians
+    Matched[separate 96-case before-after CSV] --> BeforeAfter[plot.py: ranked vertical speedup bars]
     Index[docs/benchmarks/README.md] --> Pages
+    Index --> Overview
     Index --> Reports[dated run reports and raw data]
     Old[existing benches] --> OldResults[root target/criterion]
 ```
@@ -73,23 +80,42 @@ It checks throughput input lengths and rejects duplicate or incomplete records.
 Its 432-row export includes latency confidence bounds, throughput, speed relative
 to C, and output sizes. Existing 95%-of-C gates use only the original benchmarks.
 
-`plot.py` reads the exported CSV and uses Matplotlib to write three standalone
-SVG figures covering six nontrivial corpora. Throughput bands transform the
-reported latency confidence bounds; size curves show actual compressed bytes.
-Tradeoff curves relate throughput to compressed fraction and label selected
-qualities. No timings are computed from charts or pooled across corpora.
+`plot.py` uses the same complete-matrix validator and median helpers as
+`quality_docs.py`. It writes three standalone SVG figures: speed medians, output
+size medians, and a paired overview. For each quality and encoder, speed ratios
+are C mean latency / encoder mean latency, and size ratios are encoder bytes /
+C bytes for the same dataset. Each median uses all eight per-dataset ratios with
+equal weight, including empty input. For eight values the median averages the
+fourth and fifth sorted values. These are not medians of Criterion samples, nor
+ratios of pooled times or bytes. The summary does not infer confidence bounds.
+Qualities are ordered by descending mbrotli median speed / C, with numeric
+quality order breaking ties. Burli is absent above q5, never represented as zero.
+The filenames `throughput.svg`, `size.svg`, and `tradeoff.svg` are retained for
+existing links, but all three now show normalized medians on vertical bars.
+
+The optional matched before/after renderer validates 96 unique cases and shows
+before mean / after mean per quality. It ranks corpus panels by median speedup
+across qualities, retaining the declared corpus order on ties. This separate
+run is never pooled with the five-encoder summary.
 
 `quality_docs.py` reads one complete CSV and its environment record, validates
 unique supported quality/dataset/encoder keys, finite positive timing bounds,
 consistent input lengths, and window settings, then writes twelve Markdown
-pages under `docs/benchmarks/qualities/`. Each page contains an eight-dataset
-summary plus individual charts and tables. Charts show mean latency for empty
-and tiny input, throughput for larger inputs, and compressed bytes from a zero
-baseline. Timing whiskers retain the recorded confidence bounds. Empty input
-has no defined throughput or compressed fraction; Burli is omitted above q5.
-Summaries preserve ties and label lowest means without claiming significance.
-The results index connects these pages to the existing reports and raw data;
-generation does not run encoders, alter measurements, or replace older reports.
+pages and a median overview under `docs/benchmarks/qualities/`. Each page starts
+with median speed/size bars and a table, then shows all eight dataset charts.
+Datasets are ordered by fastest peer mean latency / mbrotli mean latency,
+descending, with declared corpus order breaking ties. The peer excludes mbrotli
+so leads above 1× remain distinguishable. Exact tables and measurement setup
+use Markdown details blocks. All 432 measurements remain accessible.
+
+Every bar is vertical on a linear axis starting at zero, with consistent encoder
+colors and labeled values. Dataset charts show mean latency for empty and tiny
+input, throughput for larger inputs, and exact compressed bytes. Timing whiskers
+retain recorded confidence bounds; throughput bounds invert latency bounds.
+Empty input has no defined throughput or compressed fraction, but its relative
+latency and output / C are defined and included in the medians. Rankings do not
+claim significance or equal compressed size. Generation does not run encoders
+or alter CSVs and environment records. Older report charts use their own CSV.
 
 ## Known gaps
 
