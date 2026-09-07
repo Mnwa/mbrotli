@@ -173,8 +173,12 @@ Three bounds shape what it finds, all from the reference:
 
 ```mermaid
 flowchart TD
-    A["find_all_matches at cur_ix"] --> B["short backward scan<br/>(16 or 64 positions)"]
-    B --> C{"best_len < max_length?"}
+    A["find_all_matches at cur_ix"] --> B["scan_recent_positions<br/>(16 or 64 positions, nearest first)"]
+    B --> B1{"candidates contiguous<br/>in the ring?"}
+    B1 -->|yes| B2["u8x32 compare of the two<br/>leading bytes; measure the<br/>agreeing lanes, top lane first"]
+    B1 -->|"no (wrap, buffer end)"| B3["byte-by-byte walk"]
+    B2 --> B3
+    B3 --> C{"best_len < max_length?"}
     C -->|no| F["static dictionary"]
     C -->|yes| D["store_and_find_matches"]
     D --> E{"lookahead >= 128?"}
@@ -189,6 +193,21 @@ The short backward scan exists because the tree indexes four-byte prefixes and
 therefore cannot see a two- or three-byte repeat at all. It stops *above* its
 lower bound, so the oldest position in range is never examined — a reference
 quirk the port reproduces.
+
+`scan_recent_positions` runs that scan. A candidate whose first two bytes
+disagree with the current position cannot match, so while the candidates lie
+contiguously below `cur_ix` in the ring, their leading bytes are compared
+thirty-two at a time (`u8x32::simd_eq` against two splats, one bitmask) and
+only the agreeing lanes are measured with `find_match_length`. Lanes are
+visited from the top, which is the nearest candidate, and the walk still ends
+at the first match of three bytes or more, so the matches and their order are
+exactly the reference's. A window that wraps around the ring, or lies within
+two bytes of the buffer's end, or a span the vector loop could not cover, falls
+through to the byte-by-byte walk. At quality eleven this filter removed about
+150 million of the 278 million instructions the search spent on Alice, most of
+it the two-byte compare of sixty-three candidates per position; `byte_walk` in
+the tests is the transcribed reference loop, and the vector scan is compared
+against it on every backend, with and without wrapping, over five corpora.
 
 `store_range` sparsifies: positions older than the last sixty-three are stored
 every eighth position, and only once the range spans more than 512. A range
@@ -222,6 +241,36 @@ At each position `update_nodes` does two things, in this order:
    freshest — it measures the match and prices every copy length it allows.
 2. **Tree matches.** From the two cheapest start positions only, because a
    further start with the same distances rarely pays.
+
+The cached-distance loop is the hottest code at quality eleven: sixteen probes
+for each of up to five start positions at every byte, about 24 million probe
+iterations for Alice. It is written to keep that iteration short while making
+the reference's decisions:
+
+- `CACHE_PROBES` packs `kDistanceCacheIndex` and `kDistanceCacheOffset` into
+  one byte pair per code, so a probe is one load.
+- `backward.wrapping_sub(1) < max_distance` admits exactly the distances the
+  reference's three tests admit — `backward > dictionary_start + gap`,
+  `backward <= max_distance`, and `prev_ix >= cur_ix` — because a zero distance
+  wraps below the bound, a negative one wraps above it, and `max_distance` is
+  never more than `dictionary_start`. Everything else goes to the cold
+  `prefix_copy_length`, which holds the attached-prefix arm and the gray-area
+  skip of §11.
+- The ring is probed through `window = ringbuffer[..=mask]`, so "would the copy
+  run past the mask" and the slice bound are one `get`. The continuation byte
+  is read once per probe rather than the reference's compare-then-index.
+- The lengths a match newly reaches are priced by iterating the node slice
+  `pos + best_len + 1 ..= pos + len` and calling `ZopfliNode::record` on each
+  node, instead of indexing `nodes[pos + l]` per length; the tree-match loop
+  does the same over `pos + len ..= pos + max_match_len`.
+- A counted `while` over the probe table rather than an iterator: measured
+  with callgrind, the `enumerate` form carried twice the loop overhead, and
+  the loop body now runs in about 23 instructions with a spill-free register
+  set (it was 33, with seven stack reloads per probe).
+
+Alice at quality eleven fell from 2.10 to 1.71 billion instructions with
+these two changes together, against 1.92 for the C reference in the same
+binary, and the command stream is unchanged.
 
 Two shortcuts keep it tractable. `compute_minimum_copy_length` refuses to price
 a copy shorter than one already known to reach its destination more cheaply.
@@ -335,7 +384,9 @@ on that concrete token; no block reselects the backend. `update_nodes` and
 `BinaryTreeMatcher::find_all_matches` also enter their specialized feature
 contexts through always-inlined closures, allowing comparisons to inline within
 these separately compiled functions. The tree traversal is always inlined into
-`find_all_matches` or the feature-enabled `store` body. Copy extension uses the shared retained
+`find_all_matches` or the feature-enabled `store` body, and `scan_recent_positions`
+takes the same token for its `u8x32` prefilter, which every backend implements
+(the fallback lane by lane). Copy extension uses the shared retained
 `Kernels::extend` entry described in [encoder workspace](encoder-workspace.md).
 
 ```mermaid
@@ -444,9 +495,10 @@ them the reference's:
 2. **Cached distances.** `update_nodes` gains the branch that the reference's
    comment calls the way out of the "gray area": a cached distance past
    `max_distance` but at most `dictionary_start` is unusable, while one past
-   `dictionary_start` addresses the prefix and is measured against it. Without
-   an attachment `gap` is zero, the second branch is unreachable, and the loop
-   is exactly what it was.
+   `dictionary_start` addresses the prefix and is measured against it. That
+   branch lives in `prefix_copy_length`, the cold arm the probe loop takes
+   for every distance outside `1..=max_distance`. Without an attachment `gap`
+   is zero, the prefix path is unreachable, and the arm only skips.
 3. **Coding.** `gap` shifts `dictionary_start` everywhere a distance is
    classified, so `create_commands` marks a prefix reference as a dictionary
    reference and leaves the distance cache alone, and `evaluate_node`'s

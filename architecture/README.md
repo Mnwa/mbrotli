@@ -16,7 +16,7 @@ and known gaps. For usage examples, start with the [user guide](../docs/README.m
 | [Parallel compression](parallel-compression.md) | Independent segments, caller-run tasks, sources, staging, and assembly. |
 | [Fast encoder](fast-encoder.md) | Quality 0–1 fragment encoding, proven tiny-final raw shortcut, entropy codes, and specialized SIMD scans. |
 | [Greedy encoder](greedy-encoder.md) | Quality 2–9 matchers, specialized SIMD feature contexts, command generation, and meta-block construction. |
-| [High-quality encoder](hq-encoder.md) | Quality 10–11 binary-tree search, SIMD block assignment with exact ties, dynamic programming, and clustering. |
+| [High-quality encoder](hq-encoder.md) | Quality 10–11 binary-tree search with a vector short scan, SIMD block assignment with exact ties, the dynamic program and its distance-cache loop, and clustering. |
 | [Shared Brotli](shared-brotli.md) | Large Window headers, retained history, and prepared prefix dictionaries. |
 | [Serialized dictionaries](serialized-dictionary.md) | Experimental parsing, serialization, transforms, and resource limits. |
 | [Custom encoding and continuations](rfc9841-encoding.md) | Experimental static indexes, context combinations, and stream offsets. |

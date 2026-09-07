@@ -12,7 +12,7 @@
 //! above relies on: it walks the matches expecting each to be longer than the
 //! last.
 
-use fearless_simd::Simd;
+use fearless_simd::{Simd, SimdBase, SimdMask, u8x32};
 
 use crate::compressor::core::shared::constants::{HASH_MUL32, WINDOW_GAP};
 use crate::compressor::core::shared::dictionary::MAX_STATIC_DICTIONARY_MATCH_LEN;
@@ -132,6 +132,108 @@ pub(crate) struct BinaryTreeMatcher {
     /// stream never stored are never followed, so a forest kept from an
     /// earlier stream needs no clearing.
     forest: Vec<u32>,
+}
+
+/// Candidate positions the short scan filters per vector compare.
+const SHORT_SCAN_LANES: usize = 32;
+
+/// Examines the positions just before `cur_ix`, nearest first, recording every
+/// two-byte agreement that extends further than the last (the opening loop of
+/// `FindAllMatches`). Returns the longest length found, or one.
+///
+/// A candidate whose first two bytes disagree with the current position cannot
+/// match at all, so while the candidates lie contiguously in the ring their
+/// leading bytes are compared thirty-two at a time and only the lanes that
+/// agree are measured. The agreeing lanes are still visited nearest first, and
+/// the walk still stops at the first match of three bytes or more, so exactly
+/// the matches of the reference's byte-by-byte walk are recorded in its order.
+/// Candidates the vector loop cannot reach — a window that wraps around the
+/// ring, or one within two bytes of the buffer's end — take that walk instead.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the scan needs every bound FindAllMatches was given"
+)]
+#[inline(always)]
+fn scan_recent_positions<S: Simd>(
+    simd: S,
+    data: &[u8],
+    ring_buffer_mask: usize,
+    cur_ix: usize,
+    max_length: usize,
+    max_backward: usize,
+    short_scan: usize,
+    matches: &mut Vec<BackwardMatch>,
+) -> usize {
+    let cur_ix_masked = cur_ix & ring_buffer_mask;
+    let mut best_len = 1usize;
+    // The distances the reference's `for (i = cur_ix - 1; i > stop; --i)`
+    // visits before its backward limit stops it. At position zero `i` wraps,
+    // and the limit of zero ends the walk before anything is read; here that
+    // is simply an empty span.
+    let span = short_scan
+        .saturating_sub(1)
+        .min(cur_ix.saturating_sub(1))
+        .min(max_backward);
+    let mut backward = 1usize;
+
+    if let (Some(&first), Some(&second)) = (data.get(cur_ix_masked), data.get(cur_ix_masked + 1)) {
+        let first = u8x32::splat(simd, first);
+        let second = u8x32::splat(simd, second);
+        while backward <= span && best_len <= 2 {
+            // Lane `l` of the block holds the candidate at distance
+            // `backward + 31 - l`, so the nearest candidate sits in the top
+            // lane. A block that would start before the buffer — the window
+            // has wrapped, or the position is too close to its start — is
+            // left to the byte-by-byte walk below.
+            let Some(base) = cur_ix_masked.checked_sub(backward + SHORT_SCAN_LANES - 1) else {
+                break;
+            };
+            let (Some(head), Some(next)) = (
+                data.get(base..)
+                    .and_then(<[u8]>::first_chunk::<SHORT_SCAN_LANES>),
+                data.get(base + 1..)
+                    .and_then(<[u8]>::first_chunk::<SHORT_SCAN_LANES>),
+            ) else {
+                break;
+            };
+            let agree = u8x32::load_array_ref(simd, head).simd_eq(first)
+                & u8x32::load_array_ref(simd, next).simd_eq(second);
+            let mut lanes = agree.to_bitmask() as u32;
+            // Distances past the span occupy the low lanes; drop them.
+            let remaining = span - backward + 1;
+            if remaining < SHORT_SCAN_LANES {
+                lanes &= u32::MAX << (SHORT_SCAN_LANES - remaining);
+            }
+            while lanes != 0 && best_len <= 2 {
+                let lane = (SHORT_SCAN_LANES - 1) - lanes.leading_zeros() as usize;
+                lanes &= !(1u32 << lane);
+                let distance = backward + (SHORT_SCAN_LANES - 1) - lane;
+                let len = find_match_length(simd, data, base + lane, cur_ix_masked, max_length);
+                if len > best_len {
+                    best_len = len;
+                    matches.push(BackwardMatch::new(distance, len));
+                }
+            }
+            backward += SHORT_SCAN_LANES;
+        }
+    }
+
+    // Whatever the vector loop could not cover, exactly as the reference
+    // walks it: two bytes compared, then measured only when they agree.
+    while backward <= span && best_len <= 2 {
+        let prev_ix = cur_ix.wrapping_sub(backward) & ring_buffer_mask;
+        if data.get(cur_ix_masked) == data.get(prev_ix)
+            && data.get(cur_ix_masked + 1) == data.get(prev_ix + 1)
+        {
+            let len = find_match_length(simd, data, prev_ix, cur_ix_masked, max_length);
+            if len > best_len {
+                best_len = len;
+                matches.push(BackwardMatch::new(backward, len));
+            }
+        }
+        backward += 1;
+    }
+    best_len
 }
 
 impl BinaryTreeMatcher {
@@ -356,34 +458,20 @@ impl BinaryTreeMatcher {
             || {
                 let start = matches.len();
                 let cur_ix_masked = cur_ix & ring_buffer_mask;
-                let mut best_len = 1usize;
 
                 // A short backward scan first: nearby two-byte repeats are cheap to
                 // find and the tree, which only indexes four-byte prefixes, misses
                 // them entirely.
-                let stop = cur_ix.saturating_sub(short_scan);
-                // At position zero `index` wraps, exactly as the reference's `size_t`
-                // does; the backward limit is zero there, so the first test breaks out
-                // before anything is read.
-                let mut index = cur_ix.wrapping_sub(1);
-                while index > stop && best_len <= 2 {
-                    let backward = cur_ix.wrapping_sub(index);
-                    if backward > max_backward {
-                        break;
-                    }
-                    let prev_ix = index & ring_buffer_mask;
-                    index = index.wrapping_sub(1);
-                    if data.get(cur_ix_masked) != data.get(prev_ix)
-                        || data.get(cur_ix_masked + 1) != data.get(prev_ix + 1)
-                    {
-                        continue;
-                    }
-                    let len = find_match_length(simd, data, prev_ix, cur_ix_masked, max_length);
-                    if len > best_len {
-                        best_len = len;
-                        matches.push(BackwardMatch::new(backward, len));
-                    }
-                }
+                let mut best_len = scan_recent_positions(
+                    simd,
+                    data,
+                    ring_buffer_mask,
+                    cur_ix,
+                    max_length,
+                    max_backward,
+                    short_scan,
+                    matches,
+                );
 
                 if best_len < max_length {
                     self.store_and_find_matches(
@@ -634,6 +722,101 @@ mod tests {
         data.extend_from_slice(&body);
         data.extend_from_slice(&[0u8; 256]);
         data
+    }
+
+    /// The reference's byte-by-byte short scan, as the oracle for the vector
+    /// one: `FindAllMatches`'s opening loop, transcribed.
+    fn byte_walk(
+        data: &[u8],
+        mask: usize,
+        cur_ix: usize,
+        max_length: usize,
+        max_backward: usize,
+        short_scan: usize,
+    ) -> (usize, Vec<BackwardMatch>) {
+        let simd = fearless_simd::Fallback::new();
+        let cur_ix_masked = cur_ix & mask;
+        let stop = cur_ix.saturating_sub(short_scan);
+        let mut index = cur_ix.wrapping_sub(1);
+        let mut best_len = 1usize;
+        let mut out = Vec::new();
+        while index > stop && best_len <= 2 {
+            let backward = cur_ix.wrapping_sub(index);
+            if backward > max_backward {
+                break;
+            }
+            let prev_ix = index & mask;
+            index = index.wrapping_sub(1);
+            if data.get(cur_ix_masked) != data.get(prev_ix)
+                || data.get(cur_ix_masked + 1) != data.get(prev_ix + 1)
+            {
+                continue;
+            }
+            let len = find_match_length(simd, data, prev_ix, cur_ix_masked, max_length);
+            if len > best_len {
+                best_len = len;
+                out.push(BackwardMatch::new(backward, len));
+            }
+        }
+        (best_len, out)
+    }
+
+    #[test]
+    fn the_vector_short_scan_agrees_with_the_byte_walk_on_every_backend() {
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut random = |bound: u32| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 33) as u32 % bound
+        };
+        // Two symbols make two-byte agreements common and longer ones rare,
+        // so the scan visits many lanes; five symbols thin them out; the
+        // periodic and constant inputs end the scan at its first candidate.
+        let mut corpora = vec![
+            (0..1100)
+                .map(|_| b'a' + random(2) as u8)
+                .collect::<Vec<u8>>(),
+            (0..1100).map(|_| b'a' + random(5) as u8).collect(),
+            (0..1100u32).map(|i| (i % 5) as u8 + b'A').collect(),
+            vec![b'z'; 1100],
+        ];
+        corpora.push(repeated());
+
+        for level in [Level::new(), Level::baseline(), Level::fallback()] {
+            for data in &corpora {
+                // No wrap, then a ring of 512 whose positions wrap around it.
+                for mask in [usize::MAX, 511] {
+                    for short_scan in [0, 1, 2, 16, 33, 64] {
+                        for cur_ix in 0..data.len() - 8 {
+                            let cur_ix_masked = cur_ix & mask;
+                            let max_length = data.len() - cur_ix_masked - 1;
+                            for max_backward in [cur_ix, cur_ix.min(40), 0] {
+                                let expected = byte_walk(
+                                    data,
+                                    mask,
+                                    cur_ix,
+                                    max_length,
+                                    max_backward,
+                                    short_scan,
+                                );
+                                let mut found = Vec::new();
+                                let best = dispatch!(level, simd => scan_recent_positions(
+                                    simd, data, mask, cur_ix, max_length, max_backward,
+                                    short_scan, &mut found,
+                                ));
+                                assert_eq!(
+                                    (best, found),
+                                    expected,
+                                    "position {cur_ix}, mask {mask:#x}, scan {short_scan}, \
+                                     backward limit {max_backward}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

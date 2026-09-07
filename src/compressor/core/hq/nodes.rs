@@ -147,17 +147,16 @@ impl ZopfliNode {
         self.payload = next;
     }
 
-    /// Records a command arriving here from `start_pos` (`UpdateZopfliNode`).
-    ///
-    /// `nodes` is indexed from the start of the block; the command being
-    /// recorded runs from `start_pos` to `pos + len`.
+    /// Records the command arriving at this node, which sits `len` bytes past
+    /// `pos`: the copy of `len` bytes from `dist` back that follows the
+    /// literals since `start_pos`.
     #[expect(
         clippy::too_many_arguments,
         reason = "mirrors UpdateZopfliNode, whose parameters are all needed"
     )]
     #[inline(always)]
-    pub(crate) fn update(
-        nodes: &mut [Self],
+    pub(crate) fn record(
+        &mut self,
         pos: usize,
         start_pos: usize,
         len: usize,
@@ -166,22 +165,20 @@ impl ZopfliNode {
         short_code: usize,
         cost: f32,
     ) {
-        if let Some(next) = nodes.get_mut(pos + len) {
-            let modifier = (len + 9 - len_code) as u32;
-            // The built-in dictionary never reaches 96. These upper tags
-            // encode an absolute base length for long custom transforms.
-            #[cfg(feature = "experimental")]
-            let modifier = if modifier >= 96 {
-                96 + len_code as u32
-            } else {
-                modifier
-            };
-            next.length = (len as u32) | (modifier << LEN_CODE_SHIFT);
-            next.distance = dist as u32;
-            next.dcode_insert_length =
-                ((short_code as u32) << DCODE_SHIFT) | ((pos - start_pos) as u32);
-            next.set_cost(cost);
-        }
+        let modifier = (len + 9 - len_code) as u32;
+        // The built-in dictionary never reaches 96. These upper tags
+        // encode an absolute base length for long custom transforms.
+        #[cfg(feature = "experimental")]
+        let modifier = if modifier >= 96 {
+            96 + len_code as u32
+        } else {
+            modifier
+        };
+        self.length = (len as u32) | (modifier << LEN_CODE_SHIFT);
+        self.distance = dist as u32;
+        self.dcode_insert_length =
+            ((short_code as u32) << DCODE_SHIFT) | ((pos - start_pos) as u32);
+        self.set_cost(cost);
     }
 }
 
@@ -293,7 +290,7 @@ mod tests {
     #[test]
     fn a_node_round_trips_its_packed_fields() {
         let mut nodes = vec![ZopfliNode::default(); 64];
-        ZopfliNode::update(&mut nodes, 10, 4, 20, 20, 1234, 0, 7.5);
+        nodes[10 + 20].record(10, 4, 20, 20, 1234, 0, 7.5);
         let node = nodes[30];
         assert_eq!(node.copy_length(), 20);
         assert_eq!(node.length_code(), 20);
@@ -308,11 +305,11 @@ mod tests {
         // A transformed dictionary word codes as a different length from the
         // one it copies, in either direction.
         let mut nodes = vec![ZopfliNode::default(); 64];
-        ZopfliNode::update(&mut nodes, 0, 0, 10, 14, 9000, 0, 1.0);
+        nodes[10].record(0, 0, 10, 14, 9000, 0, 1.0);
         assert_eq!(nodes[10].copy_length(), 10);
         assert_eq!(nodes[10].length_code(), 14);
 
-        ZopfliNode::update(&mut nodes, 0, 0, 12, 9, 9000, 0, 1.0);
+        nodes[12].record(0, 0, 12, 9, 9000, 0, 1.0);
         assert_eq!(nodes[12].copy_length(), 12);
         assert_eq!(nodes[12].length_code(), 9);
     }
@@ -321,10 +318,10 @@ mod tests {
     fn a_short_distance_code_is_stored_one_higher() {
         let mut nodes = vec![ZopfliNode::default(); 64];
         // Short code zero — the last distance — is stored as one.
-        ZopfliNode::update(&mut nodes, 0, 0, 5, 5, 40, 1, 1.0);
+        nodes[5].record(0, 0, 5, 5, 40, 1, 1.0);
         assert_eq!(nodes[5].distance_code(), 0);
         // No short code means the distance is spelled out.
-        ZopfliNode::update(&mut nodes, 0, 0, 6, 6, 40, 0, 1.0);
+        nodes[6].record(0, 0, 6, 6, 40, 0, 1.0);
         assert_eq!(nodes[6].distance_code(), 40 + 15);
     }
 

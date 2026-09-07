@@ -32,17 +32,67 @@ use crate::compressor::core::shared::match_len::find_match_length;
 /// (`BROTLI_LONG_COPY_QUICK_STEP`).
 const LONG_COPY_QUICK_STEP: usize = 16_384;
 
-/// Which cache slot each of the sixteen short distance codes reads.
-///
-/// `kDistanceCacheIndex`, paired with [`DISTANCE_CACHE_OFFSET`]: the first four
-/// codes are the cached distances themselves, the next six are the freshest one
-/// nudged by up to three either way, and the last six do the same to the second
-/// freshest.
-const DISTANCE_CACHE_INDEX: [usize; 16] = [0, 1, 2, 3, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1];
+/// One short distance code's probe of the distance cache.
+#[derive(Copy, Clone)]
+struct CacheProbe {
+    /// Which of the four cached distances the code reads.
+    slot: u8,
+    /// What it adds to that distance.
+    offset: i8,
+}
 
-/// How much each short distance code adds to the cache entry it reads
-/// (`kDistanceCacheOffset`).
-const DISTANCE_CACHE_OFFSET: [i32; 16] = [0, 0, 0, 0, -1, 1, -2, 2, -3, 3, -1, 1, -2, 2, -3, 3];
+impl CacheProbe {
+    /// Returns the distance this probe reads from `cache`.
+    #[inline(always)]
+    fn distance(self, cache: &[i32; 4]) -> usize {
+        // The slot is always below four; the mask only spares a range check.
+        (cache[usize::from(self.slot) & 3] + i32::from(self.offset)) as usize
+    }
+}
+
+/// How each of the sixteen short distance codes reads the distance cache
+/// (`kDistanceCacheIndex` and `kDistanceCacheOffset`, kept together so the
+/// loop over them loads one byte pair per code).
+///
+/// The first four codes are the cached distances themselves, the next six are
+/// the freshest one nudged by up to three either way, and the last six do the
+/// same to the second freshest.
+const CACHE_PROBES: [CacheProbe; NUM_DISTANCE_SHORT_CODES as usize] = [
+    CacheProbe { slot: 0, offset: 0 },
+    CacheProbe { slot: 1, offset: 0 },
+    CacheProbe { slot: 2, offset: 0 },
+    CacheProbe { slot: 3, offset: 0 },
+    CacheProbe {
+        slot: 0,
+        offset: -1,
+    },
+    CacheProbe { slot: 0, offset: 1 },
+    CacheProbe {
+        slot: 0,
+        offset: -2,
+    },
+    CacheProbe { slot: 0, offset: 2 },
+    CacheProbe {
+        slot: 0,
+        offset: -3,
+    },
+    CacheProbe { slot: 0, offset: 3 },
+    CacheProbe {
+        slot: 1,
+        offset: -1,
+    },
+    CacheProbe { slot: 1, offset: 1 },
+    CacheProbe {
+        slot: 1,
+        offset: -2,
+    },
+    CacheProbe { slot: 1, offset: 2 },
+    CacheProbe {
+        slot: 1,
+        offset: -3,
+    },
+    CacheProbe { slot: 1, offset: 3 },
+];
 
 /// The mutable encoder state a Zopfli pass consumes and updates.
 pub(crate) struct ZopfliState {
@@ -261,6 +311,42 @@ struct UpdateContext<'a> {
     attached: Option<&'a SharedContextInner>,
 }
 
+/// Measures a cached distance that reaches past the window, or returns `None`
+/// when the reference would not price it.
+///
+/// The cold arm of `UpdateNodes`'s distance-cache loop: a distance beyond the
+/// window is either a static-dictionary reference, which the match list
+/// already covers, a copy from the attached prefix, or in the "gray" area a
+/// decoder could address but this encoder does not hold. Only the prefix copy
+/// is measured, and it stops at the end of the attachment it started in,
+/// exactly as the reference's `limit` does.
+#[cold]
+#[inline(never)]
+fn prefix_copy_length(
+    ctx: &UpdateContext<'_>,
+    backward: usize,
+    dictionary_start: usize,
+    best_len: usize,
+    continuation: u8,
+    cur_ix_masked: usize,
+    max_len: usize,
+) -> Option<usize> {
+    let gap = ctx.gap;
+    if backward > dictionary_start + gap || backward <= dictionary_start {
+        return None;
+    }
+    let sources = ctx.attached?.dictionaries().prefix();
+    let logical = (dictionary_start + gap - backward) as u64;
+    let (segment, offset) = sources.locate(logical)?;
+    let candidate = sources.segment(segment).get(offset..)?;
+    let limit = candidate.len().min(max_len);
+    if best_len >= limit || candidate.get(best_len) != Some(&continuation) {
+        return None;
+    }
+    let target = ctx.ringbuffer.get(cur_ix_masked..)?;
+    Some(prefix_match_length(candidate, target, limit))
+}
+
 /// Prices every command that could start at `pos`, returning the longest copy.
 ///
 /// Mirrors `UpdateNodes`. The two halves are the reference's: first the copies
@@ -289,6 +375,13 @@ fn update_nodes<S: Simd, const INDEPENDENT: bool>(
                 .logical_position(cur_ix)
                 .min(ctx.max_backward_limit);
             let max_len = ctx.num_bytes - pos;
+            // The addressable ring: a probe past its mask is the reference's
+            // out-of-window test, and a shorter buffer is never probed past
+            // what it holds.
+            let window = ctx
+                .ringbuffer
+                .get(..=ctx.ringbuffer_mask)
+                .unwrap_or(ctx.ringbuffer);
             let max_zopfli_len = ctx.params.max_zopfli_len();
             let max_iters = ctx.params.max_zopfli_candidates();
             let mut result = 0usize;
@@ -324,80 +417,68 @@ fn update_nodes<S: Simd, const INDEPENDENT: bool>(
 
                 // Copies reachable through this start position's distance cache.
                 let mut best_len = min_len - 1;
-                for j in 0..if INDEPENDENT {
-                    0
-                } else {
-                    NUM_DISTANCE_SHORT_CODES as usize
-                } {
-                    if best_len >= max_len {
+                // Indexed rather than iterated: the probe index is also the
+                // short distance code, and a counted loop keeps the body to a
+                // register's worth of state.
+                let mut j = 0usize;
+                while j < CACHE_PROBES.len() {
+                    // An independent fragment carries no distance cache.
+                    if INDEPENDENT || best_len >= max_len {
                         break;
                     }
-                    let idx = DISTANCE_CACHE_INDEX[j];
-                    let backward = (cache[idx] + DISTANCE_CACHE_OFFSET[j]) as usize;
-                    let prev_ix = cur_ix.wrapping_sub(backward);
-                    if cur_ix_masked + best_len > ctx.ringbuffer_mask {
+                    let code = j;
+                    j += 1;
+                    // The byte a longer copy would have to agree on; a copy
+                    // that would run off the ring ends the search.
+                    let Some(&continuation) = window.get(cur_ix_masked + best_len) else {
                         break;
-                    }
-                    let continuation = ctx.ringbuffer[cur_ix_masked + best_len];
-                    if backward > dictionary_start + gap {
-                        // A static-dictionary distance: the matches list covers those.
-                        continue;
-                    }
-                    let len = if backward <= max_distance {
-                        // An ordinary backward reference into the window.
-                        if prev_ix >= cur_ix {
-                            continue;
-                        }
-                        let prev_ix = prev_ix & ctx.ringbuffer_mask;
-                        if prev_ix + best_len > ctx.ringbuffer_mask
-                            || continuation != ctx.ringbuffer[prev_ix + best_len]
-                        {
-                            continue;
-                        }
-                        find_match_length(simd, ctx.ringbuffer, prev_ix, cur_ix_masked, max_len)
-                    } else if backward > dictionary_start {
-                        // Past the window and inside the attached prefix.
-                        let Some(context) = ctx.attached else {
-                            continue;
-                        };
-                        let sources = context.dictionaries().prefix();
-                        let logical = (dictionary_start + gap - backward) as u64;
-                        let Some((segment, offset)) = sources.locate(logical) else {
-                            continue;
-                        };
-                        let source = sources.segment(segment);
-                        let Some(candidate) = source.get(offset..) else {
-                            continue;
-                        };
-                        // The match stops at the end of the attachment it started in,
-                        // exactly as the reference's `limit` does.
-                        let limit = candidate.len().min(max_len);
-                        if best_len >= limit || candidate.get(best_len) != Some(&continuation) {
-                            continue;
-                        }
-                        let Some(target) = ctx.ringbuffer.get(cur_ix_masked..) else {
-                            continue;
-                        };
-                        prefix_match_length(candidate, target, limit)
+                    };
+                    let backward = CACHE_PROBES[code].distance(&cache);
+                    // One unsigned compare admits exactly `1..=max_distance`:
+                    // a zero distance wraps below it and a negative one wraps
+                    // above, and every ordinary window distance is also
+                    // within the dictionary bound the reference tests first.
+                    let found = if backward.wrapping_sub(1) < max_distance {
+                        // An ordinary backward reference into the window,
+                        // measured only when it can beat `best_len`.
+                        let prev_ix = (cur_ix - backward) & ctx.ringbuffer_mask;
+                        (window.get(prev_ix + best_len) == Some(&continuation)).then(|| {
+                            find_match_length(simd, ctx.ringbuffer, prev_ix, cur_ix_masked, max_len)
+                        })
                     } else {
-                        // "Gray" area: a decoder could address it, but this encoder
-                        // does not hold those bytes, so it must not look at them.
+                        prefix_copy_length(
+                            ctx,
+                            backward,
+                            dictionary_start,
+                            best_len,
+                            continuation,
+                            cur_ix_masked,
+                            max_len,
+                        )
+                    };
+                    let Some(len) = found else {
                         continue;
                     };
 
-                    let dist_cost = base_cost + model.distance_cost(j);
-                    for l in best_len + 1..=len {
+                    let dist_cost = base_cost + model.distance_cost(code);
+                    // Price every length the copy newly reaches. The node array
+                    // extends one past the block, so the range is always inside
+                    // it; an empty one prices nothing.
+                    let reached = nodes
+                        .get_mut(pos + best_len + 1..=pos + len)
+                        .unwrap_or_default();
+                    for (l, node) in (best_len + 1..).zip(reached) {
                         let copycode = copy_length_code(l);
-                        let cmdcode = combine_length_codes(inscode, copycode, j == 0);
+                        let cmdcode = combine_length_codes(inscode, copycode, code == 0);
                         let cost = if cmdcode < 128 { base_cost } else { dist_cost }
                             + COPY_EXTRA[usize::from(copycode)] as f32
                             + model.command_cost(cmdcode);
-                        if cost < nodes[pos + l].cost() {
-                            ZopfliNode::update(nodes, pos, start, l, l, backward, j + 1, cost);
+                        if cost < node.cost() {
+                            node.record(pos, start, l, l, backward, code + 1, cost);
                             result = result.max(l);
                         }
-                        best_len = l;
                     }
+                    best_len = best_len.max(len);
                 }
 
                 // Beyond the second start position only new cached distances help, and
@@ -432,22 +513,27 @@ fn update_nodes<S: Simd, const INDEPENDENT: bool>(
                     {
                         len = max_match_len;
                     }
-                    while len <= max_match_len {
-                        let len_code = if is_dictionary_match {
-                            m.length_code()
-                        } else {
-                            len
-                        };
-                        let copycode = copy_length_code(len_code);
-                        let cmdcode = combine_length_codes(inscode, copycode, false);
-                        let cost = dist_cost
-                            + COPY_EXTRA[usize::from(copycode)] as f32
-                            + model.command_cost(cmdcode);
-                        if cost < nodes[pos + len].cost() {
-                            ZopfliNode::update(nodes, pos, start, len, len_code, dist, 0, cost);
-                            result = result.max(len);
+                    if len <= max_match_len {
+                        let reached = nodes
+                            .get_mut(pos + len..=pos + max_match_len)
+                            .unwrap_or_default();
+                        for (l, node) in (len..).zip(reached) {
+                            let len_code = if is_dictionary_match {
+                                m.length_code()
+                            } else {
+                                l
+                            };
+                            let copycode = copy_length_code(len_code);
+                            let cmdcode = combine_length_codes(inscode, copycode, false);
+                            let cost = dist_cost
+                                + COPY_EXTRA[usize::from(copycode)] as f32
+                                + model.command_cost(cmdcode);
+                            if cost < node.cost() {
+                                node.record(pos, start, l, len_code, dist, 0, cost);
+                                result = result.max(l);
+                            }
                         }
-                        len += 1;
+                        len = max_match_len + 1;
                     }
                 }
             }
