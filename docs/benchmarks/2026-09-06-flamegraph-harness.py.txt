@@ -1,0 +1,24 @@
+from pathlib import Path
+import os,re,subprocess
+root=Path.cwd()
+s=(root/'benches/compress.rs').read_text()
+s=re.sub(r'const QUALITIES: \[Quality; 12\] = \[.*?\];','const QUALITIES: [Quality; 1] = [Quality::Q6];',s,flags=re.S)
+s=re.sub(r'const REPRESENTATIVE: \[Quality; 5\] = \[.*?\];','const REPRESENTATIVE: [Quality; 1] = [Quality::Q1];',s,flags=re.S)
+a=s.index('fn corpora() -> Vec<Corpus> {')
+b=s.index('\n}\n',a)+2
+s=s[:a]+'''fn corpora() -> Vec<Corpus> {
+    vec![
+        Corpus::new("binary-256KiB", binary(1 << 18)),
+        Corpus::new("incompressible-256KiB", incompressible(1 << 18)),
+    ]
+}'''+s[b:]
+s=s[:s.rindex('criterion_group!')]+'''criterion_group!(benches, bench_reused, bench_streaming);
+criterion_main!(benches);
+'''
+source=Path('/tmp/mbrotli-flamegraph-harness.rs'); source.write_text(s)
+deps=Path('/tmp/mbrotli-profile-target/release/deps')
+cmd=['rustc','--edition=2024','-Copt-level=3','-Cdebuginfo=1','-Cforce-frame-pointers=yes','-Clink-arg=-Wl,--no-rosegment','--crate-name','compress_profile',str(source),'-L','dependency='+str(deps),'-o','/tmp/mbrotli-flamegraph-harness']
+for name in ['mbrotli','criterion','google_brotli_ffi']:
+    p=max(deps.glob('lib'+name+'-*.rlib'),key=lambda p:p.stat().st_mtime)
+    cmd+=['--extern',name+'='+str(p)]
+subprocess.run(cmd,env=dict(os.environ,CARGO_MANIFEST_DIR=str(root)),check=True)

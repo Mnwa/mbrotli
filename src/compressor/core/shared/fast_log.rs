@@ -15,12 +15,24 @@ pub(crate) const fn log2_floor_non_zero(value: usize) -> u32 {
 }
 
 /// Reference logarithm with `log2(0) == 0` (`FastLog2`).
+///
+/// The table covers every count an entropy sum meets in practice; the
+/// library call for larger values is kept out of line and marked cold so
+/// the loops summing entropies keep their accumulators in registers rather
+/// than spilling them around a call they almost never make.
 #[inline]
 pub(crate) fn fast_log2(value: usize) -> f64 {
     match LOG2_TABLE.get(value) {
         Some(&entry) => entry,
-        None => (value as f64).log2(),
+        None => log2_beyond_table(value),
     }
+}
+
+/// The logarithm of a value past the table's end.
+#[cold]
+#[inline(never)]
+fn log2_beyond_table(value: usize) -> f64 {
+    (value as f64).log2()
 }
 
 #[cfg(test)]

@@ -1,0 +1,33 @@
+# Run from the repository root. Tools and data are local to /tmp.
+
+CARGO_PROFILE_RELEASE_DEBUG=1 CFLAGS='-g -fno-omit-frame-pointer' RUSTFLAGS='-Cforce-frame-pointers=yes -Clink-arg=-Wl,--no-rosegment' CARGO_TARGET_DIR=/tmp/mbrotli-profile-target cargo bench --bench compress --locked --no-run
+
+python3 docs/benchmarks/2026-09-06-flamegraph-harness.py.txt
+
+# q6-rust: run in its own output directory to preserve perf.data
+
+mkdir -p /tmp/mbrotli-flamegraphs/q6-rust
+cd /tmp/mbrotli-flamegraphs/q6-rust
+PERF=/tmp/mbrotli-perf-tools/extracted/usr/lib/linux-tools-5.15.0-191/perf /tmp/mbrotli-profiler-tools/bin/flamegraph --no-inline -o /tmp/mbrotli-flamegraphs/q6-rust/flamegraph.svg -c 'record -e cpu-clock:u -F 499 --call-graph dwarf,16384' -- /tmp/mbrotli-flamegraph-harness --bench '^reused/q6/mbrotli/binary-256KiB$' --profile-time 15
+
+# q6-c: run in its own output directory to preserve perf.data
+
+mkdir -p /tmp/mbrotli-flamegraphs/q6-c
+cd /tmp/mbrotli-flamegraphs/q6-c
+PERF=/tmp/mbrotli-perf-tools/extracted/usr/lib/linux-tools-5.15.0-191/perf /tmp/mbrotli-profiler-tools/bin/flamegraph --no-inline -o /tmp/mbrotli-flamegraphs/q6-c/flamegraph.svg -c 'record -e cpu-clock:u -F 499 --call-graph dwarf,16384' -- /tmp/mbrotli-flamegraph-harness --bench '^reused/q6/c-brotli/binary-256KiB$' --profile-time 15
+
+# q1-reader: run in its own output directory to preserve perf.data
+
+mkdir -p /tmp/mbrotli-flamegraphs/q1-reader
+cd /tmp/mbrotli-flamegraphs/q1-reader
+PERF=/tmp/mbrotli-perf-tools/extracted/usr/lib/linux-tools-5.15.0-191/perf /tmp/mbrotli-profiler-tools/bin/flamegraph --no-inline -o /tmp/mbrotli-flamegraphs/q1-reader/flamegraph.svg -c 'record -e cpu-clock:u -F 499 --call-graph dwarf,16384' -- /tmp/mbrotli-flamegraph-harness --bench '^streaming/q1/mbrotli-reader/incompressible-256KiB$' --profile-time 15
+
+# q1-c: run in its own output directory to preserve perf.data
+
+mkdir -p /tmp/mbrotli-flamegraphs/q1-c
+cd /tmp/mbrotli-flamegraphs/q1-c
+PERF=/tmp/mbrotli-perf-tools/extracted/usr/lib/linux-tools-5.15.0-191/perf /tmp/mbrotli-profiler-tools/bin/flamegraph --no-inline -o /tmp/mbrotli-flamegraphs/q1-c/flamegraph.svg -c 'record -e cpu-clock:u -F 499 --call-graph dwarf,16384' -- /tmp/mbrotli-flamegraph-harness --bench '^streaming/q1/c-brotli/incompressible-256KiB$' --profile-time 15
+
+# The delivered SVGs additionally use matching libc symbols and normalized sample counts.
+
+# Raw record/render command JSON files are beside each perf.data recording.

@@ -74,19 +74,53 @@ pub(crate) trait Kernels: Send + Sync {
 }
 
 /// The boxed proof tokens are zero-sized for all currently supported backends.
-struct Selected<S, const INDEPENDENT: bool>(S);
+///
+/// `S` is the level the fragment, copy-extension and high-quality kernels
+/// run at; `G` the level the greedy loops run at, see [`boxed`].
+struct Selected<S, G, const INDEPENDENT: bool> {
+    simd: S,
+    greedy: G,
+}
+
+/// Boxes the kernels for the token `simd`, choosing the greedy loops' level.
+///
+/// The greedy loops are scalar but for one byte-equality mask per search,
+/// which SSE2 already provides. Compiling them for every x86 level would
+/// multiply their code — a quarter of the crate — without a faster
+/// instruction to show for it, so every x86 token hands them SSE2. The
+/// scalar backend keeps them scalar, as the unfiltered oracle; other
+/// architectures keep their own level.
+fn boxed<S: Simd, const INDEPENDENT: bool>(simd: S) -> Box<dyn Kernels> {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        if let Some(sse2) = simd.level().as_sse2() {
+            return Box::new(Selected::<S, fearless_simd::Sse2, INDEPENDENT> {
+                simd,
+                greedy: sse2,
+            });
+        }
+        Box::new(Selected::<S, fearless_simd::Fallback, INDEPENDENT> {
+            simd,
+            greedy: fearless_simd::Fallback::new(),
+        })
+    }
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    {
+        Box::new(Selected::<S, S, INDEPENDENT> { simd, greedy: simd })
+    }
+}
 
 /// Resolves the backend once, when a retained encoder is constructed.
 pub(crate) fn select(level: Level) -> Box<dyn Kernels> {
-    dispatch!(level, simd => Box::new(Selected::<_, false>(simd)) as Box<dyn Kernels>)
+    dispatch!(level, simd => boxed::<_, false>(simd))
 }
 
 /// Selects isolated fragment kernels once per worker allocation.
 pub(crate) fn select_independent(level: Level) -> Box<dyn Kernels> {
-    dispatch!(level, simd => Box::new(Selected::<_, true>(simd)) as Box<dyn Kernels>)
+    dispatch!(level, simd => boxed::<_, true>(simd))
 }
 
-impl<S: Simd, const INDEPENDENT: bool> Kernels for Selected<S, INDEPENDENT> {
+impl<S: Simd, G: Simd, const INDEPENDENT: bool> Kernels for Selected<S, G, INDEPENDENT> {
     fn fast(
         &self,
         core: &mut FastCore,
@@ -95,16 +129,16 @@ impl<S: Simd, const INDEPENDENT: bool> Kernels for Selected<S, INDEPENDENT> {
         table: &mut [i32],
         writer: &mut BitWriter<'_>,
     ) {
-        self.0.vectorize(
+        self.simd.vectorize(
             #[inline(always)]
-            || encode_fragment::<_, INDEPENDENT>(self.0, core, input, is_last, table, writer),
+            || encode_fragment::<_, INDEPENDENT>(self.simd, core, input, is_last, table, writer),
         );
     }
 
     fn extend(&self, input: CommandExtension<'_>) {
-        self.0.vectorize(
+        self.simd.vectorize(
             #[inline(always)]
-            || extend_last_command(self.0, input),
+            || extend_last_command(self.simd, input),
         );
     }
 
@@ -116,9 +150,9 @@ impl<S: Simd, const INDEPENDENT: bool> Kernels for Selected<S, INDEPENDENT> {
         table: &mut [i32],
         writer: &mut BitWriter<'_, Vec<u8>>,
     ) {
-        self.0.vectorize(
+        self.simd.vectorize(
             #[inline(always)]
-            || encode_fragment::<_, INDEPENDENT>(self.0, core, input, is_last, table, writer),
+            || encode_fragment::<_, INDEPENDENT>(self.simd, core, input, is_last, table, writer),
         );
     }
 
@@ -132,7 +166,7 @@ impl<S: Simd, const INDEPENDENT: bool> Kernels for Selected<S, INDEPENDENT> {
             references,
             commands,
         } = input;
-        self.0.vectorize(
+        self.greedy.vectorize(
             #[inline(always)]
             || match attached {
                 None => with_matcher!(matcher, |finder| create_backward_references::<
@@ -141,7 +175,14 @@ impl<S: Simd, const INDEPENDENT: bool> Kernels for Selected<S, INDEPENDENT> {
                     false,
                     INDEPENDENT,
                 >(
-                    self.0, finder, params, window, span, None, references, commands
+                    self.greedy,
+                    finder,
+                    params,
+                    window,
+                    span,
+                    None,
+                    references,
+                    commands
                 )),
                 Some(_) => {
                     with_matcher!(matcher, |finder| create_backward_references::<
@@ -150,7 +191,14 @@ impl<S: Simd, const INDEPENDENT: bool> Kernels for Selected<S, INDEPENDENT> {
                         true,
                         INDEPENDENT,
                     >(
-                        self.0, finder, params, window, span, attached, references, commands
+                        self.greedy,
+                        finder,
+                        params,
+                        window,
+                        span,
+                        attached,
+                        references,
+                        commands
                     ))
                 }
             },
@@ -168,11 +216,11 @@ impl<S: Simd, const INDEPENDENT: bool> Kernels for Selected<S, INDEPENDENT> {
             workspace,
             commands,
         } = input;
-        self.0.vectorize(
+        self.simd.vectorize(
             #[inline(always)]
             || match params.quality {
                 HqQuality::Q10 => create_zopfli_backward_references::<_, INDEPENDENT>(
-                    self.0,
+                    self.simd,
                     span.bytes as usize,
                     span.position as usize,
                     window.data,
@@ -185,7 +233,7 @@ impl<S: Simd, const INDEPENDENT: bool> Kernels for Selected<S, INDEPENDENT> {
                     commands,
                 ),
                 HqQuality::Q11 => create_hq_zopfli_backward_references::<_, INDEPENDENT>(
-                    self.0,
+                    self.simd,
                     span.bytes as usize,
                     span.position as usize,
                     window.data,
@@ -208,11 +256,11 @@ impl<S: Simd, const INDEPENDENT: bool> Kernels for Selected<S, INDEPENDENT> {
         position: usize,
         window: Window<'_>,
     ) {
-        self.0.vectorize(
+        self.simd.vectorize(
             #[inline(always)]
             || {
                 matcher.stitch_to_previous_block(
-                    self.0,
+                    self.simd,
                     input_size,
                     position,
                     window.data,

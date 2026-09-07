@@ -167,14 +167,16 @@ matchers take `block_bits = quality - 1`, and the chain matchers take
 | `H5` | 4 | 14 (q5, q6) or 15 | `1 << (quality - 1)` | yes |
 | `H6` | 8 | 15 | `1 << (quality - 1)` | yes |
 
-Each plan is a distinct Rust type — `QuickMatcher<BUCKET_BITS, SWEEP_BITS,
-HASH_LEN, USE_DICTIONARY, COMPACT>`, `BucketMatcher<HASH64, BUCKET_BITS>` or
-`ChainMatcher<NUM_BANKS, BANK_BITS>` — so the hash width and the table size are
-compile-time constants inside the probe loop. The `MatchFinder` enum that
-selects between them is matched once per input block, never per candidate.
+Each plan is a distinct Rust type — `QuickMatcher<BUCKETS, SWEEP_BITS,
+HASH_LEN, USE_DICTIONARY, COMPACT>`, `BucketMatcher<HASH64, BUCKETS, BLOCK>`
+or `ChainMatcher<NUM_BANKS, BANK_BITS>` — so the hash width, the table size
+and, for the bucket matchers, the block depth are compile-time constants
+inside the probe loop; each bucket quality is its own `MatchFinder` variant
+(§2.3). The `MatchFinder` enum that selects between them is matched once per
+input block, never per candidate.
 
-The candidate depth, the chain depth and the number of cached distances are
-ordinary fields used as loop bounds.
+The chain depth is an ordinary field used as a loop bound; the bucket
+matchers derive their cached-distance count from the block depth.
 
 `H2` and `H3` share a shape but not a path: with one slot per bucket the probe
 has no loop to leave, so the reference returns as soon as it has a match and
@@ -189,15 +191,17 @@ The reference builds `H58` and `H68` in place of `H5` and `H6` whenever
 `BROTLI_MAX_SIMD_QUALITY` is defined, which on GCC and Clang covers qualities
 five and six. Those variants store a one-byte tag beside every position and
 visit only the slots whose tag matches. The bucket matcher keeps tags for the
-same two qualities (block depth 16 or 32). `tag_equality` compares a whole
-bucket's tags with one safe `fearless_simd` vector; `split_candidates` drops
-unfilled slots and splits the result into the slots at or above the newest
-position and those below it, so visiting each mask by ascending slot walks the
-bucket newest to oldest. Slots fill downwards from the top of a block, as the
-reference's tagged matchers do, which is what makes that walk a plain rotation.
-The scalar backend deliberately keeps the unfiltered scan as an independent
-oracle, and so does a starter block, which is too short for a vector compare.
-Filtering preserves the accepted-match sequence:
+same two qualities (block depth 16 or 32, a compile-time property of the
+shape). `tag_equality` is generic over the block width and compares a whole
+bucket's tags with one safe `fearless_simd` vector — sixteen or thirty-two
+lanes, the only two widths that survive monomorphisation; `split_candidates`
+drops unfilled slots and splits the result into the slots at or above the
+newest position and those below it, so visiting each mask by ascending slot
+walks the bucket newest to oldest. Slots fill downwards from the top of a
+block, as the reference's tagged matchers do, which is what makes that walk a
+plain rotation. The scalar backend deliberately keeps the unfiltered scan as
+an independent oracle, and so does a four-slot starter block, which is too
+short for a vector compare. Filtering preserves the accepted-match sequence:
 
 - They select the same bucket. The tagged `HashBytes` keeps eight more low bits,
   which the key shifts straight back off.
@@ -215,6 +219,17 @@ that really is using the tagged matchers.
 
 ### 2.3. Storage layouts, runs and sweeps
 
+Every bucket shape is its own type: `BucketMatcher<HASH64, BUCKETS, BLOCK>`
+takes the bucket count and the block depth as constants, so `MatchFinder`
+holds ten bucket variants (`H5Q5`–`H5Q9`, `H6Q5`–`H6Q9`) rather than three.
+The depth is the quality less one, and it fixes the rest of the shape: how
+many cached distances a search probes (`last_distances_for`: four up to
+thirty-two slots, ten up to 128, sixteen beyond) and whether slots carry tags
+(depth at most thirty-two). With both constants every slot mask, block index
+and hash shift is an immediate, and the dense tables are arrays whose
+indexing needs no check; a loop that carries a runtime depth was measured to
+spill the values it needs at every candidate.
+
 The reference allocates every bucket's block up front and never initialises
 it, reading a slot only below the counter that guards it. Safe Rust has to
 initialise what it reads, so the bucket matcher picks a layout per stream from
@@ -222,18 +237,24 @@ what `prepare` is told about it:
 
 | Layout | Chosen when | Index | Blocks | Cost of a new stream |
 | --- | --- | --- | --- | --- |
-| Compact | one-shot input of at most 1024 bytes | `KeyMap`, sized two entries per input byte | activated on demand | fill a map of at most 16 KiB |
-| Sparse | every other input, including one of unknown length | one packed `u64` per bucket: generation stamp, encoded block offset, counter | activated on demand, deep shapes start with four slots and grow once | bump the generation |
-| Dense | the matcher was built for a size hint of at least the shape's dense limit: an eighth of the table for tagged q5/q6 shapes, half of it for deep q7–q9 shapes | one `u16` counter per bucket | preallocated at `key << block_bits`, zeroed once per matcher | zero the counters |
+| Compact | one-shot input of at most 1024 bytes on a matcher that has no sparse table yet | `KeyMap`, sized two entries per input byte, probed once per position | starter and full-block pools, activated on demand and reserved for the input up front | fill a map of at most 16 KiB |
+| Sparse | every other input, including one of unknown length, unless the dense table already exists | a boxed `[u64; BUCKETS]`: generation stamp, block index with a starter flag, counter | typed pools: `Vec<[u32; 4]>` starters that grow into `Vec<[u32; BLOCK]>` full blocks on their fifth store, tags alongside for tagged shapes | bump the generation |
+| Dense | the matcher was built for a size hint of at least the shape's dense limit — a sixteenth of the table for tagged q5/q6 shapes (64 KiB and 128 KiB of input), half of it for deep q7–q9 shapes — or the matcher already holds the dense table and the stream is not compact | `[u16; BUCKETS]` counters | one flat `Vec<u32>` of `BUCKETS * BLOCK` slots, viewed as `[[u32; BLOCK]; BUCKETS]` for a run, zeroed once per matcher | zero the counters |
 
 The dense decision rests on the construction-time size hint rather than on
 `prepare`'s `one_shot` flag: an input longer than one block is not one shot
 at its first block, and choosing the dense table there made every cold
 multi-block call pay for zeroing (and, on WSL2, faulting in) a table of up to
-32 MiB. A sparse entry from an earlier generation still names its block but
-counts as empty, so blocks persist across streams and a warmed compressor
-allocates nothing. Every layout empties itself in time that does not depend
-on what the previous stream stored, which is what the
+32 MiB. The table is kept flat on purpose: a zero-filled vector of integers
+comes straight from the allocator's zeroed pages, whereas a vector of arrays
+longer than sixteen elements is written out element by element, which for the
+two-mebibyte quality-six table cost more than compressing a hundred kibibytes.
+A sparse entry from an earlier generation still names its block but counts as
+empty, so blocks persist across streams and a warmed compressor allocates
+nothing; a warmed compressor that holds the dense table uses it for every
+later stream, because clearing its counters is cheaper than the on-demand
+layouts' extra dependent load per bucket. Every layout empties itself in time
+that does not depend on what the previous stream stored, which is what the
 [`Sweep::SelfCleaning`] result of `prepare` tells the encoder.
 
 `Matcher::prepare` reports one of three sweeps, and the encoder records what a
@@ -241,26 +262,34 @@ reset then has to do: `Partial` (quick and chain matchers on a short one-shot
 input) is replayed at reset, because it clears exactly the slots the stream
 could have dirtied; `Full` leaves the table dirty, so the next stream is not
 one-shot and pays for a wipe; `SelfCleaning` needs nothing. The quick matchers
-keep their `SmallSlots` map for size hints up to 2048 bytes, sized for the input
-at `prepare` so it never rehashes mid-stream.
+are `QuickMatcher<BUCKETS, ...>` with their table as a boxed array; a compact
+quick matcher (size hints up to 2048 bytes) indexes a `SmallSlots` map for its
+first stream only, sized for the input so it never rehashes mid-stream, and
+allocates the table when the replay sweep after that stream asks it to clear,
+from which point it is cleared by the partial sweep like any other.
 
 The reference hoists its table pointers into `restrict` locals for a whole
 block, so a store through one never makes the compiler reload the others. The
-`MatchRun` trait is the same idea: `Matcher::run` borrows the tables once per
-input block — the dense layout as three slices bound once, an on-demand layout
-as the matcher itself — and the search loop stores through that view rather
-than through the finder, which would otherwise reload every field it needs at
-every position.
+`RunVisitor` trait is the same idea: `Matcher::visit_run` binds the tables once
+per input block and hands the visitor — the search loop — the concrete view
+its layout uses, so the loop is compiled once per view rather than once over a
+union of them:
+
+| Matcher | Run types |
+| --- | --- |
+| `QuickMatcher` | `QuickRun<&mut [u32; BUCKETS]>` over the table, or `QuickRun<&mut SmallSlots>` over the map |
+| `BucketMatcher` | `DenseRun` over three array references; `OnDemandRun<COMPACT>` over the matcher itself, the map-or-table choice a constant |
+| `ChainMatcher` | the matcher itself |
 
 ```mermaid
 flowchart LR
-    prepare[prepare: one-shot? input length; size hint] --> compact[Compact: key map]
-    prepare --> sparse[Sparse: stamped entries]
-    prepare -->|size hint at least the dense limit| dense[Dense: counters and key-addressed blocks]
-    compact --> run[Matcher::run borrows the tables for one block]
+    prepare[prepare: one-shot? input length; size hint; tables held] --> compact[Compact: key map + reserved pools]
+    prepare --> sparse[Sparse: stamped entries + typed pools]
+    prepare -->|size hint at least the dense limit, or table held| dense[Dense: counters and flat key-addressed blocks]
+    compact --> run[Matcher::visit_run binds one concrete run for the block]
     sparse --> run
     dense --> run
-    run --> search[find_longest_match: cached distances, tag masks, candidates]
+    run --> search[find_longest_match: cached distances, tag mask, candidates, one index lookup per position]
     run --> store[store / store_range through the run]
     prepare -. Sweep::SelfCleaning .-> reset[reset: nothing to replay]
 ```
@@ -321,16 +350,37 @@ adapters treat an empty result as normal rather than as end of stream.
 semantics: which candidate wins, when a match is delayed by a byte, which
 positions are stored and which are skipped are all visible in the output.
 
-The loop body is split in two functions. The search at every position stays in
-the loop; everything a found match entails — the delayed search, the distance
-cache update, the command and the stores — lives in `commit_match`, which
-re-enters the SIMD feature context and is left for the compiler to inline
-(forcing it out of line measured 8–10% slower on q2/q3 text). The loop's state
+`create_backward_references` resolves the loop-invariant `Block`, refreshes
+the distance cache, and runs the loop through `Matcher::visit_run` as the
+`SearchLoop` visitor, so the loop is monomorphised per concrete run (§2.3).
+The loop body is split in two functions. The search at every position stays
+in the loop; everything a found match entails — the delayed search, the
+distance cache update, the command and the stores — lives in `commit_match`,
+which re-enters the SIMD feature context and is left for the compiler to
+inline (forcing it out of line measured 8–10% slower on q2/q3 text). Both
+feature-context closures `move` their captures: the context is a separate
+function, and a capture by reference is a pointer it dereferences at every
+use, where a moved value is a local it keeps in a register. The loop's state
 (position, insert length, the random-heuristics horizon, the matcher run) is
-held in locals and passed to the commit path by value and back, so nothing in
-the hot loop has an address the compiler must keep current in memory. The
-static-dictionary probe likewise works on a copy of the search result. The
-split changes no decision: the sequence below is the same as the reference's.
+passed to the commit path by value and back, so nothing in the hot loop has
+an address the compiler must keep current in memory. The static-dictionary
+probe likewise works on a copy of the search result.
+
+The query a search receives derives its rare-path values on demand rather
+than carrying them: `MatchQuery::dictionary_start` computes the capped
+distance to the start of the stream only for the dictionary probe and the
+attached-prefix search, and the window a candidate is measured against
+(`current_window`) is cut only once a candidate has passed the byte compare.
+Inside the bucket scan the running result lives in locals (`Found`) and is
+written back once at the end, and the two measuring steps —
+`accept_cached` for a cached distance, `accept_candidate` for a bucket slot —
+are out of line and return by value: the candidate loop is a filter that
+rejects most of what it sees, and it stays in registers only while it holds
+about a dozen values. The greedy matchers measure a match with
+`match_len_windows`, a whole-word scan with one overlapping word at the tail
+(§8.1), which is the reference's `FindMatchLengthWithLimit` without its byte
+loop. None of this changes a decision: the sequence below is the same as the
+reference's.
 
 ```mermaid
 sequenceDiagram
@@ -559,40 +609,48 @@ halves so the "already lapped" property survives the truncation.
 graph TD
     A["Compressor::new()"] -->|"Level::try_detect()"| B["Level stored in the Compressor"]
     B -->|"new encoder"| C["core::dispatch::select(level)"]
-    C --> D["retained Selected&lt;S&gt; kernel"]
-    D --> E["select concrete matcher once per block"]
-    E --> V["create_backward_references::&lt;S, M&gt;<br/>S::vectorize over specialized search body"]
-    V --> F["Matcher::find_longest_match(simd, ...)"]
-    F --> G["find_match_length(simd, ...)"]
+    C --> D["retained Selected&lt;S, G&gt; kernel:<br/>S for fragment and high-quality kernels,<br/>G for the greedy loops"]
+    D --> E["select concrete matcher and run once per block"]
+    E --> V["SearchLoop::visit&lt;R&gt;<br/>G::vectorize over the specialized loop"]
+    V --> F["find_longest_match(simd, ...)"]
+    F --> G1["tag_equality(simd, ...)"]
+    F --> G2["match_len_windows (scalar words)"]
 
     classDef once fill:#d9ead3,stroke:#38761d;
     class D once;
 ```
 
-The backend is selected once when the retained encoder is created. A virtual
-call at the outer `core::dispatch` boundary enters `S::vectorize`; the
-`MatchFinder` enum is matched once per scan, and the concrete token reaches
-both tag filtering and exact match-length comparison without inner dispatch.
+The backend is selected once when the retained encoder is created. On x86 the
+kernel holds two tokens: the detected level `S` for the fragment,
+copy-extension and high-quality kernels, and SSE2 (`Level::as_sse2`) for the
+greedy loops, whose only vector operation is the byte-equality mask of the tag
+filter; the scalar backend keeps the greedy loops scalar, as the unfiltered
+oracle, and other architectures keep their own level for both. Compiling the
+greedy loops for every x86 level multiplied their code — a quarter of the crate
+— without a faster instruction to show for it. A virtual call at the outer
+`core::dispatch` boundary enters `G::vectorize`; the `MatchFinder` enum and the
+run are matched once per scan, and the concrete token reaches the tag filter
+without inner dispatch.
 
-`create_backward_references` enters `S::vectorize` around its specialized search
-body. Its closure is always inlined into the feature-enabled entry, letting the
-generic `fearless_simd` operations become native instructions. Passing a token
-to an out-of-line function alone does not enable its target features: a baseline
+`SearchLoop::visit` enters `G::vectorize` around its specialized loop. Its
+closure is always inlined into the feature-enabled entry, letting the generic
+`fearless_simd` operations become native instructions. Passing a token to an
+out-of-line function alone does not enable its target features: a baseline
 compilation instead calls feature-enabled helpers for each vector comparison
-and mask operation. Entering the context after matcher specialization also keeps
-each search body separate, rather than forcing every matcher into one large
-outer dispatch function.
+and mask operation. Entering the context after matcher and run specialization
+also keeps each search body separate, rather than forcing every matcher into
+one large outer dispatch function.
 
 The nested feature entry uses the existing token; it performs no detection or
-virtual dispatch. Both entries are outside the search loop. `S::vectorize` owns
+virtual dispatch. Both entries are outside the search loop. `vectorize` owns
 the feature proof; no handwritten `target_feature` or unsafe block is needed.
 Scalar and SIMD paths keep the same matcher state, candidate order, score
-arithmetic, and error propagation. The change adds no allocation or public API.
+arithmetic, and error propagation.
 
-Everything else — bucket stores, distance-cache transitions, the greedy and
-lazy decisions, Huffman construction, bit writing — is scalar, because the
-reference's decision order is not reorderable and a vector unit cannot help
-without changing it.
+Everything else — match-length scans in the greedy matchers, bucket stores,
+distance-cache transitions, the greedy and lazy decisions, Huffman
+construction, bit writing — is scalar, because the reference's decision order
+is not reorderable and a vector unit cannot help without changing it.
 
 ## 8. The static dictionary
 
@@ -665,13 +723,21 @@ sized by the same `2 * bytes + 503` reservation the reference uses.
   UTF-8 context combination replaces the implicit built-in probe; headerless
   continuations poison the distance cache and shift dictionary placement without
   inventing history. See [rfc9841-encoding.md](rfc9841-encoding.md).
-- **Histogram accumulation and context sampling remain scalar.** Match-length
-  scans and bucket tag filtering have SIMD implementations.
-- **The bucket matcher still trails the reference on some inputs.** The
-  search loop executes more instructions per candidate than the C build (about
-  30 against 24 at quality six), mostly bounds checks a safe formulation cannot
-  drop and register spills, and a dense table costs a one-time zeroing the
-  reference never pays. See the [benchmark record](../docs/benchmarks/2026-09-06-per-case.md).
+- **Histogram accumulation and context sampling remain scalar.** Bucket tag
+  filtering and the high-quality match-length scans have SIMD
+  implementations; the greedy matchers scan whole words.
+- **The bucket matcher still trails the reference on some inputs.** Its search
+  loop now executes fewer instructions per position than the C build, but at
+  a lower rate: the loop still spills part of its state around the calls it
+  makes, and a dense table costs a one-time zeroing the reference never pays.
+  Reused binary input at qualities five to seven measures 81–85% of the
+  reference and text 84–94%; quality seven, whose reference keeps sixty-four
+  candidates per bucket, is the weakest of the three.
+- **Short one-shot inputs pay for initialised memory.** A cold call on at
+  most a kibibyte indexes the compact map at roughly ninety instructions per
+  stored position, against about thirty for the reference's uninitialised
+  table, and allocates and zeroes its scratch per call. Those cases measure
+  70–85% of the reference. See the [benchmark record](../docs/benchmarks/2026-09-06-greedy-runs.md).
 
 ## Independent parallel fragments
 

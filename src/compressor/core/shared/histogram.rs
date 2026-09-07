@@ -94,7 +94,7 @@ pub(crate) type HistogramDistance = Histogram<NUM_HISTOGRAM_DISTANCE_SYMBOLS>;
 /// order the terms are summed in changes the last bits of the result, and the
 /// block splitter compares those results against thresholds.
 pub(crate) fn bits_entropy(population: &[u32]) -> f64 {
-    bits_entropy_of(population.len(), |index| population[index] as usize)
+    bits_entropy_of(population.iter().map(|&count| count as usize))
 }
 
 /// The entropy of two populations summed, without materialising the sum.
@@ -102,33 +102,25 @@ pub(crate) fn bits_entropy(population: &[u32]) -> f64 {
 /// Same accumulation order as [`bits_entropy`] over the summed counts, so it
 /// returns exactly what `bits_entropy` would on the combined histogram.
 pub(crate) fn bits_entropy_of_sum(left: &[u32], right: &[u32]) -> f64 {
-    let size = left.len().min(right.len());
-    bits_entropy_of(size, |index| left[index] as usize + right[index] as usize)
+    bits_entropy_of(
+        left.iter()
+            .zip(right)
+            .map(|(&left, &right)| left as usize + right as usize),
+    )
 }
 
-/// The shared accumulation of [`bits_entropy`] over `size` counts.
+/// The shared accumulation of [`bits_entropy`] over `counts`.
+///
+/// The reference unrolls its loop by two, jumping into the middle for an odd
+/// length; the subtractions still happen one count after another in order,
+/// so a plain loop over the same counts produces the same double.
 #[inline(always)]
-fn bits_entropy_of(size: usize, count: impl Fn(usize) -> usize) -> f64 {
-    let population = count;
+fn bits_entropy_of(counts: impl Iterator<Item = usize>) -> f64 {
     let mut sum = 0usize;
     let mut retval = 0f64;
-    let mut index = 0usize;
-    if size & 1 == 1 {
-        // The reference jumps into the middle of its unrolled loop for an odd
-        // length, so the first element is accumulated on its own.
-        let p = population(0);
-        sum += p;
-        retval -= p as f64 * fast_log2(p);
-        index = 1;
-    }
-    while index < size {
-        let p = population(index);
-        sum += p;
-        retval -= p as f64 * fast_log2(p);
-        let q = population(index + 1);
-        sum += q;
-        retval -= q as f64 * fast_log2(q);
-        index += 2;
+    for count in counts {
+        sum += count;
+        retval -= count as f64 * fast_log2(count);
     }
     if sum != 0 {
         retval += sum as f64 * fast_log2(sum);

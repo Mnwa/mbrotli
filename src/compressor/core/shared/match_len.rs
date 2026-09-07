@@ -35,6 +35,86 @@ pub(crate) fn load_u64_le(data: &[u8], offset: usize) -> u64 {
     }
 }
 
+/// The bytes a search measures its candidates against.
+///
+/// The ring buffer from the searched position to the end of the input, cut
+/// once per search so every candidate scan needs one bounds check, on its
+/// own side. A position the buffer cannot hold in full leaves an empty
+/// slice, which matches nothing — the answer [`find_match_length`] gives.
+#[inline(always)]
+pub(crate) fn current_window(data: &[u8], cur_ix_masked: usize, max_length: usize) -> &[u8] {
+    data.get(cur_ix_masked..cur_ix_masked + max_length)
+        .unwrap_or_default()
+}
+
+/// Counts the leading bytes `data[prev_ix..]` shares with `cur`.
+///
+/// Zero when the buffer cannot hold a window as long as `cur` at `prev_ix`.
+#[inline(always)]
+pub(crate) fn match_len_at<S: Simd>(simd: S, data: &[u8], prev_ix: usize, cur: &[u8]) -> usize {
+    match data.get(prev_ix..prev_ix + cur.len()) {
+        Some(left) => match_len_windows(simd, left, cur),
+        None => 0,
+    }
+}
+
+/// Counts the leading bytes two windows of the same length share.
+///
+/// The reference's `FindMatchLengthWithLimit` compares whole words and then
+/// single bytes. This scan compares up to two words, then native vectors
+/// while the match keeps going — the long matches of repetitive input are
+/// where a vector loop pays — then whole words, and last one more word that
+/// ends at the limit: it overlaps bytes the word loop already found equal,
+/// so its first differing byte is the first differing byte of the tail.
+/// Only a window shorter than a word is compared byte by byte, which keeps
+/// a byte loop the compiler would unroll into kilobytes out of the search.
+/// Both windows were cut to the same length by the caller, so the chunked
+/// iterations carry no check of their own.
+#[inline(always)]
+pub(crate) fn match_len_windows<S: Simd>(simd: S, left: &[u8], right: &[u8]) -> usize {
+    let limit = left.len().min(right.len());
+    let (left, right) = (&left[..limit], &right[..limit]);
+
+    // Short matches dominate; two plain words settle most of them.
+    let prefix = limit.min(SCALAR_PREFIX_BYTES) & !7;
+    let mut matched = match_len_words(&left[..prefix], &right[..prefix]);
+    if matched < prefix {
+        return matched;
+    }
+
+    let stride = native_vector_stride::<S>();
+    let whole_vectors = (limit - matched) - (limit - matched) % stride;
+    let vectored = match_len_native_vectors(simd, &left[matched..], &right[matched..]);
+    matched += vectored;
+    if vectored < whole_vectors {
+        return matched;
+    }
+
+    let whole_words = (limit - matched) & !7;
+    let tail = match_len_words(
+        &left[matched..matched + whole_words],
+        &right[matched..matched + whole_words],
+    );
+    matched += tail;
+    if tail < whole_words || matched == limit {
+        return matched;
+    }
+
+    if let (Some(left_last), Some(right_last)) = (left.last_chunk::<8>(), right.last_chunk::<8>()) {
+        let difference = u64::from_le_bytes(*left_last) ^ u64::from_le_bytes(*right_last);
+        return if difference == 0 {
+            limit
+        } else {
+            limit - 8 + (difference.trailing_zeros() as usize >> 3)
+        };
+    }
+    let mut bytes = 0usize;
+    while bytes < limit && left[bytes] == right[bytes] {
+        bytes += 1;
+    }
+    bytes
+}
+
 /// Compares two equal-length windows eight bytes at a time.
 ///
 /// Returns the number of leading equal bytes, or the length of the whole-word

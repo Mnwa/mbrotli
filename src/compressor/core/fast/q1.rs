@@ -36,7 +36,7 @@ use super::huffman::{
     HuffmanNode, build_and_store_huffman_tree_fast, convert_bit_depths_to_symbols,
     create_huffman_tree, store_huffman_tree,
 };
-use super::match_len::{find_match_length, load_u64_le};
+use super::match_len::{current_window, load_u64_le, match_len_at};
 use super::tables::{INSERT_OFFSET, NUM_EXTRA_BITS};
 use super::workspace::TwoPassArena;
 
@@ -289,12 +289,11 @@ fn create_commands<
 
                     let base = ip;
                     let matched = MIN_MATCH
-                        + find_match_length(
+                        + match_len_at(
                             simd,
                             data,
                             candidate + MIN_MATCH,
-                            ip + MIN_MATCH,
-                            (ip_end - ip) - MIN_MATCH,
+                            current_window(data, ip + MIN_MATCH, (ip_end - ip) - MIN_MATCH),
                         );
                     let distance = (base - candidate) as i64;
                     let insert = base - next_emit;
@@ -335,12 +334,11 @@ fn create_commands<
                     {
                         let base = ip;
                         let matched = MIN_MATCH
-                            + find_match_length(
+                            + match_len_at(
                                 simd,
                                 data,
                                 candidate + MIN_MATCH,
-                                ip + MIN_MATCH,
-                                (ip_end - ip) - MIN_MATCH,
+                                current_window(data, ip + MIN_MATCH, (ip_end - ip) - MIN_MATCH),
                             );
                         ip += matched;
                         last_distance = (base - candidate) as i64;

@@ -43,7 +43,7 @@ use super::huffman::{
     HuffmanNode, build_and_store_huffman_tree_fast, convert_bit_depths_to_symbols,
     create_huffman_tree, store_huffman_tree,
 };
-use super::match_len::{find_match_length, load_u64_le};
+use super::match_len::{current_window, load_u64_le, match_len_at};
 use super::tables::CMD_HISTO_SEED;
 use super::workspace::OnePassArena;
 
@@ -422,12 +422,15 @@ fn compress_fragment_impl<S: Simd, const TABLE_BITS: usize, const INDEPENDENT: b
                         // have to be emitted as literals.
                         let base = ip;
                         let matched = Q0_MIN_MATCH
-                            + find_match_length(
+                            + match_len_at(
                                 simd,
                                 data,
                                 candidate + Q0_MIN_MATCH,
-                                ip + Q0_MIN_MATCH,
-                                (ip_end - ip) - Q0_MIN_MATCH,
+                                current_window(
+                                    data,
+                                    ip + Q0_MIN_MATCH,
+                                    (ip_end - ip) - Q0_MIN_MATCH,
+                                ),
                             );
                         let distance = (base - candidate) as i64;
                         let insert = base - next_emit;
@@ -494,12 +497,15 @@ fn compress_fragment_impl<S: Simd, const TABLE_BITS: usize, const INDEPENDENT: b
                             // Another five byte match, with no literals in between.
                             let base = ip;
                             let matched = Q0_MIN_MATCH
-                                + find_match_length(
+                                + match_len_at(
                                     simd,
                                     data,
                                     candidate + Q0_MIN_MATCH,
-                                    ip + Q0_MIN_MATCH,
-                                    (ip_end - ip) - Q0_MIN_MATCH,
+                                    current_window(
+                                        data,
+                                        ip + Q0_MIN_MATCH,
+                                        (ip_end - ip) - Q0_MIN_MATCH,
+                                    ),
                                 );
                             if ip - candidate > MAX_BACKWARD_DISTANCE {
                                 break;

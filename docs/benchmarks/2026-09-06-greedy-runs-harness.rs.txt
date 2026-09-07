@@ -1,0 +1,386 @@
+//! Scratch paired-timing and profiling harness mirroring benches/compress.rs.
+use google_brotli_ffi as ffi;
+use mbrotli::io::FinishError;
+use mbrotli::{
+    Compressor, EncoderConfig, EncoderStatus, InputSize, Operation, Quality, StreamConfig, Window,
+};
+use std::hint::black_box;
+use std::io::{Read, Write};
+use std::time::{Duration, Instant};
+
+const LGWIN: Window = Window::DEFAULT;
+const STREAM_CHUNK: usize = 64 << 10;
+
+fn config(quality: Quality) -> EncoderConfig {
+    EncoderConfig::default().with_quality(quality).with_window(LGWIN)
+}
+fn encoder(quality: Quality) -> Compressor {
+    Compressor::new(config(quality)).expect("config")
+}
+
+fn text(len: usize) -> Vec<u8> {
+    const PARAGRAPH: &str = concat!(
+        "Brotli is a generic-purpose lossless compression algorithm that ",
+        "compresses data using a combination of a modern variant of the LZ77 ",
+        "algorithm, Huffman coding and second order context modeling. ",
+    );
+    let mut out = String::with_capacity(len + PARAGRAPH.len());
+    let mut line = 0usize;
+    while out.len() < len {
+        out.push_str(&format!("{line}. {PARAGRAPH}\n"));
+        line += 1;
+    }
+    let mut bytes = out.into_bytes();
+    bytes.truncate(len);
+    bytes
+}
+fn binary(len: usize) -> Vec<u8> {
+    const POOL: [u8; 8] = [0x00, 0xff, 0x7f, 0x80, 0x01, 0xfe, 0x10, 0xef];
+    let mut bytes = Vec::with_capacity(len + 16);
+    let mut record = 0u32;
+    while bytes.len() < len {
+        bytes.extend_from_slice(&record.to_le_bytes());
+        bytes.extend_from_slice(&record.wrapping_mul(2_654_435_761).to_le_bytes());
+        for offset in 0..8 {
+            bytes.push(POOL[(record as usize + offset) % POOL.len()]);
+        }
+        record += 1;
+    }
+    bytes.truncate(len);
+    bytes
+}
+fn compressible(len: usize) -> Vec<u8> {
+    let mut bytes = vec![0; len];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        if index % 1024 == 0 {
+            *byte = b'#';
+        }
+    }
+    bytes
+}
+fn incompressible(len: usize) -> Vec<u8> {
+    let mut state = 0x2545_f491_4f6c_dd1d_u64;
+    (0..len)
+        .map(|_| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) as u8
+        })
+        .collect()
+}
+fn corpus(name: &str) -> Vec<u8> {
+    match name {
+        "text-1KiB" => text(1 << 10),
+        "text-1MiB" => text(1 << 20),
+        "binary-256KiB" => binary(1 << 18),
+        "binary-16KiB" => binary(16 << 10),
+        "compressible-256KiB" => compressible(1 << 18),
+        "incompressible-256KiB" => incompressible(1 << 18),
+        "flush-text" => text(1 << 18),
+        n if n.starts_with("vendor-") => std::fs::read(format!(
+            "/home/mnwa/projects/mbrotli/brotli-ffi/vendor/brotli/tests/testdata/{}",
+            &n[7..]
+        ))
+        .expect("vendor file"),
+        n => {
+            let size: usize = n.parse().expect("tiny size");
+            text(1024)[..size].to_vec()
+        }
+    }
+}
+
+mod c {
+    use super::ffi;
+    pub fn max_compressed_size(n: usize) -> usize {
+        n * 2 + 4096
+    }
+    pub fn compress_into(quality: usize, lgwin: usize, src: &[u8], dst: &mut Vec<u8>) -> usize {
+        dst.clear();
+        dst.reserve(max_compressed_size(src.len()));
+        let mut available_in = src.len();
+        let mut next_in = src.as_ptr();
+        let mut available_out = dst.capacity();
+        let mut next_out = dst.as_mut_ptr();
+        let mut encoded_size = 0;
+        unsafe {
+            let state = ffi::BrotliEncoderCreateInstance(None, None, std::ptr::null_mut());
+            for (p, v) in [
+                (ffi::BROTLI_PARAM_QUALITY, quality as u32),
+                (ffi::BROTLI_PARAM_LGWIN, lgwin as u32),
+                (ffi::BROTLI_PARAM_SIZE_HINT, src.len() as u32),
+            ] {
+                assert!(ffi::BrotliEncoderSetParameter(state, p, v) == ffi::BROTLI_TRUE);
+            }
+            let status = ffi::BrotliEncoderCompressStream(
+                state,
+                ffi::BROTLI_OPERATION_FINISH,
+                &raw mut available_in,
+                &raw mut next_in,
+                &raw mut available_out,
+                &raw mut next_out,
+                &raw mut encoded_size,
+            );
+            assert!(status == ffi::BROTLI_TRUE && ffi::BrotliEncoderIsFinished(state) == ffi::BROTLI_TRUE);
+            ffi::BrotliEncoderDestroyInstance(state);
+            dst.set_len(encoded_size);
+        }
+        encoded_size
+    }
+    pub fn compress_streaming(quality: usize, lgwin: usize, chunks: &[&[u8]], dst: &mut Vec<u8>, flush: bool) {
+        dst.clear();
+        let total: usize = chunks.iter().map(|c| c.len()).sum();
+        dst.reserve(max_compressed_size(total));
+        unsafe {
+            let state = ffi::BrotliEncoderCreateInstance(None, None, std::ptr::null_mut());
+            for (p, v) in [
+                (ffi::BROTLI_PARAM_QUALITY, quality as u32),
+                (ffi::BROTLI_PARAM_LGWIN, lgwin as u32),
+                (ffi::BROTLI_PARAM_SIZE_HINT, total as u32),
+            ] {
+                assert!(ffi::BrotliEncoderSetParameter(state, p, v) == ffi::BROTLI_TRUE);
+            }
+            let mut buf = vec![0u8; 1 << 16];
+            for (i, chunk) in chunks.iter().enumerate() {
+                let last = i + 1 == chunks.len();
+                let op = if last {
+                    ffi::BROTLI_OPERATION_FINISH
+                } else if flush {
+                    ffi::BROTLI_OPERATION_FLUSH
+                } else {
+                    ffi::BROTLI_OPERATION_PROCESS
+                };
+                let mut available_in = chunk.len();
+                let mut next_in = chunk.as_ptr();
+                loop {
+                    let mut available_out = buf.len();
+                    let mut next_out = buf.as_mut_ptr();
+                    let status = ffi::BrotliEncoderCompressStream(
+                        state, op, &raw mut available_in, &raw mut next_in, &raw mut available_out, &raw mut next_out, std::ptr::null_mut(),
+                    );
+                    assert!(status == ffi::BROTLI_TRUE);
+                    dst.extend_from_slice(&buf[..buf.len() - available_out]);
+                    if available_in == 0 && ffi::BrotliEncoderHasMoreOutput(state) == ffi::BROTLI_FALSE {
+                        break;
+                    }
+                }
+            }
+            assert!(ffi::BrotliEncoderIsFinished(state) == ffi::BROTLI_TRUE);
+            ffi::BrotliEncoderDestroyInstance(state);
+        }
+    }
+}
+
+struct Case {
+    group: String,
+    quality: Quality,
+    numeric: usize,
+    data: Vec<u8>,
+    chunks: usize,
+}
+
+impl Case {
+    fn run_c(&self) -> usize {
+        let q = self.numeric;
+        let lg = usize::from(LGWIN.bits());
+        match self.group.as_str() {
+            "cold" | "tiny" => {
+                let mut out = Vec::new();
+                c::compress_into(q, lg, black_box(&self.data), &mut out)
+            }
+            "reused" | "presized" | "tiny-reused" => {
+                thread_local!(static OUT: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(Vec::new()));
+                OUT.with(|o| c::compress_into(q, lg, black_box(&self.data), &mut o.borrow_mut()))
+            }
+            "writer" | "reader" | "session" => {
+                let chunks: Vec<&[u8]> = self.data.chunks(STREAM_CHUNK).collect();
+                let mut out = Vec::new();
+                c::compress_streaming(q, lg, black_box(&chunks), &mut out, false);
+                out.len()
+            }
+            "flush" => {
+                let size = self.data.len().div_ceil(self.chunks.max(1));
+                let chunks: Vec<&[u8]> = self.data.chunks(size.max(1)).collect();
+                let mut out = Vec::new();
+                c::compress_streaming(q, lg, black_box(&chunks), &mut out, true);
+                out.len()
+            }
+            g => panic!("group {g}"),
+        }
+    }
+}
+
+struct RustRunner {
+    compressor: Compressor,
+    output: Vec<u8>,
+    slice: Vec<u8>,
+    buffer: Vec<u8>,
+}
+
+impl RustRunner {
+    fn new(case: &Case) -> Self {
+        let bound = Compressor::max_compressed_size(case.data.len()).expect("bound");
+        let mut r = Self {
+            compressor: encoder(case.quality),
+            output: Vec::new(),
+            slice: vec![0u8; bound],
+            buffer: vec![0u8; STREAM_CHUNK],
+        };
+        // warm as the benchmark does
+        if matches!(case.group.as_str(), "reused" | "tiny-reused") {
+            r.compressor.compress_into(&case.data, &mut r.output).expect("warm");
+        }
+        r
+    }
+    fn run(&mut self, case: &Case) -> usize {
+        let data = black_box(case.data.as_slice());
+        match case.group.as_str() {
+            "cold" | "tiny" => encoder(case.quality).compress(data).expect("compress").len(),
+            "reused" | "tiny-reused" => {
+                self.output.clear();
+                self.compressor.compress_into(data, &mut self.output).expect("compress");
+                self.output.len()
+            }
+            "presized" => self.compressor.compress_to_slice(data, &mut self.slice).expect("compress"),
+            "writer" => {
+                let stream = StreamConfig::from(InputSize::Exact(data.len() as u64));
+                let mut sink = self.compressor.writer(Vec::new(), stream).expect("writer");
+                for chunk in data.chunks(STREAM_CHUNK) {
+                    sink.write_all(chunk).expect("write");
+                }
+                sink.finish().map_err(FinishError::into_error).expect("finish").len()
+            }
+            "reader" => {
+                let stream = StreamConfig::from(InputSize::Exact(data.len() as u64));
+                let mut source = self.compressor.reader(data, stream).expect("reader");
+                let mut output = Vec::new();
+                source.read_to_end(&mut output).expect("read");
+                output.len()
+            }
+            "session" => {
+                let stream = StreamConfig::from(InputSize::Exact(data.len() as u64));
+                let mut output = Vec::new();
+                let mut session = self.compressor.start(stream).expect("session");
+                let mut offset = 0usize;
+                loop {
+                    let take = (data.len() - offset).min(STREAM_CHUNK);
+                    let op = if offset + take == data.len() { Operation::Finish } else { Operation::Process };
+                    let p = session.process(&data[offset..offset + take], &mut self.buffer, op).expect("process");
+                    offset += p.consumed;
+                    output.extend_from_slice(&self.buffer[..p.produced]);
+                    if p.status == EncoderStatus::Finished {
+                        break;
+                    }
+                }
+                output.len()
+            }
+            "flush" => {
+                let size = data.len().div_ceil(case.chunks.max(1));
+                let chunks: Vec<&[u8]> = data.chunks(size.max(1)).collect();
+                let mut sink = self.compressor.writer(Vec::new(), StreamConfig::default()).expect("writer");
+                for (i, chunk) in chunks.iter().enumerate() {
+                    sink.write_all(chunk).expect("write");
+                    if i + 1 != chunks.len() {
+                        sink.flush().expect("flush");
+                    }
+                }
+                sink.finish().map_err(FinishError::into_error).expect("finish").len()
+            }
+            g => panic!("group {g}"),
+        }
+    }
+}
+
+fn parse_case(spec: &str) -> Case {
+    // group/qN/corpus[/chunks]
+    let parts: Vec<&str> = spec.split('/').collect();
+    let group = parts[0].to_string();
+    let numeric: usize = parts[1][1..].parse().expect("quality");
+    let quality = Quality::try_from(numeric as u8).expect("quality");
+    let (data, chunks) = if group == "flush" {
+        (corpus("flush-text"), parts[2].parse().expect("chunks"))
+    } else {
+        (corpus(parts[2]), 1)
+    };
+    Case { group, quality, numeric, data, chunks }
+}
+
+fn time_loop<F: FnMut() -> usize>(mut f: F, budget: Duration) -> (f64, usize) {
+    // returns mean ns per call over the budget
+    let mut size = 0;
+    let start = Instant::now();
+    let mut iters = 0u64;
+    let mut batch = 1u64;
+    loop {
+        let t0 = Instant::now();
+        for _ in 0..batch {
+            size = f();
+        }
+        iters += batch;
+        let el = t0.elapsed();
+        if start.elapsed() >= budget {
+            break;
+        }
+        if el < Duration::from_millis(5) {
+            batch *= 2;
+        }
+    }
+    (start.elapsed().as_nanos() as f64 / iters as f64, size)
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    match args[1].as_str() {
+        // paired timing: harness time <rounds> <ms-per-side> case...
+        "time" => {
+            let rounds: usize = args[2].parse().unwrap();
+            let ms: u64 = args[3].parse().unwrap();
+            let budget = Duration::from_millis(ms);
+            for spec in &args[4..] {
+                let case = parse_case(spec);
+                let mut rust = RustRunner::new(&case);
+                // validate
+                let c_size = case.run_c();
+                let r_size = rust.run(&case);
+                assert_eq!(c_size, r_size, "{spec}: size mismatch");
+                let mut cs = Vec::new();
+                let mut rs = Vec::new();
+                for _ in 0..rounds {
+                    let (c_ns, _) = time_loop(|| case.run_c(), budget);
+                    let (r_ns, _) = time_loop(|| rust.run(&case), budget);
+                    cs.push(c_ns);
+                    rs.push(r_ns);
+                }
+                cs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                rs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let cm = cs[cs.len() / 2];
+                let rm = rs[rs.len() / 2];
+                let mut ratios: Vec<f64> = cs.iter().zip(&rs).map(|(c, r)| 100.0 * c / r).collect();
+                ratios.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                println!(
+                    "{spec:<48} C {cm:>12.0} ns  Rust {rm:>12.0} ns  {:6.1}% of C  (min {:.1} max {:.1}) size {c_size}",
+                    100.0 * cm / rm, ratios[0], ratios[ratios.len() - 1]
+                );
+            }
+        }
+        // profiling loop: harness run <rust|c> <seconds> case
+        "run" => {
+            let side = args[2].as_str();
+            let secs: u64 = args[3].parse().unwrap();
+            let case = parse_case(&args[4]);
+            let mut rust = RustRunner::new(&case);
+            let deadline = Instant::now() + Duration::from_secs(secs);
+            let mut n = 0u64;
+            while Instant::now() < deadline {
+                if side == "rust" {
+                    black_box(rust.run(&case));
+                } else {
+                    black_box(case.run_c());
+                }
+                n += 1;
+            }
+            eprintln!("{n} iterations");
+        }
+        other => panic!("unknown mode {other}"),
+    }
+}
