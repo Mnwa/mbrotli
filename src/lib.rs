@@ -66,9 +66,9 @@
 //!
 //! [`Compressor::compress_into`] is the entry point to reach for when there is
 //! more than one thing to compress. It appends to a destination the caller
-//! owns, so both the encoder's workspace and the output buffer are reused, and
-//! a warm compressor writing into a destination that is already big enough
-//! allocates nothing at all.
+//! owns, so both the encoder's workspace and the output buffer are reused; a
+//! warm compressor writing into a destination that is already big enough
+//! allocates nothing beyond the tables it grows into over its first streams.
 //!
 //! ```
 //! use mbrotli::{Compressor, EncoderConfig, Quality};

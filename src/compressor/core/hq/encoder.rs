@@ -123,10 +123,7 @@ impl HqEncoder {
             last_processed_pos: 0,
             last_flush_pos: 0,
             commands: Vec::new(),
-            workspace: ZopfliWorkspace::new(
-                resolved.input_block_size(),
-                resolved.dist.alphabet_size_limit as usize,
-            ),
+            workspace: ZopfliWorkspace::new(resolved.dist.alphabet_size_limit as usize),
             builder: MetaBlockBuilder::default(),
             metablock: MetaBlockSplit::default(),
             saved_dist_cache: references.dist_cache,
@@ -422,7 +419,7 @@ impl HqEncoder {
                 .reserve(needed + span.bytes as usize / 4 + 16 - self.commands.len());
         }
 
-        self.prepare_matcher(span.position as usize, span.bytes as usize);
+        self.prepare_matcher(span.position as usize, span.bytes as usize, is_last);
 
         // The context mode is chosen over the whole pending meta-block, not
         // just this input block, and before any command is created.
@@ -549,8 +546,10 @@ impl HqEncoder {
 
     /// Sets the matcher up and hands it the block boundary positions.
     ///
-    /// Mirrors `InitOrStitchToPreviousBlock`.
-    fn prepare_matcher(&mut self, position: usize, input_size: usize) {
+    /// Mirrors `HasherSetup` and `InitOrStitchToPreviousBlock`: a stream whose
+    /// first block is also its last is one-shot, and its forest is sized to
+    /// the input rather than the window.
+    fn prepare_matcher(&mut self, position: usize, input_size: usize, is_last: bool) {
         let Self {
             kernels,
             ringbuffer,
@@ -561,7 +560,7 @@ impl HqEncoder {
         let data = ringbuffer.buffer();
         let mask = ringbuffer.mask();
         if !*is_prepared {
-            matcher.prepare();
+            matcher.prepare(position == 0 && is_last, input_size);
             *is_prepared = true;
         }
         kernels.stitch(matcher, input_size, position, Window { data, mask });

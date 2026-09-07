@@ -21,6 +21,7 @@ const NOT_UTF8: u32 = 0x0011_0000;
 /// caller's ratio meaningful. Overlong encodings and surrogate-range values
 /// fall into the same bucket, because each length check demands a value the
 /// shorter forms could not have produced.
+#[inline]
 fn parse_as_utf8(input: &[u8]) -> (usize, u32) {
     let size = input.len();
     let byte = |index: usize| input.get(index).copied().unwrap_or(0);
@@ -66,9 +67,47 @@ fn parse_as_utf8(input: &[u8]) -> (usize, u32) {
 /// Returns whether at least three quarters of `length` bytes parse as UTF-8.
 ///
 /// Mirrors `BrotliIsMostlyUTF8`. `pos` and `mask` address the ring buffer, so
-/// the run may wrap; the sequence decoder is handed a contiguous copy of what
-/// it needs.
+/// the run may wrap; a run that does not is scanned in place, and one that
+/// does hands the sequence decoder a contiguous copy of what it needs.
 pub(crate) fn is_mostly_utf8(data: &[u8], pos: usize, mask: usize, length: usize) -> bool {
+    let end = pos + length;
+    let size_utf8 = match data.get(pos..end) {
+        Some(run) if end.saturating_sub(1) <= mask || length == 0 => utf8_bytes_in(run),
+        _ => utf8_bytes_wrapping(data, pos, mask, length),
+    };
+    size_utf8 as f64 > MIN_UTF8_RATIO * length as f64
+}
+
+/// Counts the bytes of `run` that belong to valid sequences.
+///
+/// Eight bytes that are all ASCII other than NUL each parse as a one-byte
+/// sequence, so such a word is counted whole without decoding it.
+fn utf8_bytes_in(run: &[u8]) -> usize {
+    const HIGH_BITS: u64 = 0x8080_8080_8080_8080;
+    const LOW_BITS: u64 = 0x0101_0101_0101_0101;
+    let mut size_utf8 = 0usize;
+    let mut index = 0usize;
+    while index < run.len() {
+        if let Some(word) = run.get(index..index + 8).and_then(<[u8]>::first_chunk::<8>) {
+            let word = u64::from_le_bytes(*word);
+            let has_zero = word.wrapping_sub(LOW_BITS) & !word & HIGH_BITS;
+            if word & HIGH_BITS == 0 && has_zero == 0 {
+                size_utf8 += 8;
+                index += 8;
+                continue;
+            }
+        }
+        let (bytes_read, symbol) = parse_as_utf8(&run[index..]);
+        index += bytes_read;
+        if symbol < NOT_UTF8 {
+            size_utf8 += bytes_read;
+        }
+    }
+    size_utf8
+}
+
+/// Counts the valid-sequence bytes of a run that wraps the ring buffer.
+fn utf8_bytes_wrapping(data: &[u8], pos: usize, mask: usize, length: usize) -> usize {
     let mut size_utf8 = 0usize;
     let mut index = 0usize;
     // Four bytes is the widest sequence, so a small window is enough to hand
@@ -89,7 +128,7 @@ pub(crate) fn is_mostly_utf8(data: &[u8], pos: usize, mask: usize, length: usize
             size_utf8 += bytes_read;
         }
     }
-    size_utf8 as f64 > MIN_UTF8_RATIO * length as f64
+    size_utf8
 }
 
 #[cfg(test)]

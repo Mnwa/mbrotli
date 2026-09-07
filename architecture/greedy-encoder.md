@@ -194,14 +194,16 @@ visit only the slots whose tag matches. The bucket matcher keeps tags for the
 same two qualities (block depth 16 or 32, a compile-time property of the
 shape). `tag_equality` is generic over the block width and compares a whole
 bucket's tags with one safe `fearless_simd` vector — sixteen or thirty-two
-lanes, the only two widths that survive monomorphisation; `split_candidates`
-drops unfilled slots and splits the result into the slots at or above the
-newest position and those below it, so visiting each mask by ascending slot
-walks the bucket newest to oldest. Slots fill downwards from the top of a
-block, as the reference's tagged matchers do, which is what makes that walk a
-plain rotation. The scalar backend deliberately keeps the unfiltered scan as
-an independent oracle, and so does a four-slot starter block, which is too
-short for a vector compare. Filtering preserves the accepted-match sequence:
+lanes, the only two widths that survive monomorphisation; `rotate_candidates`
+drops unfilled slots and rotates the result right by the newest slot, so bit
+`age` of the mask names the slot `age` stores older than the newest one, and
+one loop over ascending bits walks the bucket newest to oldest — the
+reference rotates its mask the same way. Slots fill downwards from the top of
+a block, as the reference's tagged matchers do, which is what makes that walk
+a plain rotation. The scalar backend deliberately keeps the unfiltered scan
+as an independent oracle, and so do a four-slot starter block, which is too
+short for a vector compare, and the compact layout's chain walk. Filtering
+preserves the accepted-match sequence:
 
 - They select the same bucket. The tagged `HashBytes` keeps eight more low bits,
   which the key shifts straight back off.
@@ -237,23 +239,44 @@ what `prepare` is told about it:
 
 | Layout | Chosen when | Index | Blocks | Cost of a new stream |
 | --- | --- | --- | --- | --- |
-| Compact | one-shot input of at most 1024 bytes on a matcher that has no sparse table yet | `KeyMap`, sized two entries per input byte, probed once per position | starter and full-block pools, activated on demand and reserved for the input up front | fill a map of at most 16 KiB |
-| Sparse | every other input, including one of unknown length, unless the dense table already exists | a boxed `[u64; BUCKETS]`: generation stamp, block index with a starter flag, counter | typed pools: `Vec<[u32; 4]>` starters that grow into `Vec<[u32; BLOCK]>` full blocks on their fifth store, tags alongside for tagged shapes | bump the generation |
-| Dense | the matcher was built for a size hint of at least the shape's dense limit — a sixteenth of the table for tagged q5/q6 shapes (64 KiB and 128 KiB of input), half of it for deep q7–q9 shapes — or the matcher already holds the dense table and the stream is not compact | `[u16; BUCKETS]` counters | one flat `Vec<u32>` of `BUCKETS * BLOCK` slots, viewed as `[[u32; BLOCK]; BUCKETS]` for a run, zeroed once per matcher | zero the counters |
+| Compact | one-shot input of at most 1024 bytes on a matcher that has no sparse table yet | `KeyMap`, sized two entries per input byte, probed once per position: counter and chain head per bucket | one chain: `Vec<u64>` of `position | next << 32`, one node pushed per store in front of its bucket's previous node; a search walks the newest `BLOCK` nodes, the order a block scan takes | fill a map of at most 16 KiB |
+| Sparse | a known input below the dense limit; an input of unknown length on a deep shape; unless the dense table already exists | a boxed `[u64; BUCKETS]`: generation stamp, block index with a starter flag, counter | typed pools: `Vec<[u32; 4]>` starters that grow into `Vec<[u32; BLOCK]>` full blocks on their fifth store, tags alongside for tagged shapes | bump the generation |
+| Dense | the matcher's size hint is at least the shape's dense limit — a sixteenth of the table for tagged q5/q6 shapes (64 KiB and 128 KiB of input); for deep q7–q9 shapes an eighth of it on the matcher's first stream (1, 2 and 4 MiB) and a sixty-fourth from its second stream on (256 KiB, 256 KiB and 512 KiB) — or the length is unknown on a tagged shape, or the matcher already holds the dense table and the stream is not compact | `[u16; BUCKETS]` counters | one flat `Vec<u32>` of `BUCKETS * BLOCK` slots, viewed as `[[u32; BLOCK]; BUCKETS]` for a run, zeroed once per matcher | zero the counters |
 
 The dense decision rests on the construction-time size hint rather than on
 `prepare`'s `one_shot` flag: an input longer than one block is not one shot
 at its first block, and choosing the dense table there made every cold
 multi-block call pay for zeroing (and, on WSL2, faulting in) a table of up to
-32 MiB. The table is kept flat on purpose: a zero-filled vector of integers
+32 MiB. An unknown length is taken for a long stream on the tagged shapes
+(`expected_input`), because the reference always uses its dense table and a
+stream written in pieces without a size hint — a writer flushing every
+64 KiB — stored every position through the sparse index's dependent loads at
+several times the cost of a counter and a block; the deep shapes keep the
+on-demand layouts there, as only a long stream repays clearing their tables.
+The deep shapes' limit depends on whether the matcher has been reused
+(`streams`): a cold call on a short compressible input stores few positions,
+and clearing an 8 or 16 MiB table for it costs more than compressing it — a
+quarter-mebibyte of zeros at quality seven measured 48% of the reference
+with the table and 234% without — while a matcher on its second stream pays
+the clear once for every stream that follows, and the sparse index's
+dependent load per bucket cost more than the whole search on a
+quarter-mebibyte input (quality 7 binary 81% against 97% with the table).
+That second-stream allocation is deliberate: the crate promises nothing
+about when a reused compressor allocates, only that its output is the
+reference's. The size hint itself is retargetable: a reused encoder whose
+new hint resolves to the same shape and the same match-finder variant takes
+the hint over (`GreedyEncoder::retarget`, `MatchFinder::retarget`) instead
+of being rebuilt, so a compressor fed inputs of varying lengths keeps its
+tables; only a hint that crosses the quick matchers' 2048-byte compact
+boundary, or changes the plan, still rebuilds.
+The table is kept flat on purpose: a zero-filled vector of integers
 comes straight from the allocator's zeroed pages, whereas a vector of arrays
 longer than sixteen elements is written out element by element, which for the
 two-mebibyte quality-six table cost more than compressing a hundred kibibytes.
 A sparse entry from an earlier generation still names its block but counts as
-empty, so blocks persist across streams and a warmed compressor allocates
-nothing; a warmed compressor that holds the dense table uses it for every
-later stream, because clearing its counters is cheaper than the on-demand
-layouts' extra dependent load per bucket. Every layout empties itself in time
+empty, so blocks persist across streams; a compressor that holds the dense
+table uses it for every later stream, because clearing its counters is
+cheaper than the on-demand layouts' extra dependent load per bucket. Every layout empties itself in time
 that does not depend on what the previous stream stored, which is what the
 [`Sweep::SelfCleaning`] result of `prepare` tells the encoder.
 
@@ -266,7 +289,13 @@ are `QuickMatcher<BUCKETS, ...>` with their table as a boxed array; a compact
 quick matcher (size hints up to 2048 bytes) indexes a `SmallSlots` map for its
 first stream only, sized for the input so it never rehashes mid-stream, and
 allocates the table when the replay sweep after that stream asks it to clear,
-from which point it is cleared by the partial sweep like any other.
+from which point it is cleared by the partial sweep like any other. A map
+entry is one word — the slot above the position plus one, zero when empty —
+so clearing it costs half of what a two-word entry did; the packing needs
+positions below 32767, so `prepare` allocates the table instead of the map
+for a stream that is not one shot or is longer than that. The single-slot
+shapes read and overwrite the same slot at every position and do both with
+one probe (`QuickSlots::replace`).
 
 The reference hoists its table pointers into `restrict` locals for a whole
 block, so a store through one never makes the compiler reload the others. The
@@ -283,9 +312,9 @@ union of them:
 
 ```mermaid
 flowchart LR
-    prepare[prepare: one-shot? input length; size hint; tables held] --> compact[Compact: key map + reserved pools]
-    prepare --> sparse[Sparse: stamped entries + typed pools]
-    prepare -->|size hint at least the dense limit, or table held| dense[Dense: counters and flat key-addressed blocks]
+    prepare[prepare: one-shot? input length; size hint; tables held] --> compact[Compact: key map + one chain of nodes]
+    prepare -->|known short input, or unknown length on a deep shape| sparse[Sparse: stamped entries + typed pools]
+    prepare -->|size hint at least the dense limit for a first or a later stream, unknown length on a tagged shape, or table held| dense[Dense: counters and flat key-addressed blocks]
     compact --> run[Matcher::visit_run binds one concrete run for the block]
     sparse --> run
     dense --> run
@@ -727,17 +756,17 @@ sized by the same `2 * bytes + 503` reservation the reference uses.
   filtering and the high-quality match-length scans have SIMD
   implementations; the greedy matchers scan whole words.
 - **The bucket matcher still trails the reference on some inputs.** Its search
-  loop now executes fewer instructions per position than the C build, but at
-  a lower rate: the loop still spills part of its state around the calls it
-  makes, and a dense table costs a one-time zeroing the reference never pays.
-  Reused binary input at qualities five to seven measures 81–85% of the
-  reference and text 84–94%; quality seven, whose reference keeps sixty-four
-  candidates per bucket, is the weakest of the three.
+  loop executes about as many instructions per position as the C build on
+  the dense layouts (callgrind, 2026-09-07), but at a lower rate: reused
+  binary input measures 93% (q5), 86% (q6) and 95% (q8) of the reference,
+  text 89–106%. A cold call on a quarter-mebibyte input at quality seven or
+  eight zeroes an 8 or 16 MiB table the reference leaves uninitialised, and
+  measures about 82% in Criterion.
 - **Short one-shot inputs pay for initialised memory.** A cold call on at
-  most a kibibyte indexes the compact map at roughly ninety instructions per
-  stored position, against about thirty for the reference's uninitialised
-  table, and allocates and zeroes its scratch per call. Those cases measure
-  70–85% of the reference. See the [benchmark record](../docs/benchmarks/2026-09-06-greedy-runs.md).
+  most a kibibyte indexes the compact map and allocates and zeroes its
+  scratch per call; the quick-matcher cases (q2–q4) measure 67–87% of the
+  reference and the bucket-matcher ones 82–99%. See the
+  [benchmark record](../docs/benchmarks/2026-09-07-third-pass.md).
 
 ## Independent parallel fragments
 

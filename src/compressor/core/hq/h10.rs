@@ -124,22 +124,28 @@ pub(crate) struct BinaryTreeMatcher {
     invalid_pos: u32,
     buckets: Vec<u32>,
     /// Two child links per window position: `2 * pos` left, `2 * pos + 1` right.
+    ///
+    /// Sized by [`BinaryTreeMatcher::prepare`]: a one-shot stream only ever
+    /// stores positions below its length, so it needs no more nodes than
+    /// that, and a window-sized forest for a sixteen-byte input would cost
+    /// more to zero than the input costs to encode. The links of positions a
+    /// stream never stored are never followed, so a forest kept from an
+    /// earlier stream needs no clearing.
     forest: Vec<u32>,
 }
 
 impl BinaryTreeMatcher {
     /// Creates a matcher over a window of `1 << lgwin` bytes.
     ///
-    /// The forest is indexed by wrapped position, so it is as large as the
-    /// window however much input actually arrives.
+    /// The forest is allocated on the first [`BinaryTreeMatcher::prepare`],
+    /// once the shape of the stream is known.
     pub(crate) fn new(lgwin: usize) -> Self {
         let window_mask = (1usize << lgwin) - 1;
-        let num_nodes = 1usize << lgwin;
         Self {
             window_mask,
             invalid_pos: (0u32).wrapping_sub(window_mask as u32),
-            buckets: vec![0u32; BUCKET_SIZE],
-            forest: vec![0u32; 2 * num_nodes],
+            buckets: Vec::new(),
+            forest: Vec::new(),
         }
     }
 
@@ -158,9 +164,32 @@ impl BinaryTreeMatcher {
         (self.buckets.capacity() + self.forest.capacity()) * size_of::<u32>()
     }
 
-    /// Empties every tree (`Prepare`).
-    pub(crate) fn prepare(&mut self) {
-        self.buckets.fill(self.invalid_pos);
+    /// Empties every tree and makes sure the forest can hold the stream
+    /// (`Prepare` plus the sizing `HashMemAllocInBytes` does).
+    ///
+    /// `one_shot` is the reference's `position == 0 && is_last`: the whole
+    /// stream is the `input_size` bytes of this block, so only that many
+    /// positions are ever stored. Any other stream may store every window
+    /// position. The forest only grows, so a reused matcher keeps the largest
+    /// forest it has needed.
+    pub(crate) fn prepare(&mut self, one_shot: bool, input_size: usize) {
+        // The first preparation writes the buckets once, as the reference's
+        // uninitialised allocation plus fill does, rather than zeroing them
+        // first.
+        if self.buckets.is_empty() {
+            self.buckets.resize(BUCKET_SIZE, self.invalid_pos);
+        } else {
+            self.buckets.fill(self.invalid_pos);
+        }
+        let window = self.window_mask + 1;
+        let num_nodes = if one_shot {
+            input_size.min(window)
+        } else {
+            window
+        };
+        if self.forest.len() < 2 * num_nodes {
+            self.forest.resize(2 * num_nodes, 0);
+        }
     }
 
     /// Returns the forest index of the left child of `pos`.
@@ -516,7 +545,7 @@ mod tests {
     /// As [`walk`], on a chosen SIMD backend.
     fn walk_with(level: Level, data: &[u8], end: usize, short_scan: usize) -> Vec<BackwardMatch> {
         let mut matcher = BinaryTreeMatcher::new(22);
-        matcher.prepare();
+        matcher.prepare(false, 0);
         let mut out = Vec::new();
         for position in 0..=end {
             out.clear();
@@ -634,7 +663,7 @@ mod tests {
         // the short backward scan's doing, and it never looks past its window.
         let data = repeated();
         let mut matcher = BinaryTreeMatcher::new(22);
-        matcher.prepare();
+        matcher.prepare(false, 0);
         let mut out = Vec::new();
         let level = Level::new();
         dispatch!(level, simd => matcher.find_all_matches(
@@ -677,7 +706,7 @@ mod tests {
         let stored_end = payload - MAX_TREE_COMP_LENGTH;
 
         let mut matcher = BinaryTreeMatcher::new(22);
-        matcher.prepare();
+        matcher.prepare(false, 0);
         let mut out = Vec::new();
         let level = Level::new();
         let mut checked = 0usize;
@@ -721,7 +750,7 @@ mod tests {
         let mut data = b"Xabcdab".to_vec();
         data.extend_from_slice(&[0u8; 256]);
         let mut matcher = BinaryTreeMatcher::new(22);
-        matcher.prepare();
+        matcher.prepare(false, 0);
         let mut out = Vec::new();
         let level = Level::new();
         dispatch!(level, simd => matcher.find_all_matches(
@@ -746,7 +775,7 @@ mod tests {
 
         for (scan, expected) in [(16usize, 0usize), (64, 1)] {
             let mut matcher = BinaryTreeMatcher::new(22);
-            matcher.prepare();
+            matcher.prepare(false, 0);
             let mut out = Vec::new();
             let level = Level::new();
             dispatch!(level, simd => matcher.find_all_matches(
@@ -767,7 +796,7 @@ mod tests {
         data.extend_from_slice(&[0u8; 256]);
 
         let mut matcher = BinaryTreeMatcher::new(22);
-        matcher.prepare();
+        matcher.prepare(false, 0);
         let level = Level::new();
         dispatch!(level, simd => matcher.store_range(simd, &data, usize::MAX, 0, 400));
 
@@ -810,7 +839,7 @@ mod tests {
         data.extend_from_slice(&[0u8; 256]);
 
         let mut matcher = BinaryTreeMatcher::new(22);
-        matcher.prepare();
+        matcher.prepare(false, 0);
         let level = Level::new();
         dispatch!(level, simd => matcher.store_range(simd, &data, usize::MAX, 0, 2000));
 
@@ -847,7 +876,7 @@ mod tests {
         // Nothing happens before the tree has a full comparison length of
         // history behind it.
         let mut early = BinaryTreeMatcher::new(22);
-        early.prepare();
+        early.prepare(false, 0);
         dispatch!(level, simd => early.stitch_to_previous_block(
             simd, 64, MAX_TREE_COMP_LENGTH - 1, &data, usize::MAX));
         let mut out = Vec::new();
@@ -860,7 +889,7 @@ mod tests {
         // With the boundary far enough in, the last comparison length of
         // positions is stored and their repeats become findable.
         let mut late = BinaryTreeMatcher::new(22);
-        late.prepare();
+        late.prepare(false, 0);
         dispatch!(level, simd => late.stitch_to_previous_block(
             simd, 300, 300, &data, usize::MAX));
         let mut out = Vec::new();

@@ -38,27 +38,79 @@ const BINARY_NUDGE: f64 = 0.029;
 /// Number of position classes the UTF-8 model keys its histograms on.
 const UTF8_POSITIONS: usize = 3;
 
-/// Scratch histograms the estimator needs, allocated once per stream.
+/// Scratch the estimator needs, allocated once per stream.
 ///
-/// Three of them, because the UTF-8 model keys on position within a sequence;
-/// the binary model uses only the first.
+/// Three histograms, because the UTF-8 model keys on position within a
+/// sequence; the binary model uses only the first. The block copy is used
+/// only when a block wraps the ring buffer, so the pricing loops always read
+/// through one contiguous slice.
 pub(crate) struct LiteralCostArena {
     histogram: Vec<u32>,
+    block: Vec<u8>,
 }
 
 impl LiteralCostArena {
-    /// Counts the literal-model histogram allocation.
+    /// Counts the literal-model histogram and block-copy allocations.
     pub(crate) fn retained_bytes(&self) -> usize {
-        self.histogram.capacity() * size_of::<u32>()
+        self.histogram.capacity() * size_of::<u32>() + self.block.capacity()
     }
 }
 
 impl Default for LiteralCostArena {
-    /// Returns zeroed histograms.
+    /// Returns zeroed histograms and an empty block copy.
     fn default() -> Self {
         Self {
             histogram: vec![0u32; UTF8_POSITIONS * 256],
+            block: Vec::new(),
         }
+    }
+}
+
+/// Returns `pos..pos + len` of the ring buffer as one contiguous slice.
+///
+/// The bytes are borrowed from `data` when the block does not wrap, which is
+/// every block of a one-shot stream, and copied into `scratch` otherwise.
+/// Every read the estimators make lies inside this range, so this is the only
+/// place the ring-buffer mask is applied.
+pub(crate) fn contiguous_block<'a>(
+    data: &'a [u8],
+    pos: usize,
+    mask: usize,
+    len: usize,
+    scratch: &'a mut Vec<u8>,
+) -> &'a [u8] {
+    let end = pos + len;
+    let direct = end <= data.len() && (end.saturating_sub(1) <= mask || len == 0);
+    if let (true, Some(block)) = (direct, data.get(pos..end)) {
+        return block;
+    }
+    scratch.clear();
+    scratch.extend((pos..end).map(|index| data.get(index & mask).copied().unwrap_or(0)));
+    scratch
+}
+
+/// A one-entry cache in front of [`fast_log2`].
+///
+/// The sliding-window counts change rarely and by one, and the library
+/// logarithm they need past the table's end costs more than the rest of a
+/// position, so the last argument's value is kept. The cached value is the
+/// same function's result, so nothing is rounded differently.
+#[derive(Clone, Copy)]
+struct Log2Memo {
+    value: usize,
+    log: f64,
+}
+
+impl Log2Memo {
+    const EMPTY: Self = Self { value: 0, log: 0.0 };
+
+    #[inline(always)]
+    fn get(&mut self, value: usize) -> f64 {
+        if value != self.value {
+            self.value = value;
+            self.log = fast_log2(value);
+        }
+        self.log
     }
 }
 
@@ -89,11 +141,11 @@ const fn utf8_position(last: usize, c: usize, clamp: usize) -> usize {
 ///
 /// The reference notes that one is better than two even for three-byte text,
 /// and drops to zero when there is barely any multi-byte content at all.
-fn decide_multi_byte_stats_level(pos: usize, len: usize, mask: usize, data: &[u8]) -> usize {
+fn decide_multi_byte_stats_level(block: &[u8]) -> usize {
     let mut counts = [0usize; UTF8_POSITIONS];
     let mut last_c = 0usize;
-    for index in 0..len {
-        let c = usize::from(data.get((pos + index) & mask).copied().unwrap_or(0));
+    for &byte in block {
+        let c = usize::from(byte);
         counts[utf8_position(last_c, c, 2)] += 1;
         last_c = c;
     }
@@ -114,36 +166,43 @@ pub(crate) fn estimate_bit_costs_for_literals(
     arena: &mut LiteralCostArena,
     cost: &mut [f32],
 ) {
-    if is_mostly_utf8(data, pos, mask, len) {
-        estimate_utf8(pos, len, mask, data, arena, cost);
+    let LiteralCostArena { histogram, block } = arena;
+    let block = contiguous_block(data, pos, mask, len, block);
+    let Some(cost) = cost.get_mut(..len) else {
+        return;
+    };
+    if is_mostly_utf8(block, 0, usize::MAX, len) {
+        estimate_utf8(block, histogram, cost);
     } else {
-        estimate_binary(pos, len, mask, data, arena, cost);
+        estimate_binary(block, histogram, cost);
     }
 }
 
 /// The three-histogram model for text (`EstimateBitCostsForLiteralsUTF8`).
-fn estimate_utf8(
-    pos: usize,
-    len: usize,
-    mask: usize,
-    data: &[u8],
-    arena: &mut LiteralCostArena,
-    cost: &mut [f32],
-) {
-    let max_utf8 = decide_multi_byte_stats_level(pos, len, mask, data);
+///
+/// `block` and `cost` are the same length.
+fn estimate_utf8(block: &[u8], histogram: &mut [u32], cost: &mut [f32]) {
+    let len = block.len().min(cost.len());
+    let block = &block[..len];
+    let cost = &mut cost[..len];
+    let Some(histogram) = histogram.get_mut(..UTF8_POSITIONS * 256) else {
+        return;
+    };
+    let max_utf8 = decide_multi_byte_stats_level(block);
     let window_half = UTF8_WINDOW_HALF;
     let in_window = window_half.min(len);
     let mut in_window_utf8 = [0usize; UTF8_POSITIONS];
-    let histogram = &mut arena.histogram;
+    let mut window_log = [Log2Memo::EMPTY; UTF8_POSITIONS];
+    let mut histo_log = Log2Memo::EMPTY;
     histogram.fill(0);
-    let at = |index: usize| usize::from(data.get(index & mask).copied().unwrap_or(0));
+    let at = |index: usize| usize::from(block[index]);
 
     {
         // Bootstrap the histograms over the first window.
         let mut last_c = 0usize;
         let mut utf8_pos = 0usize;
-        for index in 0..in_window {
-            let c = at(pos + index);
+        for &byte in &block[..in_window] {
+            let c = usize::from(byte);
             histogram[256 * utf8_pos + c] += 1;
             in_window_utf8[utf8_pos] += 1;
             utf8_pos = utf8_position(last_c, c, max_utf8);
@@ -157,31 +216,32 @@ fn estimate_utf8(
             let c = if index < window_half + 1 {
                 0
             } else {
-                at(pos + index - window_half - 1)
+                at(index - window_half - 1)
             };
             let last_c = if index < window_half + 2 {
                 0
             } else {
-                at(pos + index - window_half - 2)
+                at(index - window_half - 2)
             };
             let utf8_pos = utf8_position(last_c, c, max_utf8);
-            histogram[256 * utf8_pos + at(pos + index - window_half)] -= 1;
+            histogram[256 * utf8_pos + at(index - window_half)] -= 1;
             in_window_utf8[utf8_pos] -= 1;
         }
         if index + window_half < len {
             // Take in the byte entering the window ahead.
-            let c = at(pos + index + window_half - 1);
-            let last_c = at(pos + index + window_half - 2);
+            let c = at(index + window_half - 1);
+            let last_c = at(index + window_half - 2);
             let utf8_pos = utf8_position(last_c, c, max_utf8);
-            histogram[256 * utf8_pos + at(pos + index + window_half)] += 1;
+            histogram[256 * utf8_pos + at(index + window_half)] += 1;
             in_window_utf8[utf8_pos] += 1;
         }
         {
-            let c = if index < 1 { 0 } else { at(pos + index - 1) };
-            let last_c = if index < 2 { 0 } else { at(pos + index - 2) };
+            let c = if index < 1 { 0 } else { at(index - 1) };
+            let last_c = if index < 2 { 0 } else { at(index - 2) };
             let utf8_pos = utf8_position(last_c, c, max_utf8);
-            let histo = histogram[256 * utf8_pos + at(pos + index)].max(1) as usize;
-            let mut lit_cost = fast_log2(in_window_utf8[utf8_pos]) - fast_log2(histo);
+            let histo = histogram[256 * utf8_pos + at(index)].max(1) as usize;
+            let mut lit_cost =
+                window_log[utf8_pos].get(in_window_utf8[utf8_pos]) - histo_log.get(histo);
             lit_cost += UTF8_NUDGE;
             if lit_cost < 1.0 {
                 lit_cost *= 0.5;
@@ -193,51 +253,49 @@ fn estimate_utf8(
             if index < PROLOGUE_LENGTH {
                 lit_cost += PROLOGUE_BASE + PROLOGUE_MULTIPLIER * index as f64;
             }
-            if let Some(slot) = cost.get_mut(index) {
-                *slot = lit_cost as f32;
-            }
+            cost[index] = lit_cost as f32;
         }
     }
 }
 
 /// The single-histogram model for everything else.
-fn estimate_binary(
-    pos: usize,
-    len: usize,
-    mask: usize,
-    data: &[u8],
-    arena: &mut LiteralCostArena,
-    cost: &mut [f32],
-) {
+///
+/// `block` and `cost` are the same length.
+fn estimate_binary(block: &[u8], histogram: &mut [u32], cost: &mut [f32]) {
+    let len = block.len().min(cost.len());
+    let block = &block[..len];
+    let cost = &mut cost[..len];
+    let Some(histogram) = histogram.get_mut(..256) else {
+        return;
+    };
     let window_half = BINARY_WINDOW_HALF;
     let mut in_window = window_half.min(len);
-    let histogram = &mut arena.histogram;
-    histogram[..256].fill(0);
-    let at = |index: usize| usize::from(data.get(index & mask).copied().unwrap_or(0));
+    let mut window_log = Log2Memo::EMPTY;
+    let mut histo_log = Log2Memo::EMPTY;
+    histogram.fill(0);
+    let at = |index: usize| usize::from(block[index]);
 
-    for index in 0..in_window {
-        histogram[at(pos + index)] += 1;
+    for &byte in &block[..in_window] {
+        histogram[usize::from(byte)] += 1;
     }
 
     for index in 0..len {
         if index >= window_half {
-            histogram[at(pos + index - window_half)] -= 1;
+            histogram[at(index - window_half)] -= 1;
             in_window -= 1;
         }
         if index + window_half < len {
-            histogram[at(pos + index + window_half)] += 1;
+            histogram[at(index + window_half)] += 1;
             in_window += 1;
         }
-        let histo = histogram[at(pos + index)].max(1) as usize;
-        let mut lit_cost = fast_log2(in_window) - fast_log2(histo);
+        let histo = histogram[at(index)].max(1) as usize;
+        let mut lit_cost = window_log.get(in_window) - histo_log.get(histo);
         lit_cost += BINARY_NUDGE;
         if lit_cost < 1.0 {
             lit_cost *= 0.5;
             lit_cost += 0.5;
         }
-        if let Some(slot) = cost.get_mut(index) {
-            *slot = lit_cost as f32;
-        }
+        cost[index] = lit_cost as f32;
     }
 }
 
@@ -271,19 +329,13 @@ mod tests {
     #[test]
     fn barely_any_multi_byte_content_drops_to_one_class() {
         let ascii = vec![b'a'; 4096];
-        assert_eq!(
-            decide_multi_byte_stats_level(0, ascii.len(), usize::MAX, &ascii),
-            0
-        );
+        assert_eq!(decide_multi_byte_stats_level(&ascii), 0);
 
         let mut text = Vec::new();
         while text.len() < 4096 {
             text.extend_from_slice("héllo wörld ".as_bytes());
         }
-        assert_eq!(
-            decide_multi_byte_stats_level(0, text.len(), usize::MAX, &text),
-            1
-        );
+        assert_eq!(decide_multi_byte_stats_level(&text), 1);
     }
 
     #[test]

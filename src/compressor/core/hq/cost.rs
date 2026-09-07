@@ -75,16 +75,17 @@ pub(crate) struct ZopfliCostModel {
 }
 
 impl ZopfliCostModel {
-    /// Allocates a model for blocks of at most `max_bytes` and `alphabet_size`
-    /// distance symbols.
+    /// Allocates a model for `alphabet_size` distance symbols.
     ///
-    /// Sized once for the largest meta-block the encoder can emit, so no block
-    /// allocates.
-    pub(crate) fn new(max_bytes: usize, alphabet_size: usize) -> Self {
+    /// The per-byte literal costs are sized by [`ZopfliCostModel::reserve`]
+    /// for each block, as the reference sizes its model per block: a stream
+    /// far shorter than the largest possible meta-block would otherwise pay
+    /// to zero a whole block's worth of prices it never reads.
+    pub(crate) fn new(alphabet_size: usize) -> Self {
         Self {
             cost_cmd: vec![0f32; NUM_COMMAND_SYMBOLS],
             cost_dist: vec![0f32; alphabet_size.max(1)],
-            literal_costs: vec![0f32; max_bytes + 2],
+            literal_costs: Vec::new(),
             min_cost_cmd: 0.0,
             distance_histogram_size: alphabet_size,
             histogram_literal: vec![0u32; NUM_LITERAL_SYMBOLS],
@@ -310,7 +311,8 @@ mod tests {
 
     #[test]
     fn the_literal_prior_prices_every_command_symbol() {
-        let mut model = ZopfliCostModel::new(4096, alphabet());
+        let mut model = ZopfliCostModel::new(alphabet());
+        model.reserve(4096, alphabet());
         let data = vec![b'a'; 4096];
         model.set_from_literal_costs(0, &data, usize::MAX, 4096);
         // `log2(11 + symbol)`, narrowed once.
@@ -322,7 +324,8 @@ mod tests {
 
     #[test]
     fn cumulative_literal_costs_are_monotone_and_additive() {
-        let mut model = ZopfliCostModel::new(4096, alphabet());
+        let mut model = ZopfliCostModel::new(alphabet());
+        model.reserve(4096, alphabet());
         let data: Vec<u8> = (0..4096u32).map(|i| (i * 31 % 256) as u8).collect();
         model.set_from_literal_costs(0, &data, usize::MAX, 4096);
 
@@ -376,7 +379,8 @@ mod tests {
             .map(|_| Command::new(&dist, 4, 20, 0, 100))
             .collect();
 
-        let mut model = ZopfliCostModel::new(4096, alphabet());
+        let mut model = ZopfliCostModel::new(alphabet());
+        model.reserve(4096, alphabet());
         model.set_from_commands(200, &data, usize::MAX, &commands, 0, 2048);
 
         let used = commands[0].cmd_prefix;
@@ -390,7 +394,8 @@ mod tests {
     #[test]
     fn an_empty_command_list_still_prices_every_symbol() {
         let data = vec![b'q'; 1024];
-        let mut model = ZopfliCostModel::new(1024, alphabet());
+        let mut model = ZopfliCostModel::new(alphabet());
+        model.reserve(1024, alphabet());
         model.set_from_commands(0, &data, usize::MAX, &[], 0, 1024);
         for symbol in [0u16, 1, 100, (NUM_COMMAND_SYMBOLS - 1) as u16] {
             assert!(model.command_cost(symbol).is_finite());
@@ -404,10 +409,12 @@ mod tests {
         let data = vec![b'k'; 4096];
         let commands: Vec<Command> = (0..8).map(|_| Command::new(&dist, 2, 10, 0, 60)).collect();
 
-        let mut fresh = ZopfliCostModel::new(4096, alphabet());
+        let mut fresh = ZopfliCostModel::new(alphabet());
+        fresh.reserve(4096, alphabet());
         fresh.set_from_commands(100, &data, usize::MAX, &commands, 0, 1024);
 
-        let mut reused = ZopfliCostModel::new(4096, alphabet());
+        let mut reused = ZopfliCostModel::new(alphabet());
+        reused.reserve(4096, alphabet());
         reused.set_from_literal_costs(0, &data, usize::MAX, 4096);
         reused.set_from_commands(100, &data, usize::MAX, &commands, 0, 1024);
 
@@ -420,11 +427,13 @@ mod tests {
     #[test]
     fn reserving_grows_the_model_without_changing_its_prices() {
         let data: Vec<u8> = (0..8192u32).map(|i| (i % 251) as u8).collect();
-        let mut small = ZopfliCostModel::new(1024, alphabet());
+        let mut small = ZopfliCostModel::new(alphabet());
+        small.reserve(1024, alphabet());
         small.reserve(8192, alphabet());
         small.set_from_literal_costs(0, &data, usize::MAX, 8192);
 
-        let mut large = ZopfliCostModel::new(8192, alphabet());
+        let mut large = ZopfliCostModel::new(alphabet());
+        large.reserve(8192, alphabet());
         large.set_from_literal_costs(0, &data, usize::MAX, 8192);
 
         assert_eq!(small.literal_costs(0, 8192), large.literal_costs(0, 8192));

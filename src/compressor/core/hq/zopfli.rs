@@ -84,8 +84,8 @@ pub(crate) struct ZopfliWorkspace {
 }
 
 impl ZopfliWorkspace {
-    /// Allocates a workspace for blocks of at most `max_bytes`.
-    pub(crate) fn new(max_bytes: usize, alphabet_size: usize) -> Self {
+    /// Creates a workspace whose buffers are sized per block by `prepare`.
+    pub(crate) fn new(alphabet_size: usize) -> Self {
         Self {
             nodes: Vec::new(),
             queue: StartPosQueue::default(),
@@ -93,7 +93,7 @@ impl ZopfliWorkspace {
             prefix_matches: Vec::new(),
             arena: Vec::new(),
             num_matches: Vec::new(),
-            model: ZopfliCostModel::new(max_bytes, alphabet_size),
+            model: ZopfliCostModel::new(alphabet_size),
         }
     }
 
@@ -1198,11 +1198,8 @@ mod tests {
         let params = HqParams::new(&public).expect("supported quality");
         let buffer = ring(&params, data);
         let mut matcher = BinaryTreeMatcher::new(params.lgwin);
-        matcher.prepare();
-        let mut workspace = ZopfliWorkspace::new(
-            params.input_block_size(),
-            params.dist.alphabet_size_limit as usize,
-        );
+        matcher.prepare(false, 0);
+        let mut workspace = ZopfliWorkspace::new(params.dist.alphabet_size_limit as usize);
         let mut state = ZopfliState::default();
         let mut commands = Vec::new();
         let level = Level::new();

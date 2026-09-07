@@ -42,7 +42,8 @@ const WIDEST_BOUND: CompressParams = CompressParams::new(QualityLevel::Q0, Windo
 /// ```
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Hash)]
 pub enum RetentionPolicy {
-    /// Keep every buffer, so repeated operations allocate nothing.
+    /// Keep every buffer, so repeated operations allocate only what the
+    /// first streams grow into.
     #[default]
     Aggressive,
     /// Keep only what the current configuration needs.
@@ -63,9 +64,10 @@ pub enum RetentionPolicy {
 /// A reusable Brotli encoder.
 ///
 /// A compressor owns its configuration, the instruction set it resolved once at
-/// construction, and every buffer the encoders need. All of that is reused: the
-/// second call at a given shape allocates nothing the first did not already
-/// pay for.
+/// construction, and every buffer the encoders need. All of that is reused:
+/// a call at a given shape allocates nothing an earlier one did not already
+/// pay for, except that a match finder may take its full table on the
+/// second stream once the compressor has shown it is reused.
 ///
 /// Every encoding method takes `&mut self`, because every one of them advances
 /// state the compressor owns. That is deliberate: one compressor belongs to one

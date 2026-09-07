@@ -380,6 +380,20 @@ impl GreedyParams {
         })
     }
 
+    /// Returns whether `other` resolves to the same encoder shape, whatever
+    /// its size hint.
+    ///
+    /// The hint reaches the output only through the context-modelling
+    /// decision and the matcher's layout choice, both of which take it from
+    /// the parameters at every stream, so an encoder built for one hint can
+    /// serve another once retargeted.
+    pub(crate) fn same_shape(&self, other: &Self) -> bool {
+        Self {
+            size_hint: other.size_hint,
+            ..*self
+        } == *other
+    }
+
     /// Returns the number of bytes one `process` call may consume.
     pub(crate) const fn input_block_size(&self) -> usize {
         1usize << self.lgblock

@@ -148,6 +148,19 @@ max-heap by position, so one traversal both collects every match worth
 considering — in strictly increasing length order — and re-roots the tree at the
 current position.
 
+The forest — two child links per window position — is sized when the first
+block prepares the matcher, as the reference's `HashMemAllocInBytes` sizes
+it: a stream whose first block is also its last (`position == 0 && is_last`)
+stores only positions below its length, so it gets `2 * input_size` links
+rather than `2 << lgwin`; any other stream gets the window's worth. The
+forest only grows, and a reused matcher keeps the largest one it has needed;
+the links of positions a stream never stored are never followed, so nothing
+is cleared between streams. The buckets are written once on the first
+preparation with the empty marker rather than zeroed and then refilled. A
+sixteen-byte call used to zero a 32 MiB forest and a mebibyte of literal
+prices; both are now sized by the stream (`ZopfliCostModel::reserve` sizes
+the prices per block).
+
 Three bounds shape what it finds, all from the reference:
 
 - **Search depth 64.** A degenerate bucket cannot cost more than that.
@@ -235,6 +248,19 @@ arithmetic is part of the output, not an implementation detail:
 - The literal-cost estimator's constants — window widths 495 and 2000, the
   additive nudges, the halving below one bit, the prologue surcharge — were
   tuned by the reference against its corpora and are reproduced exactly.
+- The estimator reads every byte of a block through one contiguous slice
+  (`contiguous_block`): the block itself when it does not wrap the ring
+  buffer, which is every block of a one-shot stream, and a copy in the
+  `LiteralCostArena` otherwise. Every read lies inside `pos..pos + len`, so
+  the mask is applied in one place and the sliding-window loops index a
+  plain slice. The in-window count and the histogram count each go through
+  a one-entry `Log2Memo`: the count changes rarely and the library `log2`
+  past the table's end costs more than the rest of a position, and a cached
+  value is the same function's result, so nothing rounds differently.
+  `is_mostly_utf8` scans a contiguous run in place, counting eight ASCII
+  bytes at a time when a word has no high bit and no NUL — each parses as a
+  one-byte sequence — and falls back to the per-byte masked decoder only for
+  a run that wraps.
 
 ## 6. The high-quality meta-block
 

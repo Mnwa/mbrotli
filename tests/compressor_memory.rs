@@ -121,9 +121,12 @@ fn warmed_compression_reuses_all_allocations() {
             Vec::with_capacity(Compressor::max_compressed_size(data.len()).expect("bound"));
         let mut compressor =
             Compressor::new(EncoderConfig::default().with_quality(quality)).expect("config");
-        compressor
-            .compress_into(&data, &mut output)
-            .expect("warm up");
+        for _ in 0..2 {
+            output.clear();
+            compressor
+                .compress_into(&data, &mut output)
+                .expect("warm up");
+        }
         for _ in 0..3 {
             output.clear();
             let before = ALLOCATIONS.get();
@@ -159,9 +162,12 @@ fn warmed_binary_and_multiblock_compression_reuses_all_allocations() {
             .expect("config");
             let mut output =
                 Vec::with_capacity(Compressor::max_compressed_size(data.len()).expect("bound"));
-            compressor
-                .compress_into(data, &mut output)
-                .expect("warm up");
+            for _ in 0..2 {
+                output.clear();
+                compressor
+                    .compress_into(data, &mut output)
+                    .expect("warm up");
+            }
             output.clear();
             let before = ALLOCATIONS.get();
             compressor
@@ -193,9 +199,12 @@ fn warmed_dictionary_compression_reuses_prefix_and_merge_storage() {
         .expect("config");
         let mut output =
             Vec::with_capacity(Compressor::max_compressed_size(data.len()).expect("bound"));
-        compressor
-            .compress_with_dictionary_into(&dictionary, &data, &mut output)
-            .expect("warm up");
+        for _ in 0..2 {
+            output.clear();
+            compressor
+                .compress_with_dictionary_into(&dictionary, &data, &mut output)
+                .expect("warm up");
+        }
         output.clear();
         let before = ALLOCATIONS.get();
         compressor
@@ -218,7 +227,7 @@ fn warmed_sessions_reuse_staging_and_pending_storage() {
             EncoderConfig::default().with_quality(Quality::try_from(number).expect("quality")),
         )
         .expect("config");
-        for iteration in 0..2 {
+        for iteration in 0..3 {
             let before = ALLOCATIONS.get();
             let mut session = compressor
                 .start(mbrotli::InputSize::Exact(data.len() as u64).into())
@@ -234,7 +243,7 @@ fn warmed_sessions_reuse_staging_and_pending_storage() {
                 }
             }
             drop(session);
-            if iteration == 1 {
+            if iteration == 2 {
                 assert_eq!(
                     ALLOCATIONS.get() - before,
                     0,
@@ -262,9 +271,11 @@ fn a_warmed_incompressible_small_window_slice_does_not_allocate() {
             .with_quality(quality)
             .with_window(mbrotli::Window::standard(10).expect("window"));
         let mut compressor = Compressor::new(config).expect("config");
-        compressor
-            .compress_to_slice(&input, &mut output)
-            .expect("warm up");
+        for _ in 0..2 {
+            compressor
+                .compress_to_slice(&input, &mut output)
+                .expect("warm up");
+        }
         let before = ALLOCATIONS.get();
         compressor
             .compress_to_slice(&input, &mut output)

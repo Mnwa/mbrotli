@@ -99,7 +99,7 @@ impl TableBits {
 }
 
 /// Hashes the five bytes at `position` into a table index.
-#[inline(always)]
+#[cfg(test)]
 fn hash<const TABLE_BITS: usize>(data: &[u8], position: usize) -> usize {
     let word = load_u64_le(data, position);
     let mixed = (word << 24).wrapping_mul(HASH_MUL32 as u64);
@@ -126,7 +126,13 @@ const MATCH_MASK: u64 = (1 << (8 * Q0_MIN_MATCH)) - 1;
 /// side reports no match, which the scan never relies on.
 #[inline(always)]
 fn is_match(data: &[u8], left: usize, right: usize) -> bool {
-    (load_u64_le(data, left) ^ load_u64_le(data, right)) & MATCH_MASK == 0
+    words_match(load_u64_le(data, left), load_u64_le(data, right))
+}
+
+/// Tests the five-byte match predicate on two already loaded words.
+#[inline(always)]
+const fn words_match(left: u64, right: u64) -> bool {
+    (left ^ right) & MATCH_MASK == 0
 }
 
 /// Builds the approximate literal prefix code and stores it.
@@ -372,7 +378,11 @@ fn compress_fragment_impl<S: Simd, const TABLE_BITS: usize, const INDEPENDENT: b
                     let ip_limit = input + len_limit;
 
                     ip += 1;
-                    let mut next_hash = hash::<TABLE_BITS>(data, ip);
+                    // The word at the next position is loaded once: it is
+                    // hashed here and compared against the candidates when
+                    // the scan reaches it.
+                    let mut next_word = load_u64_le(data, ip);
+                    let mut next_hash = hash_bytes_at_offset::<TABLE_BITS>(next_word, 0);
                     loop {
                         // Heuristic match skipping: after 32 unproductive bytes look at
                         // every other byte, after 32 more at every third, and so on. A
@@ -385,6 +395,7 @@ fn compress_fragment_impl<S: Simd, const TABLE_BITS: usize, const INDEPENDENT: b
                             loop {
                                 loop {
                                     let slot = next_hash;
+                                    let ip_word = next_word;
                                     let stride = (skip >> 5) as usize;
                                     skip = skip.wrapping_add(1);
                                     ip = next_ip;
@@ -392,21 +403,26 @@ fn compress_fragment_impl<S: Simd, const TABLE_BITS: usize, const INDEPENDENT: b
                                     if next_ip > ip_limit {
                                         break 'scan;
                                     }
-                                    next_hash = hash::<TABLE_BITS>(data, next_ip);
+                                    next_word = load_u64_le(data, next_ip);
+                                    next_hash = hash_bytes_at_offset::<TABLE_BITS>(next_word, 0);
 
-                                    let repeated = ip as i64 - last_distance;
-                                    if repeated >= 0 {
-                                        let repeated = repeated as usize;
-                                        if is_match(data, ip, repeated) && repeated < ip {
-                                            table[slot] = ip as i32;
-                                            candidate = repeated;
-                                            break;
-                                        }
+                                    // The reference subtracts the last distance
+                                    // without a sign test and rejects a position at
+                                    // or past `ip` after comparing; the two tests
+                                    // are pure, so rejecting first reads nothing
+                                    // for the initial distance of minus one.
+                                    let repeated = (ip as i64 - last_distance) as usize;
+                                    if repeated < ip
+                                        && words_match(ip_word, load_u64_le(data, repeated))
+                                    {
+                                        table[slot] = ip as i32;
+                                        candidate = repeated;
+                                        break;
                                     }
 
                                     candidate = table[slot] as usize;
                                     table[slot] = ip as i32;
-                                    if is_match(data, ip, candidate) {
+                                    if words_match(ip_word, load_u64_le(data, candidate)) {
                                         break;
                                     }
                                 }
@@ -535,7 +551,8 @@ fn compress_fragment_impl<S: Simd, const TABLE_BITS: usize, const INDEPENDENT: b
                         }
 
                         ip += 1;
-                        next_hash = hash::<TABLE_BITS>(data, ip);
+                        next_word = load_u64_le(data, ip);
+                        next_hash = hash_bytes_at_offset::<TABLE_BITS>(next_word, 0);
                     }
                 }
 

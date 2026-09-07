@@ -262,7 +262,7 @@ otherwise, so reuse can never change a byte:
 | Encoder | What "same shape" means |
 | --- | --- |
 | `Fast` | `FastEncoder::matches` — same quality, fragment limit and stream header |
-| `Greedy` | `GreedyParams` compares equal, which covers the matcher, both block sizes and the distance alphabet |
+| `Greedy` | `GreedyParams::same_shape` — every resolved parameter but the size hint compares equal, and the hint selects the same match-finder variant; the hint itself is taken over (`GreedyEncoder::retarget`), so inputs of varying lengths reuse one encoder |
 | `Hq` | `HqParams` compares equal |
 
 During reset, `MatchFinder::prepare` replays its partial sweep over the previous

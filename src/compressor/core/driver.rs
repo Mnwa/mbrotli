@@ -75,9 +75,10 @@ impl Encoder {
     ///
     /// Returns `false` when `params` and `size_hint` would not resolve to this
     /// encoder's shape, in which case nothing is touched and the caller has to
-    /// build a new one. A `true` return leaves the encoder exactly as
-    /// [`Encoder::new`] would have: every allocation is kept, but no state
-    /// from the previous stream survives.
+    /// build a new one. A greedy encoder keeps its shape across size hints
+    /// unless the hint selects another match finder. A `true` return leaves
+    /// the encoder exactly as [`Encoder::new`] would have: every allocation
+    /// is kept, but no state from the previous stream survives.
     pub(crate) fn reset_for(&mut self, params: &CompressParams, size_hint: usize) -> bool {
         let size_hint = params.size_hint().unwrap_or(size_hint);
         match self {
@@ -92,7 +93,7 @@ impl Encoder {
                 let Ok(fresh) = GreedyParams::new(params, size_hint) else {
                     return false;
                 };
-                if fresh != *encoder.params() {
+                if !encoder.retarget(fresh) {
                     return false;
                 }
                 encoder.reset();

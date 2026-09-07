@@ -118,7 +118,7 @@ impl TableBits {
 }
 
 /// Hashes the `MIN_MATCH` bytes at `position` into a table index.
-#[inline(always)]
+#[cfg(test)]
 fn hash<const TABLE_BITS: usize, const MIN_MATCH: usize>(data: &[u8], position: usize) -> usize {
     let word = load_u64_le(data, position);
     let mixed = (word << ((8 - MIN_MATCH) * 8)).wrapping_mul(HASH_MUL32 as u64);
@@ -145,8 +145,14 @@ fn hash_bytes_at_offset<const TABLE_BITS: usize, const MIN_MATCH: usize>(
 /// never relies on.
 #[inline(always)]
 fn is_match<const MIN_MATCH: usize>(data: &[u8], left: usize, right: usize) -> bool {
+    words_match::<MIN_MATCH>(load_u64_le(data, left), load_u64_le(data, right))
+}
+
+/// Tests the `MIN_MATCH`-byte match predicate on two already loaded words.
+#[inline(always)]
+const fn words_match<const MIN_MATCH: usize>(left: u64, right: u64) -> bool {
     let mask = (1u64 << (8 * MIN_MATCH)) - 1;
-    (load_u64_le(data, left) ^ load_u64_le(data, right)) & mask == 0
+    (left ^ right) & mask == 0
 }
 
 /// Refreshes the hash table for the positions inside the copy just emitted.
@@ -245,7 +251,14 @@ fn create_commands<
                 let ip_limit = input + len_limit;
 
                 ip += 1;
-                let mut next_hash = hash::<TABLE_BITS, MIN_MATCH>(data, ip);
+
+                // The word at the next position is loaded once: it is hashed here and
+
+                // compared against the candidates when the scan reaches it.
+
+                let mut next_word = load_u64_le(data, ip);
+
+                let mut next_hash = hash_bytes_at_offset::<TABLE_BITS, MIN_MATCH>(next_word, 0);
                 loop {
                     let mut skip = 32u32;
                     let mut next_ip = ip;
@@ -255,6 +268,7 @@ fn create_commands<
                         loop {
                             loop {
                                 let slot = next_hash;
+                                let ip_word = next_word;
                                 let stride = (skip >> 5) as usize;
                                 skip = skip.wrapping_add(1);
                                 ip = next_ip;
@@ -262,21 +276,30 @@ fn create_commands<
                                 if next_ip > ip_limit {
                                     break 'scan;
                                 }
-                                next_hash = hash::<TABLE_BITS, MIN_MATCH>(data, next_ip);
+                                next_word = load_u64_le(data, next_ip);
+                                next_hash =
+                                    hash_bytes_at_offset::<TABLE_BITS, MIN_MATCH>(next_word, 0);
 
-                                let repeated = ip as i64 - last_distance;
-                                if repeated >= 0 {
-                                    let repeated = repeated as usize;
-                                    if is_match::<MIN_MATCH>(data, ip, repeated) && repeated < ip {
-                                        table[slot] = ip as i32;
-                                        candidate = repeated;
-                                        break;
-                                    }
+                                // The reference subtracts the last distance without
+                                // a sign test and rejects a position at or past `ip`
+                                // after comparing; the two tests are pure, so
+                                // rejecting first reads nothing for the initial
+                                // distance of minus one.
+                                let repeated = (ip as i64 - last_distance) as usize;
+                                if repeated < ip
+                                    && words_match::<MIN_MATCH>(
+                                        ip_word,
+                                        load_u64_le(data, repeated),
+                                    )
+                                {
+                                    table[slot] = ip as i32;
+                                    candidate = repeated;
+                                    break;
                                 }
 
                                 candidate = table[slot] as usize;
                                 table[slot] = ip as i32;
-                                if is_match::<MIN_MATCH>(data, ip, candidate) {
+                                if words_match::<MIN_MATCH>(ip_word, load_u64_le(data, candidate)) {
                                     break;
                                 }
                             }
@@ -357,7 +380,10 @@ fn create_commands<
                     }
 
                     ip += 1;
-                    next_hash = hash::<TABLE_BITS, MIN_MATCH>(data, ip);
+
+                    next_word = load_u64_le(data, ip);
+
+                    next_hash = hash_bytes_at_offset::<TABLE_BITS, MIN_MATCH>(next_word, 0);
                 }
             }
 

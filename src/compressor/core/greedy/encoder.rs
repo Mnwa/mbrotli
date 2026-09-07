@@ -181,8 +181,23 @@ impl GreedyEncoder {
     /// A workspace compares these against what a new call would resolve to:
     /// equal parameters mean an equally shaped encoder, so resetting this one
     /// gives the same stream a fresh one would.
-    pub(crate) const fn params(&self) -> &GreedyParams {
-        &self.params
+    /// Re-aims the encoder at the stream `fresh` describes.
+    ///
+    /// Returns `false`, changing nothing, when `fresh` is another shape or
+    /// its size hint would have selected another match finder, in which
+    /// case the caller has to build a new encoder. Otherwise the size hint
+    /// is taken over — it decides literal context modelling and the
+    /// matcher's next layout — and the encoder is as good as one built for
+    /// `fresh`, once reset.
+    pub(crate) fn retarget(&mut self, fresh: GreedyParams) -> bool {
+        if !self.params.same_shape(&fresh) {
+            return false;
+        }
+        if !self.matcher.retarget(fresh.hasher, fresh.size_hint) {
+            return false;
+        }
+        self.params = fresh;
+        true
     }
 
     /// Restores the encoder to the state its constructor left it in.

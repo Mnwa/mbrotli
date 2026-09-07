@@ -95,11 +95,10 @@ pub(crate) fn population_cost<const N: usize>(histogram: &Histogram<N>, data_siz
             // `-log2(P(symbol))`, which the reference rounds to the nearest
             // integer to approximate the depth the tree would give it.
             let log2p = log2total - fast_log2(value);
-            let mut depth = (log2p + 0.5) as usize;
+            // `log2p` lies in `0..=64`, so narrowing through a byte loses
+            // nothing and skips the range guards a `usize` cast carries.
+            let depth = usize::from(((log2p + 0.5) as u8).min(15));
             bits += value as f64 * log2p;
-            if depth > 15 {
-                depth = 15;
-            }
             if depth > max_depth {
                 max_depth = depth;
             }

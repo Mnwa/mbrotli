@@ -179,7 +179,14 @@ stateDiagram-v2
 The scan follows this order:
 
 - the repeat candidate (`ip - last_distance`) is tested **before** the hash
-  table candidate;
+  table candidate; the reference subtracts without a sign test and rejects a
+  candidate at or past `ip` after comparing, and as both tests are pure the
+  port tests `repeated < ip` first, which reads nothing for the initial
+  distance of minus one;
+- the word at the next position is loaded once: it is hashed for the table
+  lookup and kept as the word the candidates are compared against when the
+  scan reaches that position (`words_match` on two loaded words), so the
+  table store between the two candidate tests never forces a reload;
 - the hash table is written at the same points and in the same order;
 - post-copy hash updates cover `ip - 3`, `ip - 2`, `ip - 1` and `ip`, taken
   from a single word load;
@@ -390,6 +397,14 @@ smaller blocks and can substantially increase compressed size.
   than ignored.
 - **No static dictionary matching**, no block splitting and no context
   modelling: out of scope for both fast qualities, as in the reference.
+- **Every word load in the scan is bounds-checked.** The reference reads
+  eight bytes at the hash position, the repeat candidate and the table
+  candidate unchecked; the port proves each load with a compare, and the
+  compiler cannot fold them against the loop's `ip_limit`, which holds
+  `ip + 16` inside the input by construction. Carrying the loaded word
+  between iterations removes one of the four; the scan on binary input still
+  executes about a third more instructions per position than the C build and
+  measures 85% of it, against 96–99% on incompressible input.
 - **`ShouldMergeBlock` and `ShouldCompress` use floating point.** They
   reproduce the reference's `double` arithmetic, including its
   single-precision `log2` table, because the decisions are observable in the

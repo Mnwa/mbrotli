@@ -209,15 +209,19 @@ Bucket matchers pick one of three layouts per stream; see the
 selection rule. A compact key map or a table of generation-stamped entries
 activates blocks on demand: deep q7–q9 blocks start with four slots and are
 promoted once, in place, to the reference depth when a fifth is stored, with
-the starter left allocated. The dense layout, taken only when the matcher was
-built for a size hint of at least the shape's dense limit (an eighth of the
-table for tagged q5/q6 shapes, half of it for deep q7–q9 shapes, so that a
-256 KiB input takes the dense table on every shape), preallocates every block at
-`key << block_bits`, zeroed once per matcher, and clears only its `u16`
-counters per stream. Counters, or the generation stamp, govern validity; a
-block's stale bytes are never read. Preparation reports `Sweep::SelfCleaning`,
-so a reset neither replays a sweep nor marks the table dirty, and a warmed
-compressor allocates nothing whichever layout its next stream selects.
+the starter left allocated; a compact one-shot stream links its stores into
+one chain instead. The dense layout, taken when the matcher's size hint is at
+least the shape's dense limit (a sixteenth of the table for tagged q5/q6
+shapes; for deep q7–q9 shapes an eighth on the first stream and a
+sixty-fourth once the matcher is reused, so that a 256 KiB input takes the
+dense table on every shape from the second stream on), preallocates every
+block at `key << block_bits`, zeroed once per matcher, and clears only its
+`u16` counters per stream. Counters, or the generation stamp, govern
+validity; a block's stale bytes are never read. Preparation reports
+`Sweep::SelfCleaning`, so a reset neither replays a sweep nor marks the
+table dirty. A reused compressor may therefore allocate once more on its
+second stream — the deep dense table — and nothing after that; the
+allocator-instrumented tests warm a compressor twice before they count.
 The quick matchers' `SmallSlots` map is sized for the input at preparation,
 even on a fresh encoder, so it never rehashes during the stream.
 
@@ -278,8 +282,8 @@ flush/finalization failures.
 
 ## Verification
 
-Allocator-instrumented tests check retained requested-byte accounting and warmed
-allocation behavior. Lifecycle and streaming tests cover workspace reuse,
+Allocator-instrumented tests check retained requested-byte accounting and that
+a compressor warmed for two streams allocates nothing on the third. Lifecycle and streaming tests cover workspace reuse,
 retention, abandonment, recovery and writer backpressure. Private tests cover
 sparse promotion, prefix merge ordering and baseline/host-SIMD equivalence.
 
