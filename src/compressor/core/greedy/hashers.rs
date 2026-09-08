@@ -17,7 +17,7 @@
 //! where [`prepare_distance_cache`] earns its keep: the extra entries are
 //! near misses derived from the two freshest distances.
 
-use fearless_simd::{Level, Simd, SimdBase, SimdMask, u8x16, u8x32};
+use fearless_simd::{Simd, SimdBase, SimdMask, u8x16, u8x32};
 
 use super::params::{BucketShape, ChainShape, HasherPlan};
 use crate::compressor::core::shared::constants::HASH_MUL32;
@@ -1642,7 +1642,7 @@ fn rotate_candidates(equal: u32, bits: u32, newest: u32, available: u32) -> u32 
 /// the mask. The block width is a constant, so only one arm survives.
 #[inline(always)]
 fn tag_equality<S: Simd, const N: usize>(simd: S, tags: &[u8; N], tag: u8) -> u32 {
-    if matches!(simd.level(), Level::Fallback(_)) {
+    if simd.level().is_fallback() {
         return u32::MAX;
     }
     if N == 32
@@ -2874,7 +2874,7 @@ mod tests {
         // sixteen positions, so the chain walk stops after sixteen too and
         // the compact matcher finds what the sparse one does.
         let data = [b'a'; 200];
-        let level = Level::new();
+        let level = fearless_simd::Level::new();
         let mut compact = BucketMatcher::<false, { 1 << 14 }, 16>::new(0);
         compact.prepare(true, data.len(), &data, true);
         assert_eq!(compact.layout, Layout::Compact);

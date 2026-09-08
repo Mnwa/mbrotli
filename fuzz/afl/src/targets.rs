@@ -1075,7 +1075,7 @@ pub fn parallel(ctx: &Context, data: &[u8]) {
         .with_max_retained_workers(3);
     let encoder = EncoderConfig::default().with_quality(quality);
     let mut expected = None;
-    for backend in [mbrotli::Backend::SCALAR, ctx.level] {
+    for &backend in &ctx.levels {
         let mut compressor =
             ParallelCompressor::with_backend(encoder, parallel.clone(), backend).unwrap();
         for count in [1, 3] {

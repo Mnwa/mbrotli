@@ -187,8 +187,10 @@ pub fn cap(data: &[u8]) -> &[u8] {
     &data[..data.len().min(MAX_PAYLOAD)]
 }
 
-/// Returns every *distinct* SIMD backend the host can run, scalar fallback
-/// included.
+/// Returns every distinct supported backend the host can run.
+///
+/// Scalar fallback is included only on hosts that require it; the library's
+/// private unit tests compare SIMD against the independent scalar oracle.
 ///
 /// The public enumeration already validates host support and returns each
 /// backend exactly once. No implementation-specific SIMD type crosses the API.

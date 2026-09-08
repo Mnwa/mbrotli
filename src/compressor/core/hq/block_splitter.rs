@@ -13,7 +13,7 @@
 //! multiplier, and the sequence is part of the output: change it and a
 //! different partition falls out.
 
-use fearless_simd::{Level, Select, Simd, SimdBase, SimdMask, f64x8, u64x8};
+use fearless_simd::{Select, Simd, SimdBase, SimdMask, f64x8, u64x8};
 
 use super::cluster::{HistogramPair, combine_batch, move_cost};
 use super::params::HqParams;
@@ -297,7 +297,7 @@ fn assign_blocks_scalar(input: BlockCosts<'_>) {
 /// Assigns histogram ids with the already-selected encoder token. Each lane
 /// retains f64 addition/subtraction order; equal minima choose the first id.
 pub(crate) fn assign_blocks<S: Simd>(simd: S, input: BlockCosts<'_>) {
-    if matches!(simd.level(), Level::Fallback(_)) {
+    if simd.level().is_fallback() {
         assign_blocks_scalar(input);
         return;
     }

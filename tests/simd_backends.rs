@@ -1,4 +1,5 @@
-//! Every SIMD backend must produce the same bytes as the scalar fallback.
+//! Every available SIMD backend must produce the same bytes.
+//! Scalar equivalence is covered by private unit tests.
 //!
 //! Match scans and high-quality histogram assignment preserve exact decisions,
 //! including floating-point costs and histogram ties. Comparing decoded output
@@ -66,11 +67,12 @@ fn every_backend_agrees_across_window_sizes() {
 }
 
 #[test]
-fn the_scalar_fallback_is_actually_exercised() {
+fn the_public_backend_matrix_contains_only_required_backends() {
     let levels = host_levels();
     assert!(
-        levels.iter().any(|&(name, _)| name == "fallback"),
-        "the scalar fallback backend must be part of the matrix"
+        levels
+            .iter()
+            .any(|&(_, backend)| backend == mbrotli::Backend::default())
     );
     for (index, (_, backend)) in levels.iter().enumerate() {
         assert!(
@@ -79,7 +81,7 @@ fn the_scalar_fallback_is_actually_exercised() {
                 .all(|(_, earlier)| earlier != backend)
         );
     }
-    if mbrotli::Backend::default() != mbrotli::Backend::SCALAR {
-        assert!(levels.len() >= 2, "the detected SIMD backend must also run");
+    if mbrotli::Backend::default().name() != "fallback" {
+        assert!(levels.iter().all(|&(name, _)| name != "fallback"));
     }
 }

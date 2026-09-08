@@ -101,15 +101,8 @@ fn boxed<S: Simd, const INDEPENDENT: bool>(simd: S) -> Box<dyn Kernels> {
                 greedy: sse2,
             });
         }
-        Box::new(Selected::<S, fearless_simd::Fallback, INDEPENDENT> {
-            simd,
-            greedy: fearless_simd::Fallback::new(),
-        })
     }
-    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-    {
-        Box::new(Selected::<S, S, INDEPENDENT> { simd, greedy: simd })
-    }
+    Box::new(Selected::<S, S, INDEPENDENT> { simd, greedy: simd })
 }
 
 /// Resolves the backend once, when a retained encoder is constructed.

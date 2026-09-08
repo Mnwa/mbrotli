@@ -55,7 +55,7 @@ the forkserver for `afl-cmin` folder-mode coverage collection.
 | --- | --- | --- |
 | `q0_roundtrip`, `q1_roundtrip`, `q3_roundtrip` through `q11_roundtrip` | `seeds/generic` | Size bound and C decoding |
 | `params_roundtrip` | `seeds/params` | Legal configurations across qualities 0–11, determinism, and C decoding |
-| `simd_equivalence` | `seeds/params` | Scalar and every available host backend agree |
+| `simd_equivalence` | `seeds/params` | Every available host backend agrees; forced scalar equivalence lives in library unit tests |
 | `differential_c` | `seeds/params` | Byte identity with equivalent C streaming settings |
 | `streaming_equivalence` | `seeds/params` | Vector, slice, session, reader, and writer identity |
 | `output_capacity` | `seeds/params` | Exact and undersized output buffers |

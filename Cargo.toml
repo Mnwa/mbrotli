@@ -24,7 +24,6 @@ exclude = [
 
 [dependencies.fearless_simd]
 version = "0.7"
-features = ["force_support_fallback"]
 
 [dependencies.thiserror]
 version = "2"
@@ -39,6 +38,11 @@ optional = true
 [dev-dependencies]
 rayon = "1.12"
 tempfile = "3.27"
+
+# Retain the independent scalar oracle only for development builds.
+[dev-dependencies.fearless_simd]
+version = "0.7"
+features = ["force_support_fallback"]
 
 [dev-dependencies.criterion]
 version = "0.8"

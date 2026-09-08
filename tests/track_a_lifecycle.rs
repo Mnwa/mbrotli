@@ -6,7 +6,6 @@ use std::io::{Read, Write};
 #[test]
 fn backends_are_opaque_host_validated_and_have_stable_diagnostics() {
     let backends = mbrotli::Backend::available();
-    assert!(backends.contains(&mbrotli::Backend::SCALAR));
     assert!(backends.contains(&mbrotli::Backend::default()));
     for backend in backends {
         assert_eq!(format!("{backend}"), backend.name());

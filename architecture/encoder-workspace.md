@@ -7,9 +7,30 @@ backpressure live behind the public compressor API.
 
 `Compressor` owns one retained encoder, input staging and pending output. Public
 configuration remains small and copyable. `Backend` is an opaque, host-validated
-value: `Default` detects the host, `SCALAR` selects the independent baseline, and
-`available()` enumerates distinct runnable backends. `with_backend` selects one
-through the builder; no SIMD or implementation type is exposed.
+value: `Default` detects the host and `available()` enumerates distinct runnable
+backends from lower to higher SIMD levels. `SCALAR` is crate-private under
+`cfg(test)` and is included first in the internal unit-test matrix.
+`with_backend` selects one through the builder; no SIMD or implementation type
+is exposed.
+
+`fearless_simd/force_support_fallback` is enabled only by a dev-dependency.
+Production dispatch compiles the backends supported by the target; targets with
+no supported SIMD retain their required portable fallback. On x86, greedy
+kernels use SSE2 when the selected token supports it and otherwise retain the
+selected token, without naming the optional `Fallback` type. Scalar decisions
+in tag filtering and histogram assignment use `Level::is_fallback()`.
+
+```mermaid
+flowchart TD
+    Build{Build kind} -->|Production| Native[Target-supported SIMD levels]
+    Build -->|Unit tests| Scalar[Force fallback; private Backend::SCALAR]
+    Native -->|No supported SIMD| Portable[Required portable fallback]
+    Native --> Public[Public Backend::available matrix]
+    Scalar --> Matrix[Scalar plus host SIMD differential tests]
+    Public --> Select[Select once; retain proof tokens]
+    Portable --> Select
+    Matrix --> Select
+```
 
 ```mermaid
 graph TD

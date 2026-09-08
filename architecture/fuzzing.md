@@ -12,7 +12,7 @@ back into the test suite, and which boundaries are still unfuzzed.
 root workspace (`Cargo.toml`, `exclude = ["fuzz/afl"]`) so that AFL's
 instrumentation and its runtime never reach an ordinary root `cargo test` or
 `cargo clippy`. It depends on `mbrotli` and on `google-brotli-ffi` by path.
-Backend selection goes through `mbrotli::Backend`, including its scalar baseline;
+Backend selection goes through `mbrotli::Backend` using production backends;
 the fuzz package has no direct dependency on the SIMD implementation crate.
 
 The fuzz package has no default features. Its opt-in `experimental` feature
@@ -197,9 +197,11 @@ rejections — are asserted on rather than treated as crashes.
 ## SIMD dispatch point
 
 `host_levels` delegates to `Backend::available()`, which returns each supported
-backend once, scalar first. `Context::default()` detects and enumerates before
-the persistent loop. The fuzz package has no direct dependency on
-`fearless_simd`; unsupported implementation tokens cannot cross the public API.
+backend once, from lower to higher SIMD levels. Scalar is included only on
+targets that require it; forced scalar equivalence is covered by library unit
+tests. `Context::default()` detects and enumerates before the persistent loop.
+The fuzz package has no direct dependency on `fearless_simd`; unsupported
+implementation tokens cannot cross the public API.
 
 ## Finding lifecycle
 
@@ -314,7 +316,7 @@ milliseconds, about four times the slowest observed instrumented execution of a
   from those rather than from the vendored test data.
 ## Parallel boundary target
 
-`parallel` uses the public task API, 64 KiB segments and at most 128 KiB of input. It compares one-task and reverse three-task output, scalar and host backends, retained workers, and independent C decoding. The engine-neutral body and per-quality seeds are replayed by the existing regression runner.
+`parallel` uses the public task API, 64 KiB segments and at most 128 KiB of input. It compares one-task and reverse three-task output, all available host backends, retained workers, and independent C decoding. The engine-neutral body and per-quality seeds are replayed by the existing regression runner.
 
 ```mermaid
 flowchart LR

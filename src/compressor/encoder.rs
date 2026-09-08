@@ -899,9 +899,9 @@ impl CompressorBuilder {
     ///
     /// let config = EncoderConfig::default().with_quality(Quality::Q1);
     /// let mut detected = Compressor::new(config)?;
-    /// let mut scalar = Compressor::builder(config).with_backend(Backend::SCALAR).build()?;
+    /// let mut selected = Compressor::builder(config).with_backend(Backend::default()).build()?;
     ///
-    /// assert_eq!(scalar.compress(b"identical bytes")?, detected.compress(b"identical bytes")?);
+    /// assert_eq!(selected.compress(b"identical bytes")?, detected.compress(b"identical bytes")?);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]

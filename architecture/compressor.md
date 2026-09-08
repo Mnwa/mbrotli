@@ -583,9 +583,11 @@ graph TD
 ```
 
 Feature detection happens when the compressor's opaque `Backend` is selected.
-`CompressorBuilder::with_backend` accepts only a host-validated backend, including
-`Backend::SCALAR`; no `fearless_simd` type appears in the public API. The single
-selection dispatch occurs when the retained encoder is created, not per block.
+`CompressorBuilder::with_backend` accepts only a host-validated backend; no
+`fearless_simd` type appears in the public API. `Backend::SCALAR` is private to
+unit tests. Production builds do not force fallback support, but retain it on
+targets without supported SIMD. The single selection dispatch occurs when the
+retained encoder is created, not per block.
 `Selected<S>` retains the proof token across the operation/session and reuse.
 Its feature-enabled kernel calls pass `S` by value into inner loops; no inner
 loop has virtual dispatch or feature detection.
@@ -617,7 +619,8 @@ graph LR
 | `tests/greedy_qualities.rs` | Byte identity for every parameter qualities two to nine react to: window, mode, declared size, block size, distance layout, context modelling. Compared through a session, and additionally one-shot where the declared size is the true one. |
 | `tests/vendor_corpus.rs` | The same, over Google Brotli's own test data, including a multi-fragment 12 MiB input. |
 | `tests/roundtrip.rs` | Independent decoder round-trip, determinism between warm and cold compressors, and the compressed-size bound. |
-| `tests/simd_backends.rs` | Byte identity between the scalar fallback and every SIMD backend the host supports. |
+| `tests/simd_backends.rs` | Byte identity between the production backends the host supports. |
+| `src/compressor/backend.rs` unit tests | Private scalar versus every supported SIMD backend, across qualities, windows and vector boundaries. |
 | `tests/streaming.rs` | Chunk-size independence, agreement between writer, reader and session, one-shot equivalence when the size is declared, the zero-progress rule, and reader read-ahead recovery. |
 | `tests/flush.rs` | Flush semantics against the reference driven with `BROTLI_OPERATION_FLUSH`. |
 | `tests/writer_faults.rs` | The transactional proof: a scripted sink failing at **every** byte position of a q0, q1, q5, q9 and q11 stream, short writes of one to sixty-four bytes, `Interrupted`, `WouldBlock`, `Ok(0)`, a failing inner flush, a failing finish handing the writer back, and an abandoned writer. Every schedule has to yield exactly one copy of the one-shot stream. |

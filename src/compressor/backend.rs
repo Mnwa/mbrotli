@@ -13,7 +13,7 @@ use fearless_simd::Level;
 /// ```
 /// use mbrotli::{Backend, Compressor, EncoderConfig};
 /// let mut compressor = Compressor::builder(EncoderConfig::default())
-///     .with_backend(Backend::SCALAR).build()?;
+///     .with_backend(Backend::default()).build()?;
 /// assert!(!compressor.compress(b"payload")?.is_empty());
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
@@ -22,14 +22,20 @@ pub struct Backend(pub(super) Level);
 
 impl Backend {
     /// Portable scalar implementation, without explicit SIMD kernels.
-    pub const SCALAR: Self = Self(Level::fallback());
+    #[cfg(test)]
+    pub(crate) const SCALAR: Self = Self(Level::fallback());
 
-    /// Returns every distinct backend this host can execute, scalar first.
+    /// Returns every distinct supported backend, from lower to higher SIMD levels.
+    ///
+    /// Scalar fallback is included only when the host requires it. Internal unit
+    /// tests additionally include the independent scalar implementation.
     ///
     /// Detection occurs here, never inside a compression loop.
     pub fn available() -> Vec<Self> {
         let detected = Self::default().0;
-        let mut backends = vec![Self::SCALAR];
+        let mut backends = Vec::new();
+        #[cfg(test)]
+        backends.push(Self::SCALAR);
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if let Some(token) = detected.as_sse2() {
@@ -53,14 +59,27 @@ impl Backend {
         if let Some(token) = detected.as_wasm_simd128() {
             backends.push(Self(Level::WasmSimd128(token)));
         }
-        let _ = detected;
-        backends.dedup();
+        if !backends.contains(&Self(detected)) {
+            backends.push(Self(detected));
+        }
         backends
     }
 
     /// Stable diagnostic name, available without allocating or formatting.
     pub const fn name(self) -> &'static str {
         match self.0 {
+            #[cfg(any(
+                test,
+                not(any(
+                    all(target_arch = "aarch64", target_feature = "neon"),
+                    all(
+                        any(target_arch = "x86", target_arch = "x86_64"),
+                        target_feature = "sse2",
+                        target_feature = "fxsr"
+                    ),
+                    all(target_arch = "wasm32", target_feature = "simd128")
+                ))
+            ))]
             Level::Fallback(_) => "fallback",
             #[cfg(target_arch = "aarch64")]
             Level::Neon(_) => "neon",
@@ -103,3 +122,51 @@ impl PartialEq for Backend {
     }
 }
 impl Eq for Backend {}
+
+#[cfg(test)]
+mod tests {
+    use super::Backend;
+    use crate::{Compressor, EncoderConfig, Quality, Window};
+
+    #[test]
+    fn scalar_is_included_once_in_the_internal_backend_matrix() {
+        let backends = Backend::available();
+        assert_eq!(backends[0], Backend::SCALAR);
+        assert_eq!(Backend::SCALAR.name(), "fallback");
+        assert!(backends.contains(&Backend::default()));
+        for (index, backend) in backends.iter().enumerate() {
+            assert!(!backends[..index].contains(backend));
+        }
+    }
+
+    #[test]
+    fn every_host_backend_matches_scalar_across_qualities_windows_and_boundaries() {
+        let backends = Backend::available();
+        let payload: Vec<u8> = (0..4096).map(|index| (index % 251) as u8).collect();
+        for quality in 0..=11 {
+            for bits in [10, 22] {
+                let config = EncoderConfig::default()
+                    .with_quality(Quality::try_from(quality).expect("quality"))
+                    .with_window(Window::standard(bits).expect("window"));
+                let mut scalar = Compressor::builder(config)
+                    .with_backend(Backend::SCALAR)
+                    .build()
+                    .expect("scalar encoder");
+                for backend in &backends {
+                    let mut encoder = Compressor::builder(config)
+                        .with_backend(*backend)
+                        .build()
+                        .expect("host encoder");
+                    for len in [0, 1, 15, 16, 17, 31, 32, 33, 63, 64, 65, 4096] {
+                        let input = &payload[..len];
+                        assert_eq!(
+                            encoder.compress(input).expect("host compression"),
+                            scalar.compress(input).expect("scalar compression"),
+                            "{backend}, quality {quality}, window {bits}, length {len}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
