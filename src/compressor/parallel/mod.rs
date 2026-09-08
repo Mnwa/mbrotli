@@ -113,6 +113,19 @@ pub struct ParallelSizeEstimate {
     /// Estimated active codec, source-buffer, and metadata allocation size.
     pub estimated_active_workspace_bytes: usize,
 }
+impl ParallelSizeEstimate {
+    /// Returns the complete preflight memory-staging bound, including payload
+    /// and segment descriptors, even when estimated with directory staging.
+    /// Convert it with `usize::try_from` before passing it to [`BatchConfig::memory`].
+    /// Worker and assembly storage remain subject to the separate aggregate limit.
+    ///
+    /// # Errors
+    /// Returns [`ParallelEncodeError::SizeOverflow`] if the combined bound cannot
+    /// fit in `u64`, including for manually constructed or modified estimates.
+    pub const fn maximum_staging_memory_bytes(&self) -> Result<u64, ParallelEncodeError> {
+        core::staging_memory_bound(self.maximum_staged_bytes, self.segment_count)
+    }
+}
 /// Nonblocking task-completion state.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BatchPoll {

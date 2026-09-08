@@ -24,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let mut batch = encoder.prepare_slice(
         &input,
-        BatchConfig::memory(TaskCount::try_from(4)?, 256 << 20),
+        BatchConfig::auto(TaskCount::try_from(4)?),
     )?;
     let tasks = batch.take_tasks()?;
     std::thread::scope(|scope| {
@@ -76,8 +76,17 @@ Owned sources and shared handles use the same generic entry point. For an
 existing `Arc<FileSource>`, type inference can require
 `prepare_source::<FileSource, _>(shared_file, config)`.
 
-`BatchConfig::memory(tasks, max_bytes)` sets a staged-output budget. Planning
-also accounts for worker and assembly storage. These estimates are not a process
+`BatchConfig::auto(tasks)` stages in memory using bounds derived from source
+length and configured segment size. It caps effective tasks at the segment
+count and still enforces any configured aggregate memory limit. It does not
+query available RAM or switch to files.
+
+`BatchConfig::memory(tasks, max_bytes)` sets an explicit payload-and-descriptor
+budget. To obtain its exact required preflight allowance, call `estimate_source`
+with `BatchConfig::auto(tasks)`, then convert
+`estimate.maximum_staging_memory_bytes()?` using `usize::try_from`.
+`maximum_staged_bytes` remains the payload-only bound. Planning also accounts
+for worker and assembly storage. These estimates are not a process
 RSS measurement. `BatchConfig::directory(tasks, directory)` stages output in
 exclusive temporary files in an existing directory, keeping payload RAM
 proportional to active workers and segment size. File cleanup is best effort

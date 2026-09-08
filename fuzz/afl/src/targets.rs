@@ -1079,7 +1079,22 @@ pub fn parallel(ctx: &Context, data: &[u8]) {
         let mut compressor =
             ParallelCompressor::with_backend(encoder, parallel.clone(), backend).unwrap();
         for count in [1, 3] {
-            let config = BatchConfig::memory(TaskCount::try_from(count).unwrap(), 1 << 20);
+            let tasks = TaskCount::try_from(count).unwrap();
+            let auto = BatchConfig::auto(tasks);
+            let estimate = compressor
+                .estimate_source(input.len() as u64, &auto)
+                .unwrap();
+            let bound = usize::try_from(estimate.maximum_staging_memory_bytes().unwrap()).unwrap();
+            assert!(
+                compressor
+                    .estimate_source(input.len() as u64, &BatchConfig::memory(tasks, bound - 1))
+                    .is_err()
+            );
+            let config = if count == 1 {
+                BatchConfig::memory(tasks, bound)
+            } else {
+                auto
+            };
             let mut batch = if count == 1 {
                 compressor.prepare_slice(&input, config).unwrap()
             } else {

@@ -21,10 +21,7 @@ fn encode(
     let mut batch = compressor
         .prepare_slice(
             input,
-            BatchConfig::memory(
-                TaskCount::try_from(tasks).unwrap(),
-                input.len() * 3 + (1 << 20),
-            ),
+            BatchConfig::auto(TaskCount::try_from(tasks).unwrap()),
         )
         .unwrap();
     if tasks == 1 {

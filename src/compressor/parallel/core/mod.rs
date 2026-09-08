@@ -10,6 +10,19 @@ use crate::compressor::{Compressor as SerialCompressor, WindowEncoding};
 pub(in crate::compressor::parallel) use batch::Batch;
 pub(in crate::compressor::parallel) use task::Task;
 
+pub(in crate::compressor::parallel) const fn staging_memory_bound(
+    payload: u64,
+    segments: u64,
+) -> Result<u64, ParallelEncodeError> {
+    let Some(descriptors) = segments.checked_mul(size_of::<artifact::Descriptor>() as u64) else {
+        return Err(ParallelEncodeError::SizeOverflow);
+    };
+    match payload.checked_add(descriptors) {
+        Some(bytes) => Ok(bytes),
+        None => Err(ParallelEncodeError::SizeOverflow),
+    }
+}
+
 #[derive(Clone)]
 pub(in crate::compressor::parallel) enum Input<'a> {
     Slice(&'a [u8]),
@@ -144,11 +157,9 @@ impl Compressor {
             Staging::Memory(m) => {
                 let bytes =
                     usize::try_from(staged).map_err(|_| ParallelEncodeError::SizeOverflow)?;
-                if bytes
-                    .checked_add(metadata)
-                    .ok_or(ParallelEncodeError::SizeOverflow)?
-                    > m.max_total_bytes
-                {
+                let required = usize::try_from(staging_memory_bound(staged, segments)?)
+                    .map_err(|_| ParallelEncodeError::SizeOverflow)?;
+                if required > m.max_total_bytes {
                     return Err(ParallelEncodeError::MemoryStagingLimit);
                 }
                 bytes

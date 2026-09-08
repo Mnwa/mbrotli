@@ -326,6 +326,11 @@ flowchart LR
     Equal --> C[C decoder: one stream round trip]
 ```
 
+The parallel target checks the full payload-and-descriptor memory bound: an
+explicit ceiling at that bound succeeds and one byte less is rejected. It
+compares explicit memory staging with `BatchConfig::auto` across task counts
+and backends.
+
 The parallel target also compares borrowed slice input with an owned
 `SeekSource<Cursor<Vec<u8>>>` through the generic `prepare_source` API, exercising
 absolute offsets and length checks under the same decode/determinism oracle.

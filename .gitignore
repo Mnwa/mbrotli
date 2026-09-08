@@ -7,6 +7,7 @@ specifications
 # AFL crash and queue directories are local artifacts.
 fuzz/afl/findings/
 fuzz/afl/target/
+fuzz/afl/artifacts/
 # Seeds are materialised from the vendored Brotli test data.
 fuzz/afl/seeds/
 # The fuzz package pins its dependencies so a campaign is reproducible; the

@@ -289,6 +289,102 @@ fn every_standard_window_and_incompressible_parts_round_trip() {
     }
 }
 #[test]
+fn exact_staging_memory_bound_accepts_preparation_and_one_byte_less_fails() {
+    for segment in [64 << 10, 256 << 10, 4 << 20] {
+        let mut c = ParallelCompressor::new(
+            EncoderConfig::default().with_quality(Quality::try_from(0).unwrap()),
+            ParallelConfig::from(SegmentSize::try_from(segment).unwrap()),
+        )
+        .unwrap();
+        for len in [0, 1, segment - 1, segment, segment + 1, 2 * segment + 1] {
+            let input = vec![0; len];
+            for count in [1, 3, 256] {
+                let tasks = TaskCount::try_from(count).unwrap();
+                let auto = black_box(BatchConfig::auto as fn(TaskCount) -> BatchConfig)(tasks);
+                let estimate = c.estimate_source(len as u64, &auto).unwrap();
+                let bound =
+                    usize::try_from(estimate.maximum_staging_memory_bytes().unwrap()).unwrap();
+                assert!(bound as u64 >= estimate.maximum_staged_bytes);
+                assert!(
+                    c.prepare_slice(&input, BatchConfig::memory(tasks, bound))
+                        .is_ok()
+                );
+                assert!(matches!(
+                    c.prepare_slice(&input, BatchConfig::memory(tasks, bound - 1)),
+                    Err(ParallelEncodeError::MemoryStagingLimit)
+                ));
+                assert!(c.prepare_slice(&input, auto).is_ok());
+                let directory = c
+                    .estimate_source(len as u64, &BatchConfig::directory(tasks, "/tmp"))
+                    .unwrap();
+                assert_eq!(
+                    directory.maximum_staging_memory_bytes().unwrap(),
+                    bound as u64
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn automatic_staging_matches_explicit_staging_for_slices_and_sources() {
+    for input in [Vec::new(), b"serial fallback".to_vec(), data()] {
+        let mut c =
+            ParallelCompressor::new(EncoderConfig::default(), ParallelConfig::default()).unwrap();
+        c.reconfigure_parallel(ParallelConfig::from(
+            SegmentSize::try_from(64 << 10).unwrap(),
+        ));
+        let expected = inline(&mut c, &input, 1);
+        let tasks = TaskCount::try_from(256).unwrap();
+        let mut b = c.prepare_slice(&input, BatchConfig::auto(tasks)).unwrap();
+        b.run_inline().unwrap();
+        let (output, stats) = b.finish_to_writer(Vec::new()).unwrap();
+        assert_eq!(output, expected);
+        assert_eq!(stats.effective_tasks as u64, stats.segment_count.min(256));
+        assert_eq!(stats.staging_kind, StagingKind::Memory);
+        assert_eq!(support::c_decompress(&output, input.len()).unwrap(), input);
+        let source = SeekSource::from(std::io::Cursor::new(input));
+        let mut b = c.prepare_source(source, BatchConfig::auto(tasks)).unwrap();
+        b.run_inline().unwrap();
+        assert_eq!(b.finish_to_writer(Vec::new()).unwrap().0, expected);
+    }
+}
+
+#[test]
+fn automatic_staging_preserves_aggregate_limits_and_overflow_checks() {
+    let mut c = compressor(0);
+    let auto = BatchConfig::auto(TaskCount::ONE);
+    let input = b"bounded auto";
+    let estimate = c.estimate_source(input.len() as u64, &auto).unwrap();
+    let aggregate = estimate.estimated_active_workspace_bytes
+        + usize::try_from(estimate.maximum_staged_bytes).unwrap()
+        + c.retained_bytes();
+    c.reconfigure_parallel(config().with_aggregate_memory_limit(Some(aggregate)));
+    assert!(c.prepare_slice(input, auto.clone()).is_ok());
+    c.reconfigure_parallel(config().with_aggregate_memory_limit(Some(aggregate - 1)));
+    assert!(matches!(
+        c.prepare_slice(input, auto.clone()),
+        Err(ParallelEncodeError::WorkerMemoryLimit)
+    ));
+    assert!(matches!(
+        c.estimate_source(u64::MAX, &auto),
+        Err(ParallelEncodeError::SizeOverflow)
+    ));
+    let mut malformed = estimate;
+    malformed.maximum_staged_bytes = u64::MAX;
+    assert!(matches!(
+        malformed.maximum_staging_memory_bytes(),
+        Err(ParallelEncodeError::SizeOverflow)
+    ));
+    malformed.maximum_staged_bytes = 0;
+    malformed.segment_count = u64::MAX;
+    assert!(matches!(
+        malformed.maximum_staging_memory_bytes(),
+        Err(ParallelEncodeError::SizeOverflow)
+    ));
+}
+
+#[test]
 fn configuration_bounds_and_retention_are_explicit() {
     assert!(SegmentSize::try_from(0).is_err());
     assert!(SegmentSize::try_from(65535).is_err());

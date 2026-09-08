@@ -169,7 +169,36 @@ impl BatchConfig {
             staging,
         }
     }
+    /// Stages in memory using checked bounds derived from the source length and
+    /// configured segment size during preparation. Effective task count is capped
+    /// by the segment count. No caller-supplied staging ceiling is required.
+    ///
+    /// The aggregate memory limit in [`ParallelConfig`] still applies, including
+    /// worker estimates for the effective task count. This does not query free
+    /// system memory, choose a directory, or create threads.
+    ///
+    /// # Examples
+    /// ```
+    /// use mbrotli::EncoderConfig;
+    /// use mbrotli::compressor::parallel::{
+    ///     BatchConfig, ParallelCompressor, ParallelConfig, TaskCount,
+    /// };
+    /// let mut compressor = ParallelCompressor::new(
+    ///     EncoderConfig::default(), ParallelConfig::default())?;
+    /// let mut batch = compressor.prepare_slice(b"automatic staging",
+    ///     BatchConfig::auto(TaskCount::ONE))?;
+    /// batch.run_inline()?;
+    /// let (output, _) = batch.finish_to_writer(Vec::new())?;
+    /// assert!(!output.is_empty());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub const fn auto(task_count: TaskCount) -> Self {
+        Self::memory(task_count, usize::MAX)
+    }
     /// Stages in memory, rejecting worst-case bounds above `max_total_bytes`.
+    /// The ceiling includes payload and descriptors; use
+    /// [`super::ParallelSizeEstimate::maximum_staging_memory_bytes`] for the
+    /// complete required bound.
     pub const fn memory(task_count: TaskCount, max_total_bytes: usize) -> Self {
         Self::new(
             task_count,

@@ -76,7 +76,34 @@ snapshot sources. Arbitrary blocking source calls cannot be forcibly interrupted
 Planning checks staged-byte bounds, descriptor sizes, active-worker estimates,
 completion metadata, assembly scratch and currently retained workspaces before
 returning tasks. Staged payload allowance is `2 * input + 1024 * max(segments,1)`.
-Memory staging also charges descriptor storage to its explicit limit. Workspace
+Memory staging also charges descriptor storage to its explicit limit.
+`BatchConfig::auto(tasks)` selects the same memory staging with `usize::MAX` as
+the caller ceiling. Preparation still computes checked per-task payload bounds,
+checks payload plus descriptors fits `usize`, and enforces the aggregate limit.
+It neither queries free RAM nor switches storage backends. Source length comes
+from the slice or the source's `len()`; task count is capped by segment count.
+
+`ParallelSizeEstimate::maximum_staging_memory_bytes()` exposes payload plus
+`segment_count * size_of::<Descriptor>()`, using the same private checked helper
+as memory preflight. It returns a `u64` bound for either staging kind; callers
+convert it with `usize::try_from` for an explicit memory budget. The existing
+`maximum_staged_bytes` field remains payload-only. Overflow propagates as
+`ParallelEncodeError::SizeOverflow`, including for caller-modified estimates.
+Descriptor storage remains included once in the aggregate workspace estimate.
+
+```mermaid
+flowchart TD
+    Input[Slice length or source len] --> Plan[Checked segments and effective tasks]
+    Config[auto tasks or explicit memory ceiling] --> Plan
+    Plan --> Bound[Payload bound plus descriptor storage]
+    Bound --> Fit{Fits usize and caller ceiling?}
+    Fit -->|no| Error[SizeOverflow or MemoryStagingLimit]
+    Fit -->|yes| Aggregate{Aggregate memory limit satisfied?}
+    Aggregate -->|no| WorkerError[WorkerMemoryLimit]
+    Aggregate -->|yes| Prepare[Create bounded artifacts and caller-run tasks]
+    Bound --> Estimate[maximum_staging_memory_bytes]
+```
+ Workspace
 estimates are deliberately conservative: per task, 4 MiB + 16 times segment size
 for q0/q1, 64 MiB + 128 times segment size for q2–q4, and 256 MiB + 256 times
 segment size above q4. These ceilings are not measured RSS. File staging keeps
