@@ -163,6 +163,7 @@ After changing Rust code:
 6. Run relevant Criterion benchmarks for performance-sensitive changes and the
    relevant AFL target for changes to fuzzed boundaries.
 7. Do not use `#[allow(..)]` to fix clippy warnings.
+8. Update CHANGELOG.md
 
 Steps 1 through 3 run at the workspace root, which does not reach `fuzz/afl`;
 that package is excluded from the workspace so AFL's instrumentation cannot
