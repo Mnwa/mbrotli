@@ -303,6 +303,11 @@ finish API or file commit policy is exposed.
 
 ## Verification and known gaps
 
+The crate-level documentation in `src/lib.rs` demonstrates automatic memory
+staging and two scoped-thread tasks over an 8 MiB input at quality 5. Its doctest
+checks that both tasks are used and the assembled output is smaller than the
+repetitive input.
+
 `ParallelCompressor` rustdoc examples execute the borrowed-slice workflow with
 scoped standard-library threads and Rayon parallel iterators at quality 0 to
 keep doctest execution fast: prepare from

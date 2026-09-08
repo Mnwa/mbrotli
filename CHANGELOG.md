@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add a runnable parallel compression example to the crate-level documentation.
+
 ## [v0.1.4](https://github.com/Mnwa/mbrotli/releases/tag/v0.1.4) - 2026-09-08
 
 - Add parallel compression examples using scoped threads and Rayon, plus a quick-start example in the README.

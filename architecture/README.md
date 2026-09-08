@@ -13,7 +13,7 @@ and known gaps. For usage examples, start with the [user guide](../docs/README.m
 | [Encoder workspace](encoder-workspace.md) | Retained allocations and profiling-aware accounting tests, incremental ring storage, copy-extension SIMD kernels, reset, and writer backpressure. |
 | [Bit output](bit-output.md) | Fixed and growing initialized storage, direct fast appends, bit operations, and overflow propagation. |
 | [Serial output identity](universal-encoding.md) | Equivalent stream settings, shared scheduling, allocation-free empty finalization, and C compatibility. |
-| [Parallel compression](parallel-compression.md) | Independent segments, caller-run tasks and runnable scheduling examples, sources, automatic memory staging, complete staging bounds, and assembly. |
+| [Parallel compression](parallel-compression.md) | Independent segments, caller-run tasks and runnable crate-level and API scheduling examples, sources, automatic memory staging, complete staging bounds, and assembly. |
 | [Fast encoder](fast-encoder.md) | Quality 0–1 fragment encoding, proven tiny-final raw shortcut, entropy codes, and specialized SIMD scans. |
 | [Greedy encoder](greedy-encoder.md) | Quality 2–9 matchers, specialized SIMD feature contexts, command generation, and meta-block construction. |
 | [High-quality encoder](hq-encoder.md) | Quality 10–11 binary-tree search with a vector short scan, SIMD block assignment with exact ties, the dynamic program and its distance-cache loop, and clustering. |

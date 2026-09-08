@@ -29,9 +29,11 @@
 //! them and hands them to the next call. Reuse is what ordinary code gets,
 //! rather than something to opt into.
 //!
-//! One compressor belongs to one worker. For parallel compression build one
-//! per worker with [`Compressor::fork_empty`]; a lock around a single
-//! compressor would serialise the compression itself, not merely the access.
+//! One compressor belongs to one worker. To compress separate streams in
+//! parallel, build one per worker with [`Compressor::fork_empty`]; a lock around
+//! a single compressor would serialise the compression itself, not merely the access.
+//! To compress one input across workers, use
+//! [`ParallelCompressor`](compressor::parallel::ParallelCompressor) as shown below.
 //!
 //! # Choosing a quality
 //!
@@ -115,6 +117,48 @@
 //! coming, so a stream that does not say produces different — equally valid —
 //! bytes. [`Compressor::reader`] is the pull-shaped counterpart, and
 //! [`Compressor::start`] is the state machine both are built on.
+//!
+//! # Parallel compression
+//!
+//! [`ParallelCompressor`](compressor::parallel::ParallelCompressor) splits an
+//! input into independent segments and assembles them into one Brotli stream.
+//! The caller schedules the tasks; this example uses scoped threads and
+//! automatically sized memory staging:
+//!
+//! ```
+//! use mbrotli::compressor::parallel::{
+//!     BatchConfig, ParallelCompressor, ParallelConfig, TaskCount,
+//! };
+//! use mbrotli::{EncoderConfig, Quality};
+//!
+//! let payload = vec![b'a'; 8 << 20];
+//! let mut encoder = ParallelCompressor::new(
+//!     EncoderConfig::default().with_quality(Quality::Q5),
+//!     ParallelConfig::default(),
+//! )?;
+//! let mut batch = encoder.prepare_slice(
+//!     &payload,
+//!     BatchConfig::auto(TaskCount::try_from(2)?),
+//! )?;
+//! let tasks = batch.take_tasks()?;
+//! std::thread::scope(|scope| {
+//!     for task in tasks {
+//!         scope.spawn(move || task.run());
+//!     }
+//! });
+//! let mut compressed = Vec::new();
+//! let result = batch.finish_into(&mut compressed)?;
+//!
+//! assert_eq!(result.stats.effective_tasks, 2);
+//! assert!(compressed.len() < payload.len());
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! Tasks are capped at the segment count; the default segment size is 4 MiB.
+//! Finishing collects task errors and assembles segments in input order.
+//! Independent segments can produce different bytes and compressed sizes from
+//! serial compression, while fixed segment settings give identical output
+//! across task counts and execution orders.
 //!
 //! # Large Window Brotli
 //!
