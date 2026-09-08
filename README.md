@@ -124,6 +124,45 @@ one-shot call, use `InputSize::Exact(input.len() as u64)`, offset zero, and
 no explicit flushes. Caller chunk sizes and available SIMD backends do not
 change the output.
 
+## Parallel compression
+
+The caller schedules compression tasks; the library does not create a thread
+pool. This example uses scoped threads and stages compressed segments in memory:
+
+```rust
+use mbrotli::compressor::parallel::{
+    BatchConfig, ParallelCompressor, ParallelConfig, TaskCount,
+};
+use mbrotli::{EncoderConfig, Quality};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let input = vec![b'a'; 8 << 20];
+    let mut encoder = ParallelCompressor::new(
+        EncoderConfig::default().with_quality(Quality::Q5),
+        ParallelConfig::default(),
+    )?;
+    let mut batch = encoder.prepare_slice(
+        &input,
+        BatchConfig::auto(TaskCount::available()?),
+    )?;
+    let tasks = batch.take_tasks()?;
+    std::thread::scope(|scope| {
+        for task in tasks {
+            scope.spawn(move || task.run());
+        }
+    });
+    let mut output = Vec::new();
+    batch.finish_into(&mut output)?;
+    println!("{} -> {} bytes", input.len(), output.len());
+    Ok(())
+}
+```
+
+Tasks are capped at the segment count; the default segment size is 4 MiB.
+`finish_into` collects task errors and assembles the segments in input order.
+See the [parallel compression guide](docs/parallel.md) for file sources,
+disk staging, and other executors.
+
 Parallel compression emits one stream from independent segments. Its output is
 deterministic across task counts for fixed segment settings, but can differ in
 both bytes and size from serial compression.

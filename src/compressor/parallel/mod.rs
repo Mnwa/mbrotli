@@ -160,7 +160,7 @@ pub enum WaitStatus {
 ///
 /// let input = "brotli ".repeat(10);
 ///
-/// let tasks = TaskCount::try_from(4)?;
+/// let tasks = TaskCount::available()?;
 /// let config = EncoderConfig::default();
 ///
 /// let mut compressor = ParallelCompressor::new(config, ParallelConfig::default())?;
