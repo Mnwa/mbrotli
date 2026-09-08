@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v0.1.5](https://github.com/Mnwa/mbrotli/releases/tag/v0.1.5) - 2026-09-08
+
 - Add a runnable parallel compression example to the crate-level documentation.
 
 ## [v0.1.4](https://github.com/Mnwa/mbrotli/releases/tag/v0.1.4) - 2026-09-08
