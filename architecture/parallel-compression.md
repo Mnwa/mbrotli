@@ -303,6 +303,14 @@ finish API or file commit policy is exposed.
 
 ## Verification and known gaps
 
+`ParallelCompressor` rustdoc examples execute the borrowed-slice workflow with
+scoped standard-library threads and Rayon parallel iterators at quality 0 to
+keep doctest execution fast: prepare from
+`input.as_bytes()`, take and run tasks, then finish into a vector. Both examples
+propagate configuration, preparation, and assembly errors through a `Result`.
+They run as doctests with the default feature set; Rayon remains a development
+dependency and must be added explicitly by callers who choose that executor.
+
 `tests/parallel.rs` covers all qualities, standard windows, host backends, modes,
 segment edges, fallback, source/staging identity, std/Rayon scoped and detached
 execution, reverse task order, worker reuse, source panics/errors/mutation,

@@ -156,50 +156,56 @@ pub enum WaitStatus {
 /// use mbrotli::compressor::parallel::{
 ///     BatchConfig, ParallelCompressor, ParallelConfig, TaskCount,
 /// };
-/// use mbrotli::EncoderConfig;
+/// use mbrotli::{EncoderConfig, Quality};
 ///
 /// let input = "brotli ".repeat(10);
 ///
 /// let tasks = TaskCount::available()?;
-/// let config = EncoderConfig::default();
+/// let config = EncoderConfig::default().with_quality(Quality::Q0);
 ///
 /// let mut compressor = ParallelCompressor::new(config, ParallelConfig::default())?;
-/// let mut prepared = compressor.prepare_slice(input, BatchConfig::auto(tasks))?;
+/// let mut prepared = compressor.prepare_slice(input.as_bytes(), BatchConfig::auto(tasks))?;
 ///
 /// let tasks = prepared.take_tasks()?;
 ///
 /// std::thread::scope(|scope| {
-///   for task in tasks {
-///     scope.spawn(|| task.run());
-///   }
-/// })
+///     for task in tasks {
+///         scope.spawn(move || task.run());
+///     }
+/// });
 ///
 /// let mut output = Vec::new();
 /// prepared.finish_into(&mut output)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 ///
 /// ## Rayon
+///
+/// Add `rayon` to your dependencies to use its parallel iterator traits.
+///
 /// ```rust
+/// use rayon::prelude::*;
 /// use mbrotli::compressor::parallel::{
 ///     BatchConfig, ParallelCompressor, ParallelConfig, TaskCount,
 /// };
-/// use mbrotli::EncoderConfig;
+/// use mbrotli::{EncoderConfig, Quality};
 ///
 /// let input = "brotli ".repeat(10);
 ///
 /// let tasks = TaskCount::try_from(rayon::current_num_threads().max(1))?;
-/// let config = EncoderConfig::default();
+/// let config = EncoderConfig::default().with_quality(Quality::Q0);
 ///
 /// let mut compressor = ParallelCompressor::new(config, ParallelConfig::default())?;
-/// let mut prepared = compressor.prepare_slice(input, BatchConfig::auto(tasks))?;
+/// let mut prepared = compressor.prepare_slice(input.as_bytes(), BatchConfig::auto(tasks))?;
 ///
 /// prepared
-///   .take_tasks()?
-///   .into_par_iter()
-///   .for_each(|task| task.run());
+///     .take_tasks()?
+///     .into_par_iter()
+///     .for_each(|task| task.run());
 ///
 /// let mut output = Vec::new();
 /// prepared.finish_into(&mut output)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub struct ParallelCompressor {
     inner: core::Compressor,

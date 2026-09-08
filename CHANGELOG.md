@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixes
+- Fix the scoped-thread and Rayon parallel compression doctests so the default-feature release test suite compiles and runs both examples; use quality 0 to keep execution fast.
+
 ### Changes
 - Add parallel compression example ([dec957a](https://github.com/Mnwa/mbrotli/commit/dec957ab335ac09860e66cd7b4adb641adb1e158))
 - Add parallel compression example to readme ([f633d8d](https://github.com/Mnwa/mbrotli/commit/f633d8d717fdf937432b9733a3fbfa68fdd84c2f))
