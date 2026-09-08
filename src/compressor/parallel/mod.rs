@@ -149,6 +149,58 @@ pub enum WaitStatus {
 }
 
 /// Reusable planner and private worker reservoir. No threads are created here.
+/// # Examples
+///
+/// ## Thread scope
+/// ```rust
+/// use mbrotli::compressor::parallel::{
+///     BatchConfig, ParallelCompressor, ParallelConfig, TaskCount,
+/// };
+/// use mbrotli::EncoderConfig;
+///
+/// let input = "brotli ".repeat(10);
+///
+/// let tasks = TaskCount::try_from(4)?;
+/// let config = EncoderConfig::default();
+///
+/// let mut compressor = ParallelCompressor::new(config, ParallelConfig::default())?;
+/// let mut prepared = compressor.prepare_slice(input, BatchConfig::auto(tasks))?;
+///
+/// let tasks = prepared.take_tasks()?;
+///
+/// std::thread::scope(|scope| {
+///   for task in tasks {
+///     scope.spawn(|| task.run());
+///   }
+/// })
+///
+/// let mut output = Vec::new();
+/// prepared.finish_into(&mut output)?;
+/// ```
+///
+/// ## Rayon
+/// ```rust
+/// use mbrotli::compressor::parallel::{
+///     BatchConfig, ParallelCompressor, ParallelConfig, TaskCount,
+/// };
+/// use mbrotli::EncoderConfig;
+///
+/// let input = "brotli ".repeat(10);
+///
+/// let tasks = TaskCount::try_from(rayon::current_num_threads().max(1))?;
+/// let config = EncoderConfig::default();
+///
+/// let mut compressor = ParallelCompressor::new(config, ParallelConfig::default())?;
+/// let mut prepared = compressor.prepare_slice(input, BatchConfig::auto(tasks))?;
+///
+/// prepared
+///   .take_tasks()?
+///   .into_par_iter()
+///   .for_each(|task| task.run());
+///
+/// let mut output = Vec::new();
+/// prepared.finish_into(&mut output)?;
+/// ```
 pub struct ParallelCompressor {
     inner: core::Compressor,
 }
