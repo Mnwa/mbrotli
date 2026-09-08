@@ -26,6 +26,11 @@ jobs:
       - name: clean previous coverage artifacts
         run: cargo llvm-cov clean --workspace
       - name: run instrumented tests
+        env:
+          # rust-cache exports 0. At opt-level=1 that enables automatic
+          # cross-crate inlining, which can lose small API coverage counters.
+          # A step override keeps coverage codegen consistent with local runs.
+          CARGO_INCREMENTAL: "1"
         run: cargo llvm-cov --workspace --all-features --locked --no-report
       - name: enforce function coverage
         run: cargo llvm-cov report --workspace --fail-under-functions 100

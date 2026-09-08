@@ -22,7 +22,7 @@ and known gaps. For usage examples, start with the [user guide](../docs/README.m
 | [Custom encoding and continuations](rfc9841-encoding.md) | Experimental static indexes, context combinations, and stream offsets. |
 | [Framing](framing.md) | Experimental resources, metadata, references, directory, and footer. |
 | [Fuzzing](fuzzing.md) | Isolated AFL package, stable and experimental target selection, input models, target oracles, campaign structure, and regression replay. |
-| [Continuous integration](ci.md) | Automatic checks, public API semver compatibility, AFL replay with and without experimental features, tool installation and CPU-specific cache boundaries, direct AFL crash handling, target-specific seeds, archived findings, and visible function-coverage gating. |
+| [Continuous integration](ci.md) | Automatic checks, public API semver compatibility, AFL replay with and without experimental features, tool installation and CPU-specific cache boundaries, direct AFL crash handling, target-specific seeds, archived findings, consistent coverage compilation settings, and visible function-coverage gating. |
 
 ## Module map
 

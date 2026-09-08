@@ -35,8 +35,13 @@ The repository requires every changed Rust function to be exercised and targets
 ```sh
 rustup component add llvm-tools-preview
 cargo install cargo-llvm-cov --version 0.9.0 --locked
-CARGO_PROFILE_TEST_OPT_LEVEL=1 cargo llvm-cov --workspace --all-features --locked --html --fail-under-functions 100
+CARGO_INCREMENTAL=1 CARGO_PROFILE_TEST_OPT_LEVEL=1 cargo llvm-cov --workspace --all-features --locked --html --fail-under-functions 100
 ```
+
+The explicit incremental setting matches CI. Disabling it at optimization
+level 1 can lose coverage counters for small public APIs during automatic
+cross-crate inlining, even when tests call them. The coverage command cleans
+previous workspace coverage artifacts before running tests.
 
 Inspect the report in `target/llvm-cov/html/`; passing tests alone do not show
 which functions executed. Coverage reports are local artifacts.

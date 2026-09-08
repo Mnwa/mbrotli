@@ -18,7 +18,7 @@ flowchart TD
     fuzz --> findings["Check saved crashes and hangs"]
     findings --> archive["Always archive existing findings as tar.gz<br/>Upload archive preserving AFL filenames"]
     manual --> bench["ci-benchmarks.yml<br/>Criterion validation and timing<br/>Linux x86-64 and ARM64"]
-    manual --> coverage["ci-coverage.yml<br/>Instrumented workspace tests"]
+    manual --> coverage["ci-coverage.yml<br/>Clean coverage artifacts<br/>Instrumented workspace tests with CARGO_INCREMENTAL=1"]
     coverage --> coverageGate["Print summary and enforce 100% function coverage"]
     coverageGate --> coverageReport["Always render and upload HTML report"]
     manual --> miri["ci-miri.yml<br/>Miri retained-storage checks"]
@@ -84,12 +84,22 @@ including queue, crash, and hang filenames containing colons, which
 were created, archiving skips the missing directory and upload reports no file.
 
 Coverage first cleans previous workspace coverage artifacts, then runs the
-locked, all-feature workspace tests at test optimization level 1. A separate
-report step prints a summary and enforces the unchanged 100% function threshold.
-HTML rendering and artifact upload run even when tests or the gate fail. Tests
-of small public configuration methods and conversions use opaque function
-pointers where needed to retain runtime coverage counters in optimized builds;
-the existing behavioral assertions still validate their results.
+locked, all-feature workspace tests at test optimization level 1. The test step
+explicitly sets `CARGO_INCREMENTAL=1`, overriding the `CARGO_INCREMENTAL=0`
+exported by [rust-cache](https://github.com/Swatinem/rust-cache#cache-details).
+With incremental compilation disabled, the compiler infers automatic cross-crate
+inlining for small functions; enabling it disables that inference (see the
+[compiler's implementation](https://doc.rust-lang.org/stable/nightly-rustc/src/rustc_mir_transform/cross_crate_inline.rs.html)).
+The non-incremental coverage build has reported called public APIs as uncovered,
+including calls through opaque function pointers. The explicit step setting
+keeps CI and the documented local command in the same compilation mode without
+requiring nightly compiler flags or changing production annotations.
+
+Incremental mode is enabled for code generation; the preceding coverage cleanup
+still prevents stale workspace profiles and binaries from contributing to the
+report. A separate report step prints a summary and enforces the unchanged 100%
+function threshold. HTML rendering and artifact upload run even when tests or
+the gate fail.
 
 Each heavy workflow runs only when individually dispatched. Select the desired
 workflow in the GitHub Actions tab and use **Run workflow**, or run, for example,
