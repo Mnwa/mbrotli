@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v0.2.0](https://github.com/Mnwa/mbrotli/releases/tag/v0.2.0) - 2026-09-08
+
 - Stop forcing the scalar SIMD fallback into production builds. Keep `Backend`
   public, make `Backend::SCALAR` private to unit tests, and retain the portable
   fallback automatically on targets without supported SIMD.
