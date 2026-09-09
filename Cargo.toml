@@ -9,8 +9,8 @@ repository = "https://github.com/Mnwa/mbrotli"
 homepage = "https://github.com/Mnwa/mbrotli"
 documentation = "https://docs.rs/mbrotli"
 readme = "README.md"
-keywords = ["brotli", "compression", "encoder", "simd", "rfc9841"]
-categories = ["compression", "algorithms"]
+keywords = ["brotli", "compression", "encoder", "simd"]
+categories = ["compression", "algorithms", "no-std"]
 exclude = [
     ".github/**",
     "architecture/**",
