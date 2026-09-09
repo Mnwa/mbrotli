@@ -84,3 +84,27 @@ check explicitly enables both codecs, and CI no_std profiles do likewise.
 
 Known gaps: active codecs still require a selected math provider (`std` or
 `no_std`). There is no allocator-free codec or runtime codec switch.
+
+## Crate documentation
+
+`src/lib.rs` owns the shared user guide: API choices, workspace reuse, both I/O
+adapter pairs, caller-scheduled parallel encoding, decoder limits, and feature
+selection. The overview remains visible with either codec disabled, and states
+which features its APIs require. Hidden doctest gates run examples only when the
+required codec and environment are enabled; decoder examples use a valid empty
+Brotli member so they also execute without compression.
+Method and type links resolve through rustdoc to the current build's API pages.
+When an API is disabled, its link points to the guide's feature-selection section.
+
+`src/compressor.md` supplements the guide with quality selection, Large Window,
+and prepared dictionaries only when `compression` is enabled.
+
+```mermaid
+flowchart TD
+    Root[src/lib.rs: shared API guide] --> Docs[crate rustdoc]
+    Compression{compression enabled} -->|yes| Extra[src/compressor.md: encoder details]
+    Extra --> Docs
+    Examples[guide examples] --> Gate{required codec and environment enabled}
+    Gate -->|yes| Run[execute example as doctest]
+    Gate -->|no| Skip[compile empty doctest entry point]
+```

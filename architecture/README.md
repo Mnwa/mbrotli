@@ -9,7 +9,7 @@ and known gaps. For usage examples, start with the [user guide](../docs/README.m
 | Specification | Scope |
 | --- | --- |
 | [Implementation comparison](benchmark-comparison.md) | Isolated five-encoder Criterion suite, validated exports, equal-weight dataset medians, ranked vertical-bar reports, and current-run provenance. |
-| [Codec features](codec-features.md) | Independent default-enabled codecs, shared public types, private primitive gates and isolated consumer checks. |
+| [Codec features](codec-features.md) | Independent default-enabled codecs, shared public types, private primitive gates, crate documentation and isolated consumer checks. |
 | [No standard library](no-std.md) | Opt-in alloc-backed compression, feature precedence, excluded std APIs, compile-time SIMD, and no_std-only libm dependencies. |
 | [Native decompressor](decompressor.md) | Incremental raw decoding, dictionaries, resource budgets, retained lifecycle and I/O. |
 | [Decoder compatibility](decompressor-compatibility.md) | Pinned C/RFC evidence, four build profiles, fuzzing, heavy checks and measured baseline. |

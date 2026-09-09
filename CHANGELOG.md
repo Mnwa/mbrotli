@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Align the crate-level API guide with the README, covering both codecs, memory
+  reuse, reader/writer adapters, parallel compression, decoder limits, and features.
+
 - Add independent `compression` and `decompression` features, both enabled by
   default. Disabling either removes its public API and implementation while
   retaining common configuration and dictionary types needed by the other codec.
