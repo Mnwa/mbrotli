@@ -448,7 +448,7 @@ mod tests {
     fn extending_a_copy_matches_the_byte_scan_across_both_wrap_points() {
         use crate::compressor::Backend;
         use crate::compressor::core::dispatch;
-        use crate::compressor::core::shared::ringbuffer::{BlockSpan, Window};
+        use crate::shared::ringbuffer::{BlockSpan, Window};
 
         let dist = DistanceParams::default();
         for backend in Backend::available() {

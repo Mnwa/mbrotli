@@ -22,13 +22,13 @@ use super::h10::{BackwardMatch, BinaryTreeMatcher, HASH_TYPE_LENGTH, STORE_LOOKA
 use super::nodes::{PosData, StartPosQueue, ZopfliNode};
 use super::params::HqParams;
 use crate::compressor::core::rfc9841::context::SharedContextInner;
-use crate::compressor::core::shared::command::{
+use crate::shared::command::{
     Command, combine_length_codes, copy_length_code, insert_length_code,
     prefix_encode_copy_distance,
 };
-use crate::compressor::core::shared::distance::NUM_DISTANCE_SHORT_CODES;
-use crate::compressor::core::shared::format::{COPY_EXTRA, INS_EXTRA};
-use crate::compressor::core::shared::match_len::find_match_length;
+use crate::shared::distance::NUM_DISTANCE_SHORT_CODES;
+use crate::shared::format::{COPY_EXTRA, INS_EXTRA};
+use crate::shared::match_len::find_match_length;
 
 /// Copy length past which the search strides rather than examining every byte
 /// (`BROTLI_LONG_COPY_QUICK_STEP`).
@@ -1232,8 +1232,8 @@ pub(crate) fn create_hq_zopfli_backward_references<S: Simd, const INDEPENDENT: b
 mod tests {
     use super::super::params::HqQuality;
     use super::*;
-    use crate::compressor::core::shared::ringbuffer::RingBuffer;
     use crate::compressor::{CompressParams, QualityLevel, WindowBits};
+    use crate::shared::ringbuffer::RingBuffer;
     use fearless_simd::{Level, dispatch};
 
     #[test]

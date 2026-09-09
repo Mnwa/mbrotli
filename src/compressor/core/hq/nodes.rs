@@ -91,9 +91,7 @@ impl ZopfliNode {
     pub(crate) const fn distance_code(&self) -> u32 {
         let short_code = self.dcode_insert_length >> DCODE_SHIFT;
         if short_code == 0 {
-            self.copy_distance()
-                + crate::compressor::core::shared::distance::NUM_DISTANCE_SHORT_CODES
-                - 1
+            self.copy_distance() + crate::shared::distance::NUM_DISTANCE_SHORT_CODES - 1
         } else {
             short_code - 1
         }

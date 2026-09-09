@@ -10,10 +10,10 @@
 
 use super::context_model::{ContextModel, context};
 use super::split::{BlockSplitter, ContextBlockSplitter};
-use crate::compressor::core::shared::command::Command;
-use crate::compressor::core::shared::constants::{NUM_COMMAND_SYMBOLS, NUM_LITERAL_SYMBOLS};
-use crate::compressor::core::shared::distance::NUM_HISTOGRAM_DISTANCE_SYMBOLS;
-use crate::compressor::core::shared::metablock::{LITERAL_CONTEXT_BITS, MetaBlockSplit};
+use crate::shared::command::Command;
+use crate::shared::constants::{NUM_COMMAND_SYMBOLS, NUM_LITERAL_SYMBOLS};
+use crate::shared::distance::NUM_HISTOGRAM_DISTANCE_SYMBOLS;
+use crate::shared::metablock::{LITERAL_CONTEXT_BITS, MetaBlockSplit};
 
 /// Smallest literal block, and the threshold a new literal type has to beat.
 const LITERAL_MIN_BLOCK: usize = 512;
@@ -202,9 +202,9 @@ pub(crate) fn build_meta_block_greedy_into(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compressor::core::shared::distance::DistanceParams;
-    use crate::compressor::core::shared::format::STATIC_CONTEXT_MAP_SIMPLE_UTF8;
-    use crate::compressor::core::shared::metablock::optimize_histograms;
+    use crate::shared::distance::DistanceParams;
+    use crate::shared::format::STATIC_CONTEXT_MAP_SIMPLE_UTF8;
+    use crate::shared::metablock::optimize_histograms;
     use alloc::vec::Vec;
 
     /// Builds commands that just insert `data` with no copies.

@@ -1,0 +1,21 @@
+name: Decoder heavy verification
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+jobs:
+  history-and-counters:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        features: ['std', 'std,experimental', 'no_std', 'no_std,experimental']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # <3 GiB history, bounded output, >4 GiB generated payload.
+      - run: cargo test --release --no-default-features --features "$DECODER_FEATURES" --test decompress_heavy -- --ignored --nocapture --test-threads=1
+        env:
+          DECODER_FEATURES: ${{ matrix.features }}

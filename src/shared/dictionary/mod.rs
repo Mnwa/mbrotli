@@ -17,9 +17,10 @@
 //! at every length so the dynamic program can price them all.
 
 pub(crate) mod all_matches;
+pub(crate) mod transform;
 
-use crate::compressor::core::shared::constants::HASH_MUL32;
-use crate::compressor::core::shared::score::{SearchResult, backward_reference_score};
+use crate::shared::constants::HASH_MUL32;
+use crate::shared::score::{SearchResult, backward_reference_score};
 
 /// Longest match the static dictionary can produce
 /// (`BROTLI_MAX_STATIC_DICTIONARY_MATCH_LEN`).
@@ -78,7 +79,7 @@ fn hash14(data: &[u8]) -> usize {
     (word.wrapping_mul(HASH_MUL32) >> (32 - 14)) as usize
 }
 
-pub(super) use crate::compressor::core::shared::match_len::common_prefix_len;
+pub(super) use crate::shared::match_len::common_prefix_len;
 
 /// Running statistics that decide whether probing is still worth it.
 ///

@@ -7,9 +7,9 @@ use super::serialized::{ListRef, SerializedDictionaryData};
 use super::transform::{TransformList, TransformScratch};
 use super::words::WordList;
 use crate::compressor::core::hq::h10::BackwardMatch;
-use crate::compressor::core::shared::constants::HASH_MUL32;
-use crate::compressor::core::shared::score::{SearchResult, backward_reference_score};
 use crate::compressor::shared::SharedBrotliError;
+use crate::shared::constants::HASH_MUL32;
+use crate::shared::score::{SearchResult, backward_reference_score};
 
 #[derive(Debug)]
 struct Entry {
@@ -62,6 +62,54 @@ fn check(bytes: usize, limit: u64) -> Result<(), SharedBrotliError> {
 }
 
 impl StaticIndex {
+    /// Reads the effective prepared representation without consulting indexes or
+    /// rebuilding the caller's original attachment recipe.
+    pub(crate) fn decode_word(
+        &self,
+        mut address: u64,
+        length: usize,
+        context: usize,
+        scratch: &mut [u8; crate::shared::dictionary::transform::SCRATCH_BYTES],
+    ) -> Result<usize, crate::DecodeError> {
+        use crate::shared::dictionary::transform::Transform;
+        use crate::{DecodeError, InvalidDataKind};
+        if !(4..=31).contains(&length) {
+            return Err(InvalidDataKind::DictionaryReference.into());
+        }
+        let preferred = self
+            .contexts
+            .as_ref()
+            .map_or(0, |map| usize::from(map[context]));
+        let order = core::iter::once(preferred)
+            .chain((0..self.combinations.len()).filter(|&index| index != preferred));
+        for index in order {
+            let combination = &self.combinations[index];
+            let count = combination.words.word_count(length) as u64;
+            let span = count * combination.transforms.len() as u64;
+            if address >= span {
+                address -= span;
+                continue;
+            }
+            let word = combination.words.word(length, (address % count) as usize);
+            let index = (address / count) as usize;
+            let (prefix, operation, suffix) =
+                combination
+                    .transforms
+                    .transform(index)
+                    .ok_or(DecodeError::InvalidData {
+                        kind: InvalidDataKind::DictionaryReference,
+                    })?;
+            let transform = Transform {
+                prefix: combination.transforms.stringlet(usize::from(prefix)),
+                operation,
+                suffix: combination.transforms.stringlet(usize::from(suffix)),
+                parameter: combination.transforms.parameter(index),
+            };
+            return Ok(transform.apply(word, scratch));
+        }
+        Err(InvalidDataKind::DictionaryReference.into())
+    }
+
     /// Checks the full transformed index budget before allocating its tables.
     pub(crate) fn prepare(
         data: &SerializedDictionaryData,

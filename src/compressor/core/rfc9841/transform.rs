@@ -35,18 +35,6 @@ pub(crate) const NUM_TRANSFORM_TYPES: u8 = 23;
 /// Transform id of `OmitLast9`, the largest cut a cutoff table records.
 pub(crate) const MAX_CUT_OFF: usize = 9;
 
-/// Transform id of `FermentFirst`, which RFC 7932 calls `UppercaseFirst`.
-const FERMENT_FIRST: u8 = 10;
-
-/// Transform id of `FermentAll`.
-const FERMENT_ALL: u8 = 11;
-
-/// Transform id of `OmitFirst1`; the nine that follow omit two to ten.
-const OMIT_FIRST_1: u8 = 12;
-
-/// Transform id of `OmitFirst9`.
-const OMIT_FIRST_9: u8 = 20;
-
 /// Transform id of `ShiftFirst`.
 const SHIFT_FIRST: u8 = 21;
 
@@ -79,10 +67,12 @@ pub(crate) const MAX_WORD_LENGTH: usize = 31;
 pub(crate) const MAX_TRANSFORMED_WORD_BYTES: usize = 2 * MAX_STRINGLET_BYTES + MAX_WORD_LENGTH;
 
 /// Prefix and suffix stringlets of the RFC 7932 transform list (`kPrefixSuffix`).
-static BUILTIN_PREFIX_SUFFIX: &[u8; 217] = include_bytes!("builtin_prefix_suffix.bin");
+static BUILTIN_PREFIX_SUFFIX: &[u8; 217] =
+    include_bytes!("../../../shared/dictionary/builtin_prefix_suffix.bin");
 
 /// Prefix, operation and suffix of each RFC 7932 transform (`kTransformsData`).
-static BUILTIN_TRIPLES: &[u8; 363] = include_bytes!("builtin_transforms.bin");
+static BUILTIN_TRIPLES: &[u8; 363] =
+    include_bytes!("../../../shared/dictionary/builtin_transforms.bin");
 
 /// Stringlets the RFC 7932 prefix and suffix block holds (`kPrefixSuffixMap`).
 const BUILTIN_STRINGLET_COUNT: usize = 50;
@@ -436,56 +426,13 @@ impl TransformList {
         let prefix = self.stringlet(usize::from(prefix_id));
         let suffix = self.stringlet(usize::from(suffix_id));
 
-        let mut end = prefix.len();
-        scratch.bytes[..end].copy_from_slice(prefix);
-
-        // The omit operations narrow the window on the word before it is
-        // copied; every other operation rewrites the copy in place afterwards.
-        let body = match operation {
-            0..=MAX_CUT_OFF_OP => {
-                let keep = word.len().saturating_sub(usize::from(operation));
-                &word[..keep]
-            }
-            OMIT_FIRST_1..=OMIT_FIRST_9 => {
-                let skip = usize::from(operation - OMIT_FIRST_1 + 1);
-                word.get(skip..).unwrap_or_default()
-            }
-            _ => word,
+        let transform = crate::shared::dictionary::transform::Transform {
+            prefix,
+            operation,
+            suffix,
+            parameter: self.parameter(index),
         };
-        let start = end;
-        end += body.len();
-        scratch.bytes[start..end].copy_from_slice(body);
-
-        let written = body.len();
-        match operation {
-            FERMENT_FIRST => {
-                ferment(&mut scratch.bytes[start..], written.min(1));
-            }
-            FERMENT_ALL => {
-                ferment(&mut scratch.bytes[start..], written);
-            }
-            SHIFT_FIRST => {
-                shift(
-                    &mut scratch.bytes[start..],
-                    written,
-                    self.parameter(index),
-                    false,
-                );
-            }
-            SHIFT_ALL => {
-                shift(
-                    &mut scratch.bytes[start..],
-                    written,
-                    self.parameter(index),
-                    true,
-                );
-            }
-            _ => {}
-        }
-
-        let start = end;
-        end += suffix.len();
-        scratch.bytes[start..end].copy_from_slice(suffix);
+        let end = transform.apply(word, &mut scratch.bytes);
         &scratch.bytes[..end]
     }
 
@@ -510,12 +457,6 @@ impl TransformList {
         out.extend_from_slice(&self.params);
     }
 }
-
-/// Largest operation id that omits trailing bytes (`OmitLast9`).
-///
-/// Named separately because a range pattern needs a constant, and `0..=9`
-/// written literally would not say why nine is the boundary.
-const MAX_CUT_OFF_OP: u8 = MAX_CUT_OFF as u8;
 
 /// Returns the prefix id, operation and suffix id stored at `index`.
 ///
@@ -574,141 +515,6 @@ fn index_stringlets(block: &[u8]) -> Result<Box<[u16]>, TransformListError> {
             });
         }
     }
-}
-
-/// Uppercases the first `count` bytes' worth of runes in place.
-///
-/// Mirrors `ToUpperCase` and the loop `BrotliTransformDictionaryWord` wraps it
-/// in. `count` counts the bytes of the word; a rune whose encoding runs past it
-/// still consumes its full step, which is what ends the loop.
-fn ferment(bytes: &mut [u8], count: usize) {
-    let mut position = 0usize;
-    let mut left = count;
-    while left > 0 {
-        let step = match bytes.get(position) {
-            Some(&first) if first < 0xC0 => {
-                if first.is_ascii_lowercase() {
-                    bytes[position] = first ^ 32;
-                }
-                1
-            }
-            // An overly simplified uppercasing model for UTF-8, and an
-            // arbitrary transform for three-byte characters: the reference's
-            // own words. Both may touch a byte past the word, which the suffix
-            // then overwrites.
-            Some(&first) if first < 0xE0 => {
-                flip(bytes, position + 1, 32);
-                2
-            }
-            Some(_) => {
-                flip(bytes, position + 2, 5);
-                3
-            }
-            None => return,
-        };
-        position += step;
-        left = left.saturating_sub(step);
-    }
-}
-
-/// Exclusive-ors one byte in place, ignoring an index past the buffer.
-fn flip(bytes: &mut [u8], index: usize, mask: u8) {
-    if let Some(byte) = bytes.get_mut(index) {
-        *byte ^= mask;
-    }
-}
-
-/// Shifts the encoded scalars of the first `count` bytes in place.
-///
-/// Mirrors `Shift` and the `SHIFT_ALL` loop around it. `all` selects between
-/// one application and repetition to the end of the word.
-fn shift(bytes: &mut [u8], count: usize, parameter: u16, all: bool) {
-    // Limited sign extension of the parameter, as RFC 9841 section 3.1.1
-    // defines the addend: zero-extend, then add 0xFF0000 when the high bit is
-    // set. The reference writes the same arithmetic as one expression.
-    let addend = u32::from(parameter & 0x7FFF) + (0x0100_0000 - u32::from(parameter & 0x8000));
-    let mut position = 0usize;
-    let mut left = count;
-    loop {
-        if left == 0 {
-            return;
-        }
-        let step = shift_once(bytes, position, left, addend);
-        if !all {
-            return;
-        }
-        position += step;
-        left = left.saturating_sub(step);
-    }
-}
-
-/// Shifts one scalar starting at `position` and returns how many bytes it took.
-///
-/// `left` is how many bytes of the word remain, which is what decides whether a
-/// multi-byte sequence is complete.
-fn shift_once(bytes: &mut [u8], position: usize, left: usize, addend: u32) -> usize {
-    let Some(&first) = bytes.get(position) else {
-        return left;
-    };
-    if first < 0x80 {
-        // 1-byte rune / 0sssssss / 7-bit scalar (ASCII).
-        let scalar = addend.wrapping_add(u32::from(first));
-        bytes[position] = (scalar & 0x7F) as u8;
-        return 1;
-    }
-    if first < 0xC0 {
-        // Continuation / 10AAAAAA: not the start of a scalar.
-        return 1;
-    }
-    if first < 0xE0 {
-        // 2-byte rune / 110sssss AAssssss / 11-bit scalar.
-        if left < 2 {
-            return 1;
-        }
-        let second = bytes[position + 1];
-        let scalar = addend.wrapping_add(u32::from(second & 0x3F) | (u32::from(first & 0x1F) << 6));
-        bytes[position] = 0xC0 | ((scalar >> 6) & 0x1F) as u8;
-        bytes[position + 1] = (second & 0xC0) | (scalar & 0x3F) as u8;
-        return 2;
-    }
-    if first < 0xF0 {
-        // 3-byte rune / 1110ssss AAssssss BBssssss / 16-bit scalar.
-        if left < 3 {
-            return left;
-        }
-        let second = bytes[position + 1];
-        let third = bytes[position + 2];
-        let scalar = addend.wrapping_add(
-            u32::from(third & 0x3F)
-                | (u32::from(second & 0x3F) << 6)
-                | (u32::from(first & 0x0F) << 12),
-        );
-        bytes[position] = 0xE0 | ((scalar >> 12) & 0x0F) as u8;
-        bytes[position + 1] = (second & 0xC0) | ((scalar >> 6) & 0x3F) as u8;
-        bytes[position + 2] = (third & 0xC0) | (scalar & 0x3F) as u8;
-        return 3;
-    }
-    if first < 0xF8 {
-        // 4-byte rune / 11110sss AAssssss BBssssss CCssssss / 21-bit scalar.
-        if left < 4 {
-            return left;
-        }
-        let second = bytes[position + 1];
-        let third = bytes[position + 2];
-        let fourth = bytes[position + 3];
-        let scalar = addend.wrapping_add(
-            u32::from(fourth & 0x3F)
-                | (u32::from(third & 0x3F) << 6)
-                | (u32::from(second & 0x3F) << 12)
-                | (u32::from(first & 0x07) << 18),
-        );
-        bytes[position] = 0xF0 | ((scalar >> 18) & 0x07) as u8;
-        bytes[position + 1] = (second & 0xC0) | ((scalar >> 12) & 0x3F) as u8;
-        bytes[position + 2] = (third & 0xC0) | ((scalar >> 6) & 0x3F) as u8;
-        bytes[position + 3] = (fourth & 0xC0) | (scalar & 0x3F) as u8;
-        return 4;
-    }
-    1
 }
 
 #[cfg(test)]

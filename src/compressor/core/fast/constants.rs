@@ -2,10 +2,10 @@
 //!
 //! Every value here is fixed by Google's Brotli reference encoder
 //! (`google/brotli` v1.2.0, commit `028fb5a`, MIT licence). Constants that
-//! every quality shares live in [`crate::compressor::core::shared::constants`]
+//! every quality shares live in [`crate::shared::constants`]
 //! and are re-exported from here so the fast encoders keep one import path.
 
-pub(crate) use crate::compressor::core::shared::constants::*;
+pub(crate) use crate::shared::constants::*;
 
 /// Window size, in bits, the fast path always advertises in the stream header.
 pub(crate) const WINDOW_BITS_FAST: usize = 18;

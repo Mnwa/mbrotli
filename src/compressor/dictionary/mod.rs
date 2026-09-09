@@ -21,6 +21,12 @@ use alloc::vec::Vec;
 
 use super::core::rfc9841::context::{Budget, SharedContextInner};
 use super::shared::SharedBrotliError;
+
+mod decode;
+pub use decode::{
+    DecodeDictionary, DecodeDictionaryError, DecodeDictionaryLimits, DictionaryAttachment,
+    DictionaryRef,
+};
 use thiserror::Error;
 
 #[cfg(feature = "experimental")]

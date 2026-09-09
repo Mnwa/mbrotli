@@ -66,3 +66,18 @@ fn every_committed_input_replays_without_violating_its_oracle() {
 
     assert!(replayed > 0, "no regression inputs were replayed");
 }
+
+#[test]
+fn decoder_timeout_inputs_remain_independent_across_repeated_calls() {
+    let context = mbrotli_afl::Context::default();
+    let cases: [&[u8]; 3] = [
+        include_bytes!("../regressions/decode_dictionary/timeout-replay.bin"),
+        include_bytes!("../regressions/decode_dictionary/timeout-replay-2.bin"),
+        include_bytes!("../regressions/decode_dictionary/raw-empty-member.bin"),
+    ];
+    for _ in 0..10000 {
+        for input in cases {
+            mbrotli_afl::decode_targets::decode_dictionary(&context, input);
+        }
+    }
+}

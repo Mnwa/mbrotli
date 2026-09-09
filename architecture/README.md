@@ -10,6 +10,9 @@ and known gaps. For usage examples, start with the [user guide](../docs/README.m
 | --- | --- |
 | [Implementation comparison](benchmark-comparison.md) | Isolated five-encoder Criterion suite, validated exports, equal-weight dataset medians, ranked vertical-bar reports, and current-run provenance. |
 | [No standard library](no-std.md) | Opt-in alloc-backed compression, feature precedence, excluded std APIs, compile-time SIMD, and no_std-only libm dependencies. |
+| [Native decompressor](decompressor.md) | Incremental raw decoding, dictionaries, resource budgets, retained lifecycle and I/O. |
+| [Decoder compatibility](decompressor-compatibility.md) | Pinned C/RFC evidence, four build profiles, fuzzing, heavy checks and measured baseline. |
+| [Shared primitives](shared-primitives.md) | Private crate-root common data and transform ownership used by both codecs. |
 | [Compressor](compressor.md) | Configuration, serial APIs, sessions, I/O adapters, and errors. |
 | [Encoder workspace](encoder-workspace.md) | Retained allocations and profiling-aware accounting tests, incremental ring storage, copy-extension SIMD kernels, production versus test backend selection, reset, and writer backpressure. |
 | [Bit output](bit-output.md) | Fixed and growing initialized storage, direct fast appends, bit operations, and overflow propagation. |
@@ -23,13 +26,19 @@ and known gaps. For usage examples, start with the [user guide](../docs/README.m
 | [Custom encoding and continuations](rfc9841-encoding.md) | Experimental static indexes, context combinations, and stream offsets. |
 | [Framing](framing.md) | Experimental resources, metadata, references, directory, and footer. |
 | [Fuzzing](fuzzing.md) | Isolated AFL package, stable and experimental target selection, input models, target oracles, campaign structure, and regression replay. |
-| [Continuous integration](ci.md) | Automatic checks, public API semver compatibility, AFL replay with and without experimental features, tool installation and CPU-specific cache boundaries, direct AFL crash handling, target-specific seeds, archived findings, consistent coverage compilation settings, and visible function-coverage gating. |
+| [Continuous integration](ci.md) | Automatic checks, tag-triggered fuzz/Miri/ASan, API compatibility, feature-isolated AFL replay, cache boundaries, archived findings and function-coverage gating. |
 
 ## Module map
 
 ```mermaid
 graph TD
     Root[mbrotli crate-root exports] --> API[compressor public API]
+    Root --> Decode[decompressor public API]
+    Decode --> DecodeCore[private decompressor::core]
+    DecodeCore --> Shared
+    Root --> Facade[io facade: compressor and decompressor adapters]
+    Facade --> Decode
+    Facade --> API
     API --> Config[configuration, Backend, retention, errors]
     API --> Serial[Compressor and EncoderSession]
     API --> IO[io: EncoderReader and EncoderWriter, std only]
@@ -47,7 +56,7 @@ graph TD
     Stream --> Encoders
     RFC --> Encoders
     Encoders --> Kernels[private core::dispatch: selected SIMD kernels]
-    Encoders --> Shared[private core::shared: bits, matches, entropy, ring buffer]
+    Encoders --> Shared[private shared: bits, matches, entropy, ring buffer]
     Kernels --> SIMD[fearless_simd]
     C[google-brotli-ffi: development dependency] -. tests and benchmarks .-> API
     Comparison[isolated benchmarks/comparison] -. native API comparison .-> API
@@ -65,6 +74,8 @@ items are re-exported through `compressor` and the crate root.
 | Path | Contents |
 | --- | --- |
 | `src/lib.rs` | Crate documentation and public re-exports. |
+| `src/decompressor/` | Decoder configuration, ownership, sessions, errors and private core. |
+| `src/decompressor/io/`, `src/io.rs` | Decoder adapters and shared public I/O facade. |
 | `src/compressor/` | Configuration, compressor ownership, sessions, and public errors. |
 | `src/compressor/io/` | Reader and writer adapters over sessions. |
 | `src/compressor/dictionary/` | Dictionary preparation and experimental serialized descriptions. |
@@ -72,7 +83,7 @@ items are re-exported through `compressor` and the crate root.
 | `src/compressor/framing/` | Experimental container API and private wire/state implementation. |
 | `src/compressor/core/` | Serial scheduling, retained encoders, fragments, and SIMD dispatch. |
 | `src/compressor/core/{fast,greedy,hq}/` | Quality-specific encoding families. |
-| `src/compressor/core/shared/` | Shared match, command, entropy, bitstream, and dictionary primitives. |
+| `src/shared/` | Shared match, command, entropy, bitstream, and dictionary primitives. |
 | `src/compressor/core/rfc9841/` | Window resolution, prefix search, serialized codecs, and custom indexes. |
 | `src/compressor/internal.rs`, `src/compressor/shared/` | Private parameter and error shapes. |
 

@@ -6,14 +6,14 @@
 [![Fuzz](https://github.com/Mnwa/mbrotli/actions/workflows/ci-fuzz.yml/badge.svg?branch=master)](https://github.com/Mnwa/mbrotli/actions/workflows/ci-fuzz.yml)
 [![Tests](https://github.com/Mnwa/mbrotli/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Mnwa/mbrotli/actions/workflows/ci.yml)
 
-Brotli compression in safe Rust, with qualities 0–11, reusable encoder storage,
-streaming I/O, and caller-scheduled parallel compression. This crate provides
-compression only; it does not include a decoder.
+Brotli compression and native decompression in safe Rust, with qualities 0–11,
+reusable codec storage, incremental sessions, streaming I/O, dictionaries, and
+caller-scheduled parallel compression.
 
 ## `no_std`
 
-The opt-in `no_std` feature supports compression, incremental sessions, and
-prepared dictionaries using `core` and `alloc`:
+The opt-in `no_std` feature supports compression, decompression, incremental sessions, and
+prepared or decode-only dictionaries using `core` and `alloc`:
 
 ```toml
 mbrotli = { version = "0.2", default-features = false, features = ["no_std"] }
@@ -23,6 +23,29 @@ Supply a global allocator. I/O adapters, parallel compression, experimental
 framing, and profiling instrumentation are disabled. SIMD uses compile-time
 target features. Cargo features are additive: leave `std` and `hotpath*` disabled
 to avoid standard-library dependencies. Normal default builds are unchanged.
+
+## Decompression
+
+```rust
+use mbrotli::{DecoderConfig, Decompressor};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut decoder = Decompressor::new(DecoderConfig::default())?;
+    assert!(decoder.decompress(&[0x3b])?.is_empty());
+    Ok(())
+}
+```
+
+`decompress_into` appends to a reusable Vec and rolls back the append on error;
+`decompress_to_slice` uses caller storage. Sessions expose consumed/produced
+counts, `Process`/`Finish`, and precise member boundaries. Standard and extended
+windows, metadata, and RAW dictionaries are supported without feature gates.
+Serialized/custom dictionaries require `experimental`. Reader/writer adapters
+are available under `mbrotli::io` when `no_std` is disabled.
+
+Default numeric limits are unlimited. Set `DecodeLimits` and `WindowLimit` for
+untrusted input; see the [decoder mechanics and bounded example](architecture/decompressor.md)
+and [compatibility evidence](architecture/decompressor-compatibility.md).
 
 ## Benchmark results
 

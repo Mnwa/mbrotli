@@ -32,8 +32,8 @@ use alloc::vec::Vec;
 use fearless_simd::Simd;
 
 use super::context::SharedContextInner;
-use crate::compressor::core::shared::match_len::{common_prefix_len, common_prefix_len_simd};
-use crate::compressor::core::shared::score::{
+use crate::shared::match_len::{common_prefix_len, common_prefix_len_simd};
+use crate::shared::score::{
     SearchResult, backward_reference_penalty_using_last_distance, backward_reference_score,
     backward_reference_score_using_last_distance,
 };

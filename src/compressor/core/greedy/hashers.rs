@@ -23,10 +23,10 @@ use alloc::vec::Vec;
 use fearless_simd::{Simd, SimdBase, SimdMask, u8x16, u8x32};
 
 use super::params::{BucketShape, ChainShape, HasherPlan};
-use crate::compressor::core::shared::constants::HASH_MUL32;
-use crate::compressor::core::shared::dictionary::{self, DictionaryStats};
-use crate::compressor::core::shared::match_len::{current_window, match_len_at, match_len_windows};
-use crate::compressor::core::shared::score::{
+use crate::shared::constants::HASH_MUL32;
+use crate::shared::dictionary::{self, DictionaryStats};
+use crate::shared::match_len::{current_window, match_len_at, match_len_windows};
+use crate::shared::score::{
     SearchResult, backward_reference_penalty_using_last_distance, backward_reference_score,
     backward_reference_score_using_last_distance,
 };

@@ -1,6 +1,6 @@
 # User guide
 
-`mbrotli` compresses bytes into Brotli streams. Start with the
+`mbrotli` compresses and decompresses Brotli streams. Start with the
 [README example](../README.md#getting-started), then choose the output API
 that fits your application.
 
@@ -8,6 +8,25 @@ that fits your application.
 medians across all datasets, with a chart and exact measurements for each
 quality and workload. For specialized use, see [dictionaries](dictionaries.md)
 and [parallel compression](parallel.md).
+
+## Decompression
+
+Use `Decompressor` with `DecoderConfig` for reusable decoding. `decompress`
+returns a Vec, `decompress_into` appends atomically, and `decompress_to_slice`
+uses caller storage. `start` exposes incremental consumed/produced counts;
+`reader` and `writer` adapt synchronous I/O. Declare final input with `Finish`,
+and explicitly finish writers before recovering the sink.
+
+The default accepts one complete raw member and extended windows up to 62 bits.
+Configure `DecodeLimits` for input, output and workspace budgets;
+`MemberMode::Concatenated` accepts successive members. RAW dictionaries work in
+all profiles. `DecodeDictionary` avoids encoder search indexes, and existing
+`PreparedDictionary` values can also be borrowed for decoding. SERIALIZED/custom
+dictionaries require `experimental`; I/O adapters are absent with `no_std`.
+
+See the [usage example](../README.md#decompression),
+[decoder mechanics](../architecture/decompressor.md), and
+[compatibility and measured limits](../architecture/decompressor-compatibility.md).
 
 ## Configuration
 

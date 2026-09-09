@@ -20,9 +20,9 @@ use super::hq::zopfli::{
     create_zopfli_backward_references,
 };
 use super::rfc9841::context::SharedContextInner;
-use super::shared::bits::BitWriter;
-use super::shared::command::{Command, CommandExtension, extend_last_command};
-use super::shared::ringbuffer::{BlockSpan, Window};
+use crate::shared::bits::BitWriter;
+use crate::shared::command::{Command, CommandExtension, extend_last_command};
+use crate::shared::ringbuffer::{BlockSpan, Window};
 
 /// Borrowed greedy state for one monomorphized scan.
 pub(crate) struct GreedyInput<'a> {

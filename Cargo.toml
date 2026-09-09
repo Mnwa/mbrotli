@@ -4,7 +4,7 @@ version = "0.2.0"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
-description = "Fast Brotli (RFC 7932 and RFC 9841) compression in safe Rust, byte-identical to Google's reference encoder"
+description = "Fast Brotli (RFC 7932 and RFC 9841) compression and decompression in safe Rust; encoding is byte-identical to Google's reference encoder"
 repository = "https://github.com/Mnwa/mbrotli"
 homepage = "https://github.com/Mnwa/mbrotli"
 documentation = "https://docs.rs/mbrotli"
@@ -113,4 +113,8 @@ harness = false
 
 [[bench]]
 name = "alloc"
+harness = false
+
+[[bench]]
+name = "decompress"
 harness = false

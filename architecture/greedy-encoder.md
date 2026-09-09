@@ -42,7 +42,7 @@ graph TD
         split["split<br/>(greedy block splitters)"]
     end
 
-    subgraph shared["compressor::core::shared"]
+    subgraph shared["shared"]
         rb["ringbuffer<br/>(RingBuffer)"]
         dict["dictionary<br/>(static words + hash)"]
         cmd["command<br/>(Command, prefix codes)"]

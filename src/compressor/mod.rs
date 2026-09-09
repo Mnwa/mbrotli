@@ -17,7 +17,7 @@
 
 mod backend;
 mod config;
-mod core;
+pub(crate) mod core;
 mod encoder;
 mod error;
 mod internal;

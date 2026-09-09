@@ -32,3 +32,8 @@ required-features = ["experimental"]
 [profile.release]
 debug = true
 codegen-units = 1
+
+[[bin]]
+name = "decode_serialized"
+path = "src/bin/decode_serialized.rs"
+required-features = ["experimental"]

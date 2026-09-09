@@ -11,10 +11,10 @@
 //! alone — nothing about the running machine takes part.
 
 use crate::compressor::core::rfc9841::window::ResolvedWindow;
-use crate::compressor::core::shared::constants::WINDOW_GAP;
-use crate::compressor::core::shared::distance::DistanceParams;
-use crate::compressor::core::shared::format::ContextMode;
 use crate::compressor::{BrotliCompressError, CompressMode, CompressParams, QualityLevel};
+use crate::shared::constants::WINDOW_GAP;
+use crate::shared::distance::DistanceParams;
+use crate::shared::format::ContextMode;
 
 /// Longest copy quality ten gives distinct lengths (`MAX_ZOPFLI_LEN_QUALITY_10`).
 const MAX_ZOPFLI_LEN_Q10: usize = 150;
@@ -252,8 +252,8 @@ const fn choose_distance_params(
         num_direct = codes.direct_codes();
     }
     let ndirect_msb = (num_direct >> postfix_bits) & 0x0F;
-    if postfix_bits > crate::compressor::core::shared::distance::MAX_NPOSTFIX
-        || num_direct > crate::compressor::core::shared::distance::MAX_NDIRECT
+    if postfix_bits > crate::shared::distance::MAX_NPOSTFIX
+        || num_direct > crate::shared::distance::MAX_NDIRECT
         || (ndirect_msb << postfix_bits) != num_direct
     {
         postfix_bits = 0;

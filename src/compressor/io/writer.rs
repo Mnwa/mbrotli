@@ -392,6 +392,11 @@ pub struct FinishError<T> {
 }
 
 impl<T> FinishError<T> {
+    /// Preserves an adapter after failed finalization, for either codec direction.
+    pub(crate) const fn from_parts(error: Error, writer: T) -> Self {
+        Self { error, writer }
+    }
+
     /// Returns the failure that stopped the stream from being terminated.
     #[must_use]
     pub const fn error(&self) -> &Error {

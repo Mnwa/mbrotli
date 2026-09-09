@@ -13,12 +13,12 @@
 //! identical across SIMD backends.
 
 use crate::compressor::core::rfc9841::window::ResolvedWindow;
-use crate::compressor::core::shared::constants::WINDOW_GAP;
-use crate::compressor::core::shared::distance::{DistanceParams, MAX_NDIRECT, MAX_NPOSTFIX};
 use crate::compressor::shared::SharedBrotliError;
 use crate::compressor::{
     BrotliCompressError, CompressMode, CompressParams, DistanceCodes, QualityLevel,
 };
+use crate::shared::constants::WINDOW_GAP;
+use crate::shared::distance::{DistanceParams, MAX_NDIRECT, MAX_NPOSTFIX};
 
 /// Smallest quality that splits meta-blocks into blocks.
 pub(crate) const MIN_QUALITY_FOR_BLOCK_SPLIT: usize = 4;

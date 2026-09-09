@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+- Run AFL fuzzing, Miri and AddressSanitizer workflows on every pushed tag,
+  while retaining manual dispatch.
+- Add native Brotli decompression: reusable Vec/slice APIs, incremental sessions,
+  concatenated members, exact-size validation, explicit resource budgets, and
+  retryable synchronous reader/writer adapters.
+- Support standard and extended windows, metadata, built-in transforms and RAW
+  dictionaries in std and alloc-only profiles. Add decode-only external
+  dictionary loading; serialized/custom mappings remain experimental.
+- Move private common codec primitives from `compressor::core::shared` to root
+  `shared`; share dictionary transform application across both codecs.
+- Add independent C and RFC fixtures, decoder fuzz targets, allocation checks,
+  benchmarks, feature-gate consumers and heavy history/counter verification.
+
 - Only enable `libm` and `fearless_simd/libm` with `no_std`, removing `libm`
   from ordinary std builds.
 

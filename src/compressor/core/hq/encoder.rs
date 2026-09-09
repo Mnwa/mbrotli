@@ -21,16 +21,16 @@ use super::metablock::MetaBlockBuilder;
 use super::params::HqParams;
 use super::zopfli::{ZopfliState, ZopfliWorkspace};
 use crate::compressor::core::rfc9841::context::SharedContextInner;
-use crate::compressor::core::shared::bits::{BYTE_PADDING_SLACK, BitWriter, inject_byte_padding};
-use crate::compressor::core::shared::bitstream::{MetaBlockWriter, store_uncompressed_meta_block};
-use crate::compressor::core::shared::command::{Command, CommandExtension};
-use crate::compressor::core::shared::constants::{OUTPUT_RESERVE_CONST, OUTPUT_SLACK};
-use crate::compressor::core::shared::distance::DistanceParams;
-use crate::compressor::core::shared::format::ContextMode;
-use crate::compressor::core::shared::histogram::{HistogramLiteral, bits_entropy};
-use crate::compressor::core::shared::metablock::{MetaBlockSplit, optimize_histograms};
-use crate::compressor::core::shared::ringbuffer::{BlockSpan, RingBuffer, Window, wrap_position};
 use crate::compressor::{BrotliCompressError, BrotliResult, CompressParams};
+use crate::shared::bits::{BYTE_PADDING_SLACK, BitWriter, inject_byte_padding};
+use crate::shared::bitstream::{MetaBlockWriter, store_uncompressed_meta_block};
+use crate::shared::command::{Command, CommandExtension};
+use crate::shared::constants::{OUTPUT_RESERVE_CONST, OUTPUT_SLACK};
+use crate::shared::distance::DistanceParams;
+use crate::shared::format::ContextMode;
+use crate::shared::histogram::{HistogramLiteral, bits_entropy};
+use crate::shared::metablock::{MetaBlockSplit, optimize_histograms};
+use crate::shared::ringbuffer::{BlockSpan, RingBuffer, Window, wrap_position};
 
 /// Stride the compressibility check samples literals at (`kSampleRate`).
 const SAMPLE_RATE: u32 = 13;

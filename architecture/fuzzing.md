@@ -296,8 +296,8 @@ milliseconds, about four times the slowest observed instrumented execution of a
 
 ## Known gaps
 
-- **No decompression target.** There is no decoder in `mbrotli`; round-trip
-  oracles use Google's C decoder.
+- Decoder targets and their independent C oracle are described below. Encoder
+  round-trip targets continue to use Google's C decoder.
 - **Framing fault injection is deterministic, not fuzz-driven.**
   `tests/framing.rs` injects short writes and retryable failures at each tested
   offset; the fuzz target varies valid resource/metadata sequences and chunking.
@@ -336,3 +336,31 @@ and backends.
 The parallel target also compares borrowed slice input with an owned
 `SeekSource<Cursor<Vec<u8>>>` through the generic `prepare_source` API, exercising
 absolute offsets and length checks under the same decode/determinism oracle.
+
+## Native decoder boundaries
+
+`decode_targets` adds `decompress`, `decode_streaming`, `decode_dictionary`,
+`decode_lifecycle`, and `decode_io_limits` in the base profile, with
+`decode_serialized` gated at binary, body and registry levels by `experimental`.
+The first target compares independent C results and exact member consumption;
+streaming checks one-shot equivalence and cumulative progress. Raw/serialized
+attachments feed attached decoding; lifecycle covers forgotten sessions and
+recovery; writer faults combine output budgets with cursor-preserving retries.
+
+```mermaid
+graph LR
+    Seed[committed regression / AFL mutation] --> Budget[bounded input / output / workspace]
+    Budget --> Rust[native decoder or adapter]
+    Budget --> Oracle[C decoder: typed outcome]
+    Rust --> Check[bytes / member boundary / progress / lifecycle]
+    Oracle --> Check
+    Check --> Regression[deterministic regression replay]
+```
+
+`decode_oracle` distinguishes success with exact consumption, invalid data,
+insufficient input, output budget, allocation refusal, rejected attachment and
+C-unsupported wide windows. Resource refusal is not treated as a format verdict.
+`scripts/fuzz_decoder.sh base|experimental 60` executes reproducible campaigns
+against prebuilt binaries and fails on saved crashes/hangs. Build the matching
+profile first. Decoder fixtures and upstream seeds are described in
+`fuzz/afl/regressions/decoder-provenance.md` and the decoder compatibility report.

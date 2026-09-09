@@ -8,7 +8,9 @@ parallel compression, framing, and instrumentation remain covered. A second
 all-features unit and `tests/no_std.rs` run accumulates the no_std overrides
 into the same report without clearing the std coverage profiles.
 
-Routine validation runs automatically; expensive checks run on manual dispatch.
+Routine validation runs automatically. Fuzz campaigns, Miri and AddressSanitizer
+also run on every pushed tag, including names containing `/`; all three retain
+manual dispatch. Benchmarks and coverage remain manually dispatched.
 All workflows check out the vendored submodules recursively.
 
 ```mermaid
@@ -23,7 +25,7 @@ flowchart TD
     manual["Independent workflow_dispatch triggers"] --> fuzzSetup["ci-fuzz.yml: restore Cargo cache without target artifacts<br/>Force reinstall cargo-afl and build runtime"]
     fuzzSetup --> crashSetup["Configure direct core dumps on the disposable Ubuntu runner"]
     crashSetup --> seeds["Select target-specific seeds<br/>Lifecycle, framing and parallel use regressions"]
-    seeds --> fuzz["Seven ten-minute AFL campaigns"]
+    seeds --> fuzz["Eighteen ten-minute AFL campaigns<br/>Experimental matrix plus five base decoder targets"]
     fuzz --> findings["Check saved crashes and hangs"]
     findings --> archive["Always archive existing findings as tar.gz<br/>Upload archive preserving AFL filenames"]
     manual --> bench["ci-benchmarks.yml<br/>Criterion validation and timing<br/>Linux x86-64 and ARM64"]
@@ -32,14 +34,18 @@ flowchart TD
     coverageGate --> coverageReport["Always render and upload HTML report"]
     manual --> miri["ci-miri.yml<br/>Miri retained-storage checks"]
     manual --> asan["ci-sanitizer.yml<br/>AddressSanitizer integration tests"]
+    tags["Push any tag: tags = **"] --> fuzzSetup
+    tags --> miri
+    tags --> asan
 ```
 
 `CI` runs on pushes to `master` and on pull requests. Its test matrix executes
 stable Rust on all three operating-system runners and Rust 1.89 on Linux
 x86-64. The separate AFL package keeps its lint checks and committed regression
 replay in this automatic workflow. Both Clippy and AFL replay run without
-default features, then with `experimental` enabled. Manual fuzz campaigns build
-with `experimental` so their serialized dictionary and framing binaries exist.
+default features, then with `experimental` enabled. Tag-triggered and manual fuzz
+campaigns build the full experimental matrix and repeat the five base decoder
+targets without experimental features.
 
 The `semver` job uses `obi1kenobi/cargo-semver-checks-action@v2` to check only
 `mbrotli` against its latest published crates.io release, using stable Rust.
@@ -110,18 +116,20 @@ report. A separate report step prints a summary and enforces the unchanged 100%
 function threshold. HTML rendering and artifact upload run even when tests or
 the gate fail.
 
-Each heavy workflow runs only when individually dispatched. Select the desired
+Each heavy workflow can be individually dispatched. Select the desired
 workflow in the GitHub Actions tab and use **Run workflow**, or run, for example,
 `gh workflow run ci-benchmarks.yml --ref <branch>`. Dispatching one workflow does
-not start the others.
+not start the others. Pushing any tag additionally starts fuzz, Miri and
+AddressSanitizer; pushing a `v*` tag also starts the decoder heavy suite.
 
 | Workflow | Checks |
 | --- | --- |
 | `ci-benchmarks.yml` — CI Benchmarks | Criterion validation and timing on Linux x86-64 and ARM64. |
-| `ci-fuzz.yml` — CI Fuzz | Seven bounded AFL campaigns. |
+| `ci-fuzz.yml` — CI Fuzz | Eighteen bounded AFL campaigns; every tag or manual dispatch. |
 | `ci-coverage.yml` — CI Coverage | Function coverage and HTML report. |
-| `ci-miri.yml` — CI Miri | Interpreter checks for retained storage. |
-| `ci-sanitizer.yml` — CI AddressSanitizer | AddressSanitizer integration tests. |
+| `ci-miri.yml` — CI Miri | Interpreter checks for retained storage and decoder goldens; every tag or manual dispatch. |
+| `ci-sanitizer.yml` — CI AddressSanitizer | AddressSanitizer integration tests; every tag or manual dispatch. |
+| `ci-decompressor-heavy.yml` — Decoder heavy verification | Large history and counters in four profiles; `v*` tags or manual dispatch. |
 
 Fuzz campaigns fail when they save a crash or
 hang; coverage fails below 100% function coverage. Fuzz findings, Criterion
@@ -130,7 +138,29 @@ There is no scheduled workflow.
 
 ## Known gaps
 
-- Heavy checks require an explicit dispatch; ordinary pushes and pull requests
-  do not provide coverage, interpreter, sanitizer or fuzz-campaign evidence.
+- Ordinary branch pushes and pull requests do not run the heavy interpreter,
+  sanitizer or fuzz campaigns. Tags trigger those checks; coverage and benchmarks
+  still require explicit dispatch.
 - Bounded fuzz campaigns do not replace longer runs, and benchmark timings on
   shared runners are smoke-check results rather than stable performance evidence.
+
+## Decoder verification
+
+The ordinary std/experimental/alloc matrix runs decoder tests alongside encoder
+regressions. The check job runs isolated feature consumers. Miri replays pure
+Rust golden fixtures in both feature profiles; ASan includes decoder format,
+I/O and serialized dictionary tests. The fuzz workflow selects stable decoder
+targets both with and without experimental features and custom targets only
+with the feature. `ci-decompressor-heavy.yml` explicitly runs ignored release
+checks for actual 25–30-bit history and cumulative output beyond 4 GiB in all
+four profiles (bounded output, under 3 GiB history).
+
+```mermaid
+graph TD
+    Change[codec change] --> Matrix[std / experimental / alloc tests]
+    Change --> Gate[isolated production feature consumers]
+    Change --> Miri[pure Rust golden replay]
+    Change --> ASan[decoder and C oracle tests]
+    Release[tag or workflow dispatch] --> Heavy[far history and >4 GiB counters]
+    Fuzz[base + experimental campaigns] --> Registry[committed regression replay]
+```

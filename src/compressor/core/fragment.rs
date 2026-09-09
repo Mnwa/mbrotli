@@ -5,8 +5,8 @@ use alloc::vec::Vec;
 use super::driver::Encoder;
 use super::fast::commands::store_meta_block_header;
 use super::rfc9841::window::ResolvedWindow;
-use super::shared::bits::BitWriter;
 use crate::compressor::{Backend, BrotliCompressError, BrotliResult, EncoderConfig};
+use crate::shared::bits::BitWriter;
 
 /// A sealed proof: only the encoder can produce an aligned non-final part.
 pub(crate) struct AlignedFragment<'a> {

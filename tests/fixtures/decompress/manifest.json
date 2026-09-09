@@ -1,0 +1,105 @@
+[
+  {
+    "file": "continuation-standard.br",
+    "payload": "continuation-standard.raw",
+    "producer": "Google Brotli C 1.2.0",
+    "oracle_sha": "028fb5a23661f123017c060daa546b55cf4bde29",
+    "generator": "tests/decompress_c.rs::complete_c_continuations_and_golden_provenance",
+    "c_build_flags": [
+      "cc::Build default test profile (-O0, debug enabled)",
+      "warnings(false)",
+      "no BROTLI_EXPERIMENTAL",
+      "target aarch64-apple-darwin"
+    ],
+    "quality": 5,
+    "lgwin": 10,
+    "large_window": false,
+    "mode": "GENERIC",
+    "dictionary": [],
+    "schedule": [
+      "predecessor FLUSH, output chunks 3 via TakeOutput",
+      "new encoder STREAM_OFFSET=39; suffix FINISH, output chunks 7"
+    ],
+    "required_rust_features": [],
+    "compressed_length": 67,
+    "payload_length": 77,
+    "compressed_sha256": "8f2aaa72810500a52eea6c225520874bb64a6f3e71664de16c9ff1da9383e070",
+    "payload_sha256": "80094145621f843e4d82f69f1940a8204bec5022036c8a6fc25c4473d91f14cf"
+  },
+  {
+    "file": "continuation-large.br",
+    "payload": "continuation-large.raw",
+    "producer": "Google Brotli C 1.2.0",
+    "oracle_sha": "028fb5a23661f123017c060daa546b55cf4bde29",
+    "generator": "tests/decompress_c.rs::complete_c_continuations_and_golden_provenance",
+    "c_build_flags": [
+      "cc::Build default test profile (-O0, debug enabled)",
+      "warnings(false)",
+      "no BROTLI_EXPERIMENTAL",
+      "target aarch64-apple-darwin"
+    ],
+    "quality": 5,
+    "lgwin": 25,
+    "large_window": true,
+    "mode": "GENERIC",
+    "dictionary": [],
+    "schedule": [
+      "predecessor FLUSH, output chunks 3 via TakeOutput",
+      "new encoder STREAM_OFFSET=39; suffix FINISH, output chunks 7"
+    ],
+    "required_rust_features": [],
+    "compressed_length": 71,
+    "payload_length": 77,
+    "compressed_sha256": "7d0eb8c2b04473b0c95ac8efcade13e33f0cd7c78e435f88b821714a317974b5",
+    "payload_sha256": "80094145621f843e4d82f69f1940a8204bec5022036c8a6fc25c4473d91f14cf"
+  },
+  {
+    "file": "official-cli.br",
+    "payload": "continuation-standard.raw",
+    "producer": "Google Brotli C 1.2.0",
+    "oracle_sha": "028fb5a23661f123017c060daa546b55cf4bde29",
+    "generator": "target/decompressor-c-cli/brotli -q 11 -w 22 -c tests/fixtures/decompress/continuation-standard.raw",
+    "c_build_flags": [
+      "CMake Release; BROTLI_DISABLE_TESTS=ON; no BROTLI_EXPERIMENTAL"
+    ],
+    "quality": 11,
+    "lgwin": 22,
+    "large_window": false,
+    "mode": "GENERIC",
+    "dictionary": [],
+    "schedule": [
+      "CLI FINISH"
+    ],
+    "required_rust_features": [],
+    "compressed_length": 38,
+    "payload_length": 77,
+    "compressed_sha256": "7ccb61cd5617334795074100d1ab3a1c61cb9f23723e1ea0be38c61d56a219ff",
+    "payload_sha256": "80094145621f843e4d82f69f1940a8204bec5022036c8a6fc25c4473d91f14cf"
+  },
+  {
+    "file": "parallel.br",
+    "payload_recipe": {
+      "ascii": "parallel parts preserve the common Brotli stream state. ",
+      "repeat": 5000
+    },
+    "producer": "mbrotli ParallelCompressor, working tree based on 65030612836485b9bd1a08e2ba08d3c96a3e832d",
+    "oracle_sha": "028fb5a23661f123017c060daa546b55cf4bde29",
+    "generator": "MBROTLI_WRITE_FIXTURES=1 cargo test --test decompress_c assembled_parallel_encoder_output_decodes_as_one_member",
+    "c_build_flags": [
+      "C verifier: cc::Build debug defaults; no BROTLI_EXPERIMENTAL; aarch64-apple-darwin"
+    ],
+    "quality": 5,
+    "lgwin": 22,
+    "large_window": false,
+    "mode": "GENERIC",
+    "dictionary": [],
+    "schedule": [
+      "ParallelCompressor segment size 65536, minimum parallel size 0; four tasks; run_inline; finish_into"
+    ],
+    "required_rust_features": [],
+    "compressed_length": 311,
+    "payload_length": 280000,
+    "compressed_sha256": "cecd0316f1c596dc6697158e17853f14c8515f7e445638f95e932e57214060ef",
+    "payload_sha256": "38b3414add90cbb9bf6c88342a97734d1124429f4ce7d1a47a86f282e03240a0"
+  }
+]

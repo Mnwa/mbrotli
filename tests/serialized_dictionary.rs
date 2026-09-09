@@ -16,6 +16,10 @@
 //! - each configurable resource limit.
 
 #![cfg(feature = "experimental")]
+#[path = "decode_support/c_encoder.rs"]
+pub mod c_encoder;
+#[path = "decode_support/wire.rs"]
+pub mod decoder_wire;
 mod support;
 
 use google_brotli_ffi::{
@@ -405,6 +409,17 @@ fn every_transform_operation_matches_the_reference() {
         .expect("valid");
     let bytes = dictionary.to_bytes();
     assert_eq!(c_parse(&bytes).ok, 1, "the reference rejected the fixture");
+    use mbrotli::dictionary::{DecodeDictionary, DecodeDictionaryLimits, DictionaryAttachment};
+    let decode_only = DecodeDictionary::new(
+        &[DictionaryAttachment::Serialized(&bytes)],
+        DecodeDictionaryLimits::default(),
+    )
+    .unwrap();
+    let prepared = DictionaryBuilder::default()
+        .add_serialized(&dictionary)
+        .build()
+        .unwrap();
+    let mut decoder = mbrotli::Decompressor::new(mbrotli::DecoderConfig::default()).unwrap();
 
     let words = dictionary.word_list(0).expect("one list");
     let transforms = dictionary.transform_list(0).expect("one list");
@@ -421,6 +436,22 @@ fn every_transform_operation_matches_the_reference() {
                 )
                 .expect("the reference transformed the word");
                 let actual = transforms.apply(transform, words.word(length, index));
+                let address = index + transform * words.word_count(length);
+                let mut wire = decoder_wire::Wire::window(22, false);
+                wire.copy(length, address as u64 + 1, expected.len());
+                let compressed = wire.finish();
+                assert_eq!(
+                    decoder
+                        .decompress_with_dictionary(&decode_only, &compressed)
+                        .unwrap(),
+                    expected
+                );
+                assert_eq!(
+                    decoder
+                        .decompress_with_dictionary(&prepared, &compressed)
+                        .unwrap(),
+                    expected
+                );
 
                 assert_eq!(
                     actual, expected,
@@ -571,6 +602,10 @@ fn decode_custom(dictionary: &[u8], compressed: &[u8], expected: &[u8]) {
     unsafe {
         let state = ffi::BrotliDecoderCreateInstance(None, None, std::ptr::null_mut());
         assert!(!state.is_null());
+        assert_eq!(
+            ffi::BrotliDecoderSetParameter(state, ffi::BROTLI_DECODER_PARAM_LARGE_WINDOW, 1),
+            ffi::BROTLI_TRUE
+        );
         assert_eq!(
             ffi::BrotliDecoderAttachDictionary(
                 state,
@@ -822,7 +857,6 @@ fn long_transformed_words_keep_their_base_length_in_hq_commands() {
     }
 }
 
-#[cfg(not(feature = "no_std"))]
 fn c_encode_custom(dictionary: &[u8], input: &[u8], quality: mbrotli::Quality) -> Vec<u8> {
     use google_brotli_ffi as ffi;
     let mut output = vec![0; input.len() * 2 + 4096];
@@ -876,6 +910,90 @@ fn c_encode_custom(dictionary: &[u8], input: &[u8], quality: mbrotli::Quality) -
         output.truncate(total);
     }
     output
+}
+
+#[test]
+fn decode_only_and_prepared_custom_dictionaries_accept_c_streams() {
+    use mbrotli::dictionary::{DecodeDictionary, DecodeDictionaryLimits, DictionaryAttachment};
+    use mbrotli::{DecoderConfig, Decompressor, Quality};
+    let description = rich_dictionary();
+    let serialized = description.to_bytes();
+    let dictionary = DecodeDictionary::new(
+        &[DictionaryAttachment::Serialized(&serialized)],
+        DecodeDictionaryLimits::default(),
+    )
+    .unwrap();
+    let prepared = DictionaryBuilder::new()
+        .add_serialized(&description)
+        .build()
+        .unwrap();
+    let payload = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\ncharset encoding content <Charset> encodi... ".repeat(20);
+    let mut decoder = Decompressor::new(DecoderConfig::default()).unwrap();
+    for quality in [Quality::Q5, Quality::Q9, Quality::Q10, Quality::Q11] {
+        let compressed = c_encode_custom(&serialized, &payload, quality);
+        decode_custom(&serialized, &compressed, &payload);
+        assert_eq!(
+            decoder
+                .decompress_with_dictionary(&dictionary, &compressed)
+                .unwrap(),
+            payload
+        );
+        assert_eq!(
+            decoder
+                .decompress_with_dictionary(&prepared, &compressed)
+                .unwrap(),
+            payload
+        );
+    }
+}
+
+#[test]
+fn decode_dictionary_parser_rejects_truncations_and_obeys_c_replacement_rules() {
+    use mbrotli::dictionary::{
+        DecodeDictionary, DecodeDictionaryError, DecodeDictionaryLimits, DictionaryAttachment,
+    };
+    let custom = rich_dictionary().to_bytes();
+    for end in 0..custom.len() {
+        assert!(
+            DecodeDictionary::new(
+                &[DictionaryAttachment::Serialized(&custom[..end])],
+                DecodeDictionaryLimits::default()
+            )
+            .is_err(),
+            "length {end}"
+        );
+    }
+    assert!(matches!(
+        DecodeDictionary::new(
+            &[
+                DictionaryAttachment::Serialized(&custom),
+                DictionaryAttachment::Serialized(&custom)
+            ],
+            DecodeDictionaryLimits::default()
+        ),
+        Err(DecodeDictionaryError::ConflictingStaticDictionaries)
+    ));
+    let empty = [0x91, 0, 0, 0, 0];
+    let dictionary = DecodeDictionary::new(
+        &[
+            DictionaryAttachment::Serialized(&custom),
+            DictionaryAttachment::Serialized(&empty),
+            DictionaryAttachment::Serialized(&custom),
+        ],
+        DecodeDictionaryLimits::default(),
+    )
+    .unwrap();
+    assert_eq!(dictionary.attachment_count(), 2);
+    assert!(dictionary.retained_bytes() >= custom.len());
+    let mut tailed = custom.clone();
+    tailed.extend_from_slice(b"ignored by C");
+    assert!(
+        DecodeDictionary::new(
+            &[DictionaryAttachment::Serialized(&tailed)],
+            DecodeDictionaryLimits::default()
+        )
+        .is_ok()
+    );
 }
 
 #[cfg(not(feature = "no_std"))]
@@ -1069,4 +1187,67 @@ fn a_combination_naming_a_missing_list_is_refused() {
         outcome,
         Err(SerializedDictionaryError::UndefinedReference { .. })
     ));
+}
+
+#[test]
+fn custom_dictionary_continuations_and_concatenation_preserve_context() {
+    use google_brotli_ffi as ffi;
+    use mbrotli::dictionary::{DecodeDictionary, DecodeDictionaryLimits, DictionaryAttachment};
+    use mbrotli::{DecoderConfig, Decompressor, MemberMode};
+    let serialized = rich_dictionary().to_bytes();
+    let dictionary = DecodeDictionary::new(
+        &[DictionaryAttachment::Serialized(&serialized)],
+        DecodeDictionaryLimits::default(),
+    )
+    .unwrap();
+    let chunks = [
+        b"HTTP/1.1 200 OK\r\n".as_slice(),
+        b"Content-Type: text/html\r\ncharset encoding content",
+        b"",
+        b"x",
+        b"xy",
+        b"<Charset> encodi... ",
+    ];
+    let expected = chunks.concat();
+    let mut members = Vec::new();
+    for large in [false, true] {
+        let mut compressed = Vec::new();
+        let mut offset = 0;
+        for (i, chunk) in chunks.iter().enumerate() {
+            let mut encoder = c_encoder::Encoder::new(&[
+                (ffi::BROTLI_PARAM_QUALITY, 5),
+                (ffi::BROTLI_PARAM_LARGE_WINDOW, u32::from(large)),
+                (ffi::BROTLI_PARAM_LGWIN, if large { 25 } else { 10 }),
+                (ffi::BROTLI_PARAM_STREAM_OFFSET, offset),
+            ]);
+            encoder.attach_serialized(&serialized);
+            compressed.extend(encoder.push(
+                chunk,
+                if i + 1 == chunks.len() {
+                    ffi::BROTLI_OPERATION_FINISH
+                } else {
+                    ffi::BROTLI_OPERATION_FLUSH
+                },
+                3,
+                false,
+            ));
+            offset += chunk.len() as u32;
+        }
+        decode_custom(&serialized, &compressed, &expected);
+        assert_eq!(
+            Decompressor::new(DecoderConfig::default())
+                .unwrap()
+                .decompress_with_dictionary(&dictionary, &compressed)
+                .unwrap(),
+            expected
+        );
+        members.extend(compressed);
+    }
+    assert_eq!(
+        Decompressor::new(DecoderConfig::default().with_member_mode(MemberMode::Concatenated))
+            .unwrap()
+            .decompress_with_dictionary(&dictionary, &members)
+            .unwrap(),
+        expected.repeat(2)
+    );
 }

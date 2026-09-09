@@ -10,6 +10,12 @@ algorithms they belong to — are derived from that work, which is distributed
 under the MIT license reproduced below. The upstream license text is also
 vendored verbatim at `brotli-ffi/vendor/brotli/LICENSE`.
 
+The native Rust decoder shares those format tables and dictionary bytes under
+`src/shared/`. Its independently structured state machines follow RFC 7932 and
+RFC 9841, with Google Brotli 1.2.0 used as a format reference and test oracle.
+The borrowed word transformation implementation serves both codecs. The
+upstream compressed regression fixtures retain the same Brotli Authors license.
+
 --------------------------------------------------------------------------------
 
 Copyright (c) 2009, 2010, 2013-2016 by the Brotli Authors.

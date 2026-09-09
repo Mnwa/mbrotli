@@ -16,10 +16,10 @@ use alloc::vec::Vec;
 
 use fearless_simd::{Simd, SimdBase, SimdMask, u8x32};
 
-use crate::compressor::core::shared::constants::{HASH_MUL32, WINDOW_GAP};
-use crate::compressor::core::shared::dictionary::MAX_STATIC_DICTIONARY_MATCH_LEN;
-use crate::compressor::core::shared::dictionary::all_matches::{self, INVALID_MATCH};
-use crate::compressor::core::shared::match_len::find_match_length;
+use crate::shared::constants::{HASH_MUL32, WINDOW_GAP};
+use crate::shared::dictionary::MAX_STATIC_DICTIONARY_MATCH_LEN;
+use crate::shared::dictionary::all_matches::{self, INVALID_MATCH};
+use crate::shared::match_len::find_match_length;
 
 /// Base-2 logarithm of the number of hash buckets (`BUCKET_BITS`).
 const BUCKET_BITS: u32 = 17;

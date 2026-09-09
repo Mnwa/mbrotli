@@ -6,7 +6,7 @@
 //! `brotli-ffi/vendor/brotli/LICENSE`.
 //!
 //! Tables every quality shares live in
-//! [`crate::compressor::core::shared::tables`].
+//! [`crate::shared::tables`].
 
 /// Seed counts the quality 0 command histogram starts each block with.
 pub(crate) const CMD_HISTO_SEED: [u32; 128] = [

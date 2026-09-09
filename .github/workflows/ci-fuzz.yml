@@ -1,7 +1,9 @@
 name: CI Fuzz
 
-# Run on demand from the Actions tab or the GitHub CLI.
+# Run for every pushed tag, or on demand from Actions / the GitHub CLI.
 on:
+  push:
+    tags: ['v*']
   workflow_dispatch:
 
 env:
@@ -15,7 +17,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [differential_c, streaming_equivalence, dictionary, serialized_dictionary, framing, compressor_lifecycle, parallel]
+        target: [differential_c, streaming_equivalence, dictionary, serialized_dictionary, framing, compressor_lifecycle, parallel, decompress, decode_streaming, decode_dictionary, decode_serialized, decode_lifecycle, decode_io_limits]
+        features: [experimental]
+        include:
+          - {target: decompress, features: ""}
+          - {target: decode_streaming, features: ""}
+          - {target: decode_dictionary, features: ""}
+          - {target: decode_lifecycle, features: ""}
+          - {target: decode_io_limits, features: ""}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,7 +53,9 @@ jobs:
         run: ./prepare-seeds.sh
       - name: build the targets
         working-directory: fuzz/afl
-        run: cargo afl build --release --features experimental
+        run: cargo afl build --release --no-default-features --features "$FUZZ_FEATURES"
+        env:
+          FUZZ_FEATURES: ${{ matrix.features }}
       # `TARGET` comes from this workflow's own literal matrix, but it is passed
       # through the environment rather than interpolated into the shell, which
       # is the pattern that stays correct if the list ever grows a value with a
@@ -60,7 +71,7 @@ jobs:
           case "$TARGET" in
             dictionary) seeds=seeds/dictionary ;;
             serialized_dictionary) seeds=seeds/serialized ;;
-            compressor_lifecycle|framing|parallel) seeds="regressions/$TARGET" ;;
+            compressor_lifecycle|framing|parallel|decompress|decode_*) seeds="regressions/$TARGET" ;;
           esac
           cargo afl fuzz -S ci -i "$seeds" -o findings -V 600 \
             -- "target/release/$TARGET"
@@ -82,6 +93,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: findings-${{ matrix.target }}
+          name: findings-${{ matrix.target }}-${{ matrix.features || 'base' }}
           path: fuzz/afl/findings.tar.gz
           compression-level: 0

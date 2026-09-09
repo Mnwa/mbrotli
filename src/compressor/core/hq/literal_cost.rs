@@ -14,7 +14,7 @@
 use alloc::vec::Vec;
 
 use super::utf8::is_mostly_utf8;
-use crate::compressor::core::shared::fast_log::fast_log2;
+use crate::shared::fast_log::fast_log2;
 
 /// Half-width of the sliding window used for UTF-8 text.
 const UTF8_WINDOW_HALF: usize = 495;

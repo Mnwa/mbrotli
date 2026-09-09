@@ -14,5 +14,4 @@ pub(crate) mod greedy;
 pub(crate) mod hq;
 pub(crate) mod rfc9841;
 pub(crate) mod session;
-pub(crate) mod shared;
 mod stream;

@@ -92,3 +92,10 @@ before enforcing the repository function-coverage threshold.
 No allocator-free mode, embedded I/O adapter, or no-std parallel scheduler is
 implemented. Bare-metal builds are compile-checked; execution tests use a host
 allocator and the independent C decoder.
+
+## Native decoding
+
+The alloc-only surface also includes `Decompressor`, `DecoderSession`,
+`DecodeDictionary` and RAW dictionary views. Serialized/custom mappings follow
+the same experimental gate in std and alloc profiles. See [decoder mechanics](decompressor.md)
+and the four-profile [compatibility report](decompressor-compatibility.md).

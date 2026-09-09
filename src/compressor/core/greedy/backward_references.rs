@@ -20,11 +20,11 @@ use super::hashers::{
 };
 use super::params::GreedyParams;
 use crate::compressor::core::rfc9841::context::SharedContextInner;
-use crate::compressor::core::shared::command::Command;
-use crate::compressor::core::shared::dictionary::DictionaryStats;
-use crate::compressor::core::shared::distance::NUM_DISTANCE_SHORT_CODES;
-use crate::compressor::core::shared::ringbuffer::{BlockSpan, Window};
-use crate::compressor::core::shared::score::{MIN_SCORE, SearchResult};
+use crate::shared::command::Command;
+use crate::shared::dictionary::DictionaryStats;
+use crate::shared::distance::NUM_DISTANCE_SHORT_CODES;
+use crate::shared::ringbuffer::{BlockSpan, Window};
+use crate::shared::score::{MIN_SCORE, SearchResult};
 
 /// Score a delayed match has to beat the current one by (`cost_diff_lazy`).
 const COST_DIFF_LAZY: usize = 175;

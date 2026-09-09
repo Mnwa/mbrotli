@@ -1,4 +1,4 @@
-//! Brotli compression, in safe Rust.
+//! Brotli compression and decompression, in safe Rust.
 //!
 //! `mbrotli` implements every Brotli quality as a port of Google's reference
 //! encoder. Its compression APIs emit identical bytes for equivalent stream
@@ -8,13 +8,14 @@
 //! this crate, and the SIMD instruction set is resolved once per compressor
 //! rather than inside any loop.
 //!
-//! There is no decoder: round-trip verification uses Google's C decoder, and
-//! this crate compresses only.
+//! [`Decompressor`] implements native incremental decoding with explicit
+//! resource limits, external dictionaries, reusable storage, and I/O adapters.
+//! The independent C implementation is used only in development verification.
 //!
 //! # `no_std` support
 //!
 //! Enable `no_std` with `default-features = false` for targets without the
-//! standard library. Compression, sessions and dictionaries require `alloc`
+//! standard library. Compression, decompression, sessions and dictionaries require `alloc`
 //! and a global allocator. I/O adapters, parallel compression, experimental
 //! framing and hotpath instrumentation are disabled by `no_std`.
 //! SIMD selection uses compile-time target features in this mode.
@@ -31,6 +32,10 @@
 //! PreparedDictionary  immutable knowledge many compressors can share
 //! EncoderReader       adapters over a session
 //! EncoderWriter
+//! DecoderConfig       window, member, and resource policies
+//! Decompressor        reusable native decoder
+//! DecoderSession      exact incremental progress and final-input contracts
+//! DecodeDictionary    immutable dictionary without encoder indexes
 //! ```
 //!
 //! A [`Compressor`] is stateful, and every encoding method takes `&mut self`.
@@ -278,13 +283,25 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+mod shared;
+
 pub mod compressor;
+pub mod decompressor;
+pub use decompressor::{
+    DecodeFailure, DecodeOperation, DecodeProgress, DecoderSession, DecoderStatus, Decompressor,
+    DecompressorBuilder,
+};
+
+pub use decompressor::{
+    DecodeConfigError, DecodeError, DecodeLimits, DecodeStreamConfig, DecoderConfig,
+    InvalidDataKind, MemberMode, OutputSize, WindowLimit,
+};
 
 pub use compressor::dictionary;
 #[cfg(all(feature = "experimental", not(feature = "no_std")))]
 pub use compressor::framing;
 #[cfg(not(feature = "no_std"))]
-pub use compressor::io;
+pub mod io;
 pub use compressor::{
     Backend, BlockBits, BlockSize, CompressionMode, Compressor, CompressorBuilder, ConfigError,
     DistanceParams, EncodeError, EncoderConfig, EncoderSession, EncoderStatus, InputSize,

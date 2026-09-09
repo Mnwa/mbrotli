@@ -1,7 +1,9 @@
 name: CI Miri
 
-# Run on demand from the Actions tab or the GitHub CLI.
+# Run for every pushed tag, or on demand from Actions / the GitHub CLI.
 on:
+  push:
+    tags: ['v*']
   workflow_dispatch:
 
 env:
@@ -22,8 +24,11 @@ jobs:
       # Filters name modules rather than single tests: a renamed test would
       # leave a single-name filter matching nothing, and `cargo miri test`
       # exits successfully when it runs no tests at all.
-      - run: cargo miri test --lib compressor::core::shared::ringbuffer::tests
+      - run: cargo miri test --lib shared::ringbuffer::tests
       - run: cargo miri test --lib compressor::core::hq::zopfli::tests::prefix_merge_preserves_prior_arena_entries_and_tree_ties
       - run: cargo miri test --lib compressor::core::greedy::hashers::tests
       - run: cargo miri test --lib compressor::core::fast::workspace::tests
       - run: cargo miri test --lib compressor::core::stream::tests
+
+      - run: cargo miri test --test decompress_golden
+      - run: cargo miri test --test decompress_golden --features experimental

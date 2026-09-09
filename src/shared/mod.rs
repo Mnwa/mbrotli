@@ -1,4 +1,4 @@
-//! Primitives every quality of this encoder shares.
+//! Private format data and codec primitives shared across the crate.
 //!
 //! Two layers live here. The lower one is dictated by RFC 7932 and by the
 //! pinned reference encoder — the bit writer, the Huffman builders, the
@@ -11,7 +11,8 @@
 //! What is *not* here is any decision: which match to take, where to split, how
 //! many contexts to model. Those belong to the quality that makes them, which
 //! is what lets the fast, greedy and high-quality encoders share this layer
-//! without depending on each other.
+//! without depending on each other. The decoder uses the same wire constants,
+//! context tables and built-in dictionary data directly from this module.
 
 pub(crate) mod bit_cost;
 pub(crate) mod bits;
@@ -19,6 +20,9 @@ pub(crate) mod bitstream;
 pub(crate) mod block_split;
 pub(crate) mod command;
 pub(crate) mod constants;
+pub(crate) mod decode_dictionary;
+#[cfg(feature = "experimental")]
+pub(crate) mod decode_serialized;
 pub(crate) mod dictionary;
 pub(crate) mod distance;
 pub(crate) mod fast_log;

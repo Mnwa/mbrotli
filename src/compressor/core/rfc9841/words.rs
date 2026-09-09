@@ -9,7 +9,7 @@
 //! Ports `BrotliSizeBitsToOffsets` and `ParseWordList` from
 //! `c/common/shared_dictionary.c` of the pinned reference (`google/brotli`
 //! v1.2.0, commit `028fb5a`). The built-in tables are the ones
-//! [`core::shared::dictionary`](crate::compressor::core::shared::dictionary)
+//! [`shared::dictionary`](crate::shared::dictionary)
 //! already holds, borrowed rather than copied.
 //!
 //! [RFC 9841 section 5]: https://www.rfc-editor.org/rfc/rfc9841.html#section-5
@@ -20,7 +20,7 @@ use alloc::borrow::Cow;
 
 use thiserror::Error;
 
-use crate::compressor::core::shared::dictionary::{
+use crate::shared::dictionary::{
     BUILTIN_OFFSETS_BY_LENGTH, BUILTIN_SIZE_BITS_BY_LENGTH, BUILTIN_WORDS,
 };
 

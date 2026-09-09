@@ -17,20 +17,14 @@ use alloc::vec::Vec;
 use super::block_splitter::BlockSplitter;
 use super::cluster::{ClusterArena, cluster_histograms};
 use super::params::HqParams;
-use crate::compressor::core::shared::bit_cost::population_cost;
-use crate::compressor::core::shared::block_split::BlockSplit;
-use crate::compressor::core::shared::command::{Command, prefix_encode_copy_distance};
-use crate::compressor::core::shared::constants::NUM_LITERAL_SYMBOLS;
-use crate::compressor::core::shared::distance::{
-    DistanceParams, MAX_NPOSTFIX, NUM_HISTOGRAM_DISTANCE_SYMBOLS,
-};
-use crate::compressor::core::shared::format::ContextMode;
-use crate::compressor::core::shared::histogram::{
-    HistogramCommand, HistogramDistance, HistogramLiteral,
-};
-use crate::compressor::core::shared::metablock::{
-    DISTANCE_CONTEXT_BITS, LITERAL_CONTEXT_BITS, MetaBlockSplit,
-};
+use crate::shared::bit_cost::population_cost;
+use crate::shared::block_split::BlockSplit;
+use crate::shared::command::{Command, prefix_encode_copy_distance};
+use crate::shared::constants::NUM_LITERAL_SYMBOLS;
+use crate::shared::distance::{DistanceParams, MAX_NPOSTFIX, NUM_HISTOGRAM_DISTANCE_SYMBOLS};
+use crate::shared::format::ContextMode;
+use crate::shared::histogram::{HistogramCommand, HistogramDistance, HistogramLiteral};
+use crate::shared::metablock::{DISTANCE_CONTEXT_BITS, LITERAL_CONTEXT_BITS, MetaBlockSplit};
 
 /// Most histograms a meta-block may end up with, one per block-type byte.
 const MAX_NUMBER_OF_HISTOGRAMS: usize = 256;

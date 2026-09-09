@@ -10,8 +10,8 @@
 //! from the three-context model, which the reference reserves for quality
 //! seven and above.
 
-use crate::compressor::core::shared::fast_log::fast_log2;
-use crate::compressor::core::shared::format::{
+use crate::shared::fast_log::fast_log2;
+use crate::shared::format::{
     CONTEXT_LUT_UTF8, MAX_STATIC_CONTEXTS, STATIC_CONTEXT_MAP_COMPLEX_UTF8,
     STATIC_CONTEXT_MAP_CONTINUATION, STATIC_CONTEXT_MAP_SIMPLE_UTF8,
 };
@@ -43,7 +43,7 @@ pub(crate) fn context(prev1: u8, prev2: u8) -> usize {
 /// Returns the Shannon entropy of `population`, in bits times the total count.
 ///
 /// Mirrors `EstimateEntropy`. This is the plain Shannon measure rather than
-/// [`crate::compressor::core::shared::histogram::bits_entropy`]: the prefix that a context predicts is
+/// [`crate::shared::histogram::bits_entropy`]: the prefix that a context predicts is
 /// coded together with the rest of the byte, so the "at least one bit per
 /// symbol" floor does not apply.
 fn estimate_entropy(population: &[u32]) -> f64 {

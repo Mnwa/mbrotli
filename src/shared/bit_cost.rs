@@ -143,8 +143,8 @@ pub(crate) fn population_cost<const N: usize>(histogram: &Histogram<N>, data_siz
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compressor::core::shared::constants::NUM_LITERAL_SYMBOLS;
-    use crate::compressor::core::shared::histogram::HistogramLiteral;
+    use crate::shared::constants::NUM_LITERAL_SYMBOLS;
+    use crate::shared::histogram::HistogramLiteral;
 
     /// Builds a literal histogram from `(symbol, count)` pairs.
     fn histogram(entries: &[(usize, u32)]) -> HistogramLiteral {

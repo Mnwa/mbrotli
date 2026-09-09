@@ -45,7 +45,7 @@ graph TD
     ser --> wor
     ser --> tra
     ser --> var
-    wor -.borrows.-> builtin["core::shared::dictionary<br/>(BUILTIN_WORDS and its offsets)"]
+    wor -.borrows.-> builtin["shared::dictionary<br/>(BUILTIN_WORDS and its offsets)"]
     tra -.borrows.-> files["builtin_prefix_suffix.bin<br/>builtin_transforms.bin"]
 ```
 

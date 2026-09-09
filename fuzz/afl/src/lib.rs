@@ -17,6 +17,8 @@ use mbrotli::{
 };
 use std::ffi::c_int;
 
+mod decode_oracle;
+pub mod decode_targets;
 pub mod targets;
 
 /// Every quality this crate implements.

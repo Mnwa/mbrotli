@@ -1,7 +1,7 @@
 # Fast Encoder Core (quality 0 and quality 1)
 
 Scope: `src/compressor/core/fast/`, and the parts of
-`src/compressor/core/shared/` it uses. This is the implementation of the two fast
+`src/shared/` it uses. This is the implementation of the two fast
 Brotli qualities: a one-pass encoder (quality 0) and a two-pass encoder
 (quality 1), both ported from Google Brotli v1.2.0, commit `028fb5a`, and both
 byte-identical to it.
@@ -23,7 +23,7 @@ graph TD
     consts["fast/constants.rs<br/>quality 0 and 1 constants"]
     ws["fast/workspace.rs<br/>OnePassArena, TwoPassArena"]
 
-    subgraph shared["compressor::core::shared"]
+    subgraph shared["shared"]
         huff["huffman.rs<br/>tree build, canonical codes, serialisation"]
         ml["match_len.rs<br/>hybrid scalar/SIMD match length"]
         bits["bits.rs<br/>LSB-first bit writer"]
@@ -58,7 +58,7 @@ graph TD
 ```
 
 The bit writer, the Huffman builders, the match-length scan, the reference
-logarithms and the entropy-coding tables live in `compressor::core::shared`
+logarithms and the entropy-coding tables live in `shared`
 rather than in this tree, because the greedy encoder needs exactly the same
 implementations; see [greedy-encoder.md](greedy-encoder.md).
 

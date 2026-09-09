@@ -20,13 +20,13 @@ use fearless_simd::{Select, Simd, SimdBase, SimdMask, f64x8, u64x8};
 use super::cluster::{HistogramPair, combine_batch, move_cost};
 use super::params::HqParams;
 use crate::compressor::core::dispatch::Kernels;
-use crate::compressor::core::shared::bit_cost::population_cost;
-use crate::compressor::core::shared::block_split::{BlockSplit, MAX_NUMBER_OF_BLOCK_TYPES};
-use crate::compressor::core::shared::command::Command;
-use crate::compressor::core::shared::constants::{NUM_COMMAND_SYMBOLS, NUM_LITERAL_SYMBOLS};
-use crate::compressor::core::shared::distance::NUM_HISTOGRAM_DISTANCE_SYMBOLS;
-use crate::compressor::core::shared::fast_log::fast_log2;
-use crate::compressor::core::shared::histogram::Histogram;
+use crate::shared::bit_cost::population_cost;
+use crate::shared::block_split::{BlockSplit, MAX_NUMBER_OF_BLOCK_TYPES};
+use crate::shared::command::Command;
+use crate::shared::constants::{NUM_COMMAND_SYMBOLS, NUM_LITERAL_SYMBOLS};
+use crate::shared::distance::NUM_HISTOGRAM_DISTANCE_SYMBOLS;
+use crate::shared::fast_log::fast_log2;
+use crate::shared::histogram::Histogram;
 
 /// Most histograms the literal stream is seeded with (`kMaxLiteralHistograms`).
 const MAX_LITERAL_HISTOGRAMS: usize = 100;
@@ -1215,7 +1215,7 @@ mod tests {
 
     #[test]
     fn all_three_streams_are_split_together() {
-        let dist = crate::compressor::core::shared::distance::DistanceParams::default();
+        let dist = crate::shared::distance::DistanceParams::default();
         let data: Vec<u8> = (0..40_000u32).map(|i| (i % 251) as u8).collect();
         let commands: Vec<Command> = (0..2000)
             .map(|index| Command::new(&dist, 8, 12, 0, 20 + index % 300))
@@ -1246,7 +1246,7 @@ mod tests {
 
     #[test]
     fn every_partition_matches_the_c_splitter() {
-        let dist = crate::compressor::core::shared::distance::DistanceParams::default();
+        let dist = crate::shared::distance::DistanceParams::default();
         let cases: Vec<(&str, Fixture, Vec<Command>)> = vec![
             (
                 "uniform",
@@ -1316,7 +1316,7 @@ mod tests {
 
     #[test]
     fn a_reused_splitter_produces_the_same_partition() {
-        let dist = crate::compressor::core::shared::distance::DistanceParams::default();
+        let dist = crate::shared::distance::DistanceParams::default();
         let data: Vec<u8> = (0..30_000u32).map(|i| (i * 7 % 253) as u8).collect();
         let commands: Vec<Command> = (0..1500)
             .map(|index| Command::new(&dist, 6, 14, 0, 25 + index % 200))

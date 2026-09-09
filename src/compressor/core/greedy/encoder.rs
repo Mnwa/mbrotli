@@ -22,17 +22,17 @@ use super::hashers::{DistanceCache, MatchFinder, NUM_REMEMBERED_DISTANCES, Sweep
 use super::metablock::build_meta_block_greedy_into;
 use super::params::{GreedyParams, MAX_NUM_DELAYED_SYMBOLS};
 use crate::compressor::core::rfc9841::context::SharedContextInner;
-use crate::compressor::core::shared::bits::{BYTE_PADDING_SLACK, BitWriter, inject_byte_padding};
-use crate::compressor::core::shared::bitstream::{MetaBlockWriter, store_uncompressed_meta_block};
-use crate::compressor::core::shared::command::Command;
-use crate::compressor::core::shared::command::CommandExtension;
-use crate::compressor::core::shared::constants::{OUTPUT_RESERVE_CONST, OUTPUT_SLACK};
-use crate::compressor::core::shared::format::ContextMode;
-use crate::compressor::core::shared::histogram::{HistogramLiteral, bits_entropy};
-use crate::compressor::core::shared::metablock::{MetaBlockSplit, optimize_histograms};
-use crate::compressor::core::shared::ringbuffer::{BlockSpan, Window};
-use crate::compressor::core::shared::ringbuffer::{RingBuffer, wrap_position};
 use crate::compressor::{BrotliCompressError, BrotliResult, CompressParams};
+use crate::shared::bits::{BYTE_PADDING_SLACK, BitWriter, inject_byte_padding};
+use crate::shared::bitstream::{MetaBlockWriter, store_uncompressed_meta_block};
+use crate::shared::command::Command;
+use crate::shared::command::CommandExtension;
+use crate::shared::constants::{OUTPUT_RESERVE_CONST, OUTPUT_SLACK};
+use crate::shared::format::ContextMode;
+use crate::shared::histogram::{HistogramLiteral, bits_entropy};
+use crate::shared::metablock::{MetaBlockSplit, optimize_histograms};
+use crate::shared::ringbuffer::{BlockSpan, Window};
+use crate::shared::ringbuffer::{RingBuffer, wrap_position};
 
 /// Stride the compressibility check samples literals at (`kSampleRate`).
 const SAMPLE_RATE: u32 = 13;
@@ -102,8 +102,7 @@ impl GreedyEncoder {
     pub(crate) fn begin_fragment(&mut self, prefix: &[u8]) -> BrotliResult<()> {
         self.last_bytes = 0;
         self.last_bytes_bits = 0;
-        self.references.dictionary =
-            crate::compressor::core::shared::dictionary::DictionaryStats::DISABLED;
+        self.references.dictionary = crate::shared::dictionary::DictionaryStats::DISABLED;
         // Two bytes cannot make a copy. Flush seeds the ring and prior-byte
         // context; the shared fragment writer owns the actual prefix output.
         self.flush_block(prefix, None)?;

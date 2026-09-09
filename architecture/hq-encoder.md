@@ -48,7 +48,7 @@ graph TD
         clu["cluster<br/>(histogram clustering)"]
     end
 
-    subgraph shared["compressor::core::shared"]
+    subgraph shared["shared"]
         rb["ringbuffer"]
         cmdmod["command"]
         dist["distance"]

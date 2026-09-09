@@ -21,7 +21,7 @@ pub(crate) mod q1;
 pub(crate) mod tables;
 pub(crate) mod workspace;
 
-pub(crate) use crate::compressor::core::shared::{bits, huffman, match_len};
+pub(crate) use crate::shared::{bits, huffman, match_len};
 
 use super::dispatch::{self, Kernels};
 use fearless_simd::{Level, Simd};

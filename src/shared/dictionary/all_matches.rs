@@ -23,7 +23,7 @@ use super::{
     BUILTIN_OFFSETS_BY_LENGTH, BUILTIN_SIZE_BITS_BY_LENGTH, BUILTIN_WORDS, CUTOFF_TRANSFORMS,
     MAX_STATIC_DICTIONARY_MATCH_LEN, common_prefix_len,
 };
-use crate::compressor::core::shared::constants::HASH_MUL32;
+use crate::shared::constants::HASH_MUL32;
 
 /// Value marking "no word of this length matched" (`kInvalidMatch`).
 pub(crate) const INVALID_MATCH: u32 = 0x0FFF_FFFF;

@@ -1,6 +1,6 @@
 # Bit output and destination storage
 
-`core::shared::bits` owns the private least-significant-bit-first bit writer.
+`shared::bits` owns the private least-significant-bit-first bit writer.
 Public vector, slice and streaming APIs retain the same output and error contracts;
 no storage trait, bit position or SIMD token appears in those APIs.
 

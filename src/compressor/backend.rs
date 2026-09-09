@@ -20,7 +20,7 @@ use fearless_simd::Level;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Copy, Clone)]
-pub struct Backend(pub(super) Level);
+pub struct Backend(pub(crate) Level);
 
 impl Backend {
     /// Portable scalar implementation, without explicit SIMD kernels.

@@ -9,7 +9,7 @@
 use super::bits::{BitWriter, ByteBuffer, MAX_BITS_PER_WRITE};
 use super::constants::{LONG_INSERT_LIMIT, SHORT_INSERT_LIMIT};
 
-pub(crate) use crate::compressor::core::shared::fast_log::{fast_log2, log2_floor_non_zero};
+pub(crate) use crate::shared::fast_log::{fast_log2, log2_floor_non_zero};
 
 /// Writes the meta-block header for `len` bytes.
 ///

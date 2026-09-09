@@ -12,11 +12,9 @@
 
 use alloc::vec::Vec;
 
-use crate::compressor::core::shared::block_split::{BlockSplit, MAX_NUMBER_OF_BLOCK_TYPES};
-use crate::compressor::core::shared::format::MAX_STATIC_CONTEXTS;
-use crate::compressor::core::shared::histogram::{
-    Histogram, HistogramLiteral, bits_entropy, bits_entropy_of_sum,
-};
+use crate::shared::block_split::{BlockSplit, MAX_NUMBER_OF_BLOCK_TYPES};
+use crate::shared::format::MAX_STATIC_CONTEXTS;
+use crate::shared::histogram::{Histogram, HistogramLiteral, bits_entropy, bits_entropy_of_sum};
 
 /// How much better the second-last block has to look to be reused.
 const SECOND_LAST_ADVANTAGE: f64 = 20.0;
@@ -472,7 +470,7 @@ impl ContextBlockSplitter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compressor::core::shared::constants::NUM_LITERAL_SYMBOLS;
+    use crate::shared::constants::NUM_LITERAL_SYMBOLS;
 
     /// Runs a plain splitter over `symbols` and returns the finished split.
     fn split_literals(symbols: &[u8]) -> BlockSplitter<NUM_LITERAL_SYMBOLS> {

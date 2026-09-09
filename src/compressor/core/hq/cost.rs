@@ -21,10 +21,10 @@ use alloc::vec::Vec;
 
 use super::literal_cost::{LiteralCostArena, estimate_bit_costs_for_literals};
 use super::nodes::INFINITY;
-use crate::compressor::core::shared::command::Command;
-use crate::compressor::core::shared::constants::{NUM_COMMAND_SYMBOLS, NUM_LITERAL_SYMBOLS};
-use crate::compressor::core::shared::distance::NUM_HISTOGRAM_DISTANCE_SYMBOLS;
-use crate::compressor::core::shared::fast_log::fast_log2;
+use crate::shared::command::Command;
+use crate::shared::constants::{NUM_COMMAND_SYMBOLS, NUM_LITERAL_SYMBOLS};
+use crate::shared::distance::NUM_HISTOGRAM_DISTANCE_SYMBOLS;
+use crate::shared::fast_log::fast_log2;
 
 /// Prior the literal-cost model uses for command symbols: `log2(11 + symbol)`.
 const COMMAND_PRIOR_OFFSET: usize = 11;
@@ -270,7 +270,7 @@ fn accumulate_literal_costs(costs: &mut [f32], num_bytes: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compressor::core::shared::distance::DistanceParams;
+    use crate::shared::distance::DistanceParams;
 
     /// The distance alphabet a default-parameter stream uses.
     fn alphabet() -> usize {

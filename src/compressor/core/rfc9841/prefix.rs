@@ -15,7 +15,7 @@
 //! difference is recorded as decision D6.
 //!
 //! The scan here is scalar, and deliberately its own rather than the vector
-//! kernel `core::shared::match_len` gives the encoders. No encoder consults a
+//! kernel `shared::match_len` gives the encoders. No encoder consults a
 //! prefix dictionary yet, so there is no profile that would justify
 //! vectorising it, and the repository's rule is to measure first.
 
@@ -214,7 +214,7 @@ impl PrefixSources {
 }
 
 #[cfg(any(test, feature = "diagnostics"))]
-use crate::compressor::core::shared::match_len::common_prefix_len;
+use crate::shared::match_len::common_prefix_len;
 
 #[cfg(test)]
 mod tests {

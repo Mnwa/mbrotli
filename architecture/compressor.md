@@ -55,7 +55,7 @@ graph TD
         bound["core::bound<br/>(compressed-size bound)"]
         driver["core::driver<br/>(quality routing, EncoderCache,<br/>one-shot engines)"]
         rfc["core::rfc9841<br/>(ResolvedWindow, SharedContextInner,<br/>PrefixSources, PreparedPrefix, search)"]
-        shared["core::shared<br/>(bits, huffman, match_len, command,<br/>histogram, ringbuffer, dictionary,<br/>block_split, metablock, bitstream, ...)"]
+        shared["shared<br/>(bits, huffman, match_len, command,<br/>histogram, ringbuffer, dictionary,<br/>block_split, metablock, bitstream, ...)"]
         fast["core::fast (q0, q1)"]
         greedy["core::greedy (q2 to q9)"]
         hq["core::hq (q10, q11)"]
@@ -457,7 +457,7 @@ See [universal-encoding.md](universal-encoding.md) for the contract and regressi
 `Operation::Flush` mirrors `BROTLI_OPERATION_FLUSH` in two steps: the buffered
 input is written out as a meta-block even where the encoder would rather keep
 gathering, and the stream is realigned to a byte boundary by
-`core::shared::bits::inject_byte_padding`. Nothing is emitted when there was no
+`shared::bits::inject_byte_padding`. Nothing is emitted when there was no
 buffered input *and* the stream was already aligned, which is what makes a
 redundant flush free. A flush carries the attached dictionary, so the bytes after
 one are still compressed against it.

@@ -16,9 +16,9 @@
 
 use alloc::vec::Vec;
 
-use crate::compressor::core::shared::bit_cost::population_cost;
-use crate::compressor::core::shared::fast_log::fast_log2;
-use crate::compressor::core::shared::histogram::Histogram;
+use crate::shared::bit_cost::population_cost;
+use crate::shared::fast_log::fast_log2;
+use crate::shared::histogram::Histogram;
 
 /// A candidate merge and what it would cost (`HistogramPair`).
 #[derive(Copy, Clone, Debug, Default)]
@@ -526,8 +526,8 @@ pub(crate) fn move_cost<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compressor::core::shared::constants::NUM_LITERAL_SYMBOLS;
-    use crate::compressor::core::shared::histogram::HistogramLiteral;
+    use crate::shared::constants::NUM_LITERAL_SYMBOLS;
+    use crate::shared::histogram::HistogramLiteral;
 
     /// Builds a histogram over the bytes of `data`.
     fn histogram(data: &[u8]) -> HistogramLiteral {

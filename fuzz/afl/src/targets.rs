@@ -31,6 +31,19 @@ pub type TargetFn = fn(&Context, &[u8]);
 /// through the matching body, so adding a target here is all it takes to give
 /// it a regression corpus.
 pub const TARGETS: &[(&str, TargetFn)] = &[
+    ("decompress", crate::decode_targets::decompress),
+    (
+        "decode_dictionary",
+        crate::decode_targets::decode_dictionary,
+    ),
+    #[cfg(feature = "experimental")]
+    (
+        "decode_serialized",
+        crate::decode_targets::decode_serialized,
+    ),
+    ("decode_lifecycle", crate::decode_targets::decode_lifecycle),
+    ("decode_io_limits", crate::decode_targets::decode_io_limits),
+    ("decode_streaming", crate::decode_targets::decode_streaming),
     ("parallel", parallel),
     ("q0_roundtrip", q0_roundtrip),
     ("q1_roundtrip", q1_roundtrip),

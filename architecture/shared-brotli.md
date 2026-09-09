@@ -31,7 +31,7 @@ low-level error the encoders raise, which the public `DictionaryError`,
 `ConfigError` and `EncodeError` are built from.
 
 Below the API, `compressor::core::rfc9841` owns the wire primitives. It is
-distinct from `compressor::core::shared`, which predates it and means "code more
+distinct from `shared`, which predates it and means "code more
 than one quality needs".
 
 ```mermaid
@@ -55,15 +55,15 @@ graph TD
     driver["core::driver<br/>check_large_window, check_shared,<br/>quality routing"]
     gsearch["core::greedy::backward_references<br/>(q5 to q9)"]
     hsearch["core::hq::zopfli<br/>(q10, q11)"]
-    cmd["core::shared::command<br/>extend_last_command"]
-        dist["core::shared::distance<br/>DistanceParams, distance_code_limit"]
+    cmd["shared::command<br/>extend_last_command"]
+        dist["shared::distance<br/>DistanceParams, distance_code_limit"]
         mlen["prefix::common_prefix_len<br/>(scalar word scan)"]
         gparams["core::greedy::params::GreedyParams"]
         hparams["core::hq::params::HqParams"]
         fast["core::fast::FastEncoder"]
         gmeta["core::hq::metablock<br/>choose_distance_params"]
-        bitstream["core::shared::bitstream<br/>meta-block writer"]
-        ring["core::shared::ringbuffer::RingBuffer"]
+        bitstream["shared::bitstream<br/>meta-block writer"]
+        ring["shared::ringbuffer::RingBuffer"]
     end
 
     comp --> entry
@@ -458,7 +458,7 @@ is §5.5. It is feature-gated because the candidate order it breaks ties by is a
 implementation detail no application should depend on.
 
 The scan uses scalar whole-word comparisons with a byte tail. It is separate
-from the encoders' vector kernel in `core::shared::match_len`.
+from the encoders' vector kernel in `shared::match_len`.
 
 Being scalar, the answer cannot depend on the backend, so there is no identity
 test to run for it. The tie rule is the reference's: strictly-longer wins, so
@@ -649,7 +649,7 @@ has to prove it.
 | Layer | What it checks |
 | --- | --- |
 | `core::rfc9841::window` unit tests | header bits for all 53 large windows and every ordinary window; retained history never exceeds the declaration |
-| `core::shared::distance` unit tests | the large alphabet against every legal `(NPOSTFIX, NDIRECT)` pair; the 544-symbol histogram ceiling; the degenerate branches of `distance_code_limit` |
+| `shared::distance` unit tests | the large alphabet against every legal `(NPOSTFIX, NDIRECT)` pair; the 544-symbol histogram ceiling; the degenerate branches of `distance_code_limit` |
 | `tests/large_window.rs` | header golden bits; round trips through the pinned C decoder with `BROTLI_DECODER_PARAM_LARGE_WINDOW` for `10..=30`; header-only equivalence for `31..=62`; refusal at qualities 0, 1 and 2; empty and tiny inputs; the bound; streaming and one-shot agreement over sixteen chunk sizes; backend identity |
 | `core::rfc9841::prefix` unit tests | attachment ordering; addressing over empty attachments; the distance round trip; saturating arithmetic at `u64::MAX`; the match scan against a materialised oracle over every start, seam and limit; the word scan against a byte-by-byte comparison at every shared length and limit |
 | `core::rfc9841::prepared` unit tests | the shape ladder; every hashable position indexed once; newest-first, capped bucket chains; **entry-for-entry equality with `CreatePreparedDictionary`** through the workspace shim, over six corpora including one that triggers shape scaling |

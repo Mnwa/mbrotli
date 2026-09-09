@@ -1,8 +1,8 @@
 //! Upper bound on the size of a compressed stream.
 
 use crate::compressor::core::rfc9841::window::MAX_ENCODER_WINDOW_BITS;
-use crate::compressor::core::shared::constants::{OUTPUT_RESERVE_CONST, OUTPUT_SLACK};
 use crate::compressor::{BrotliCompressError, BrotliResult, CompressParams, QualityLevel};
+use crate::shared::constants::{OUTPUT_RESERVE_CONST, OUTPUT_SLACK};
 
 /// Returns an upper bound on the compressed size of `input_size` bytes.
 ///

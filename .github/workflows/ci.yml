@@ -31,6 +31,7 @@ jobs:
       - run: cargo doc --workspace --all-features --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+      - run: python3 scripts/check_decoder_features.py
       - run: cargo package --allow-dirty
 
   no-std:
