@@ -7,6 +7,26 @@
   resource limits, reader read-ahead, writer finalization, and dictionary
   transform boundary behavior; codec behavior and public signatures are unchanged.
 
+- Move the vendored Google Brotli reference from the v1.2.0 tag (`028fb5a`) to
+  upstream `master` at `4508218e` (2026-09-01, 153 commits, library version
+  still 1.2.0). The bindings gain the `BLOCK_SWITCH` decoder error code, the
+  `BROTLI_PARAM_BASE64_MODE`, `BROTLI_PARAM_MAX_BASE64_REGIONS` and
+  `BROTLI_PARAM_SIMD_HASHER` encoder parameters with their enums, and
+  `SHARED_BROTLI_MAX_RAW_DICT_SIZE`; the test shim follows the new
+  `BrotliBuildMetaBlock` signature. Every new parameter defaults to the
+  previous behaviour, and the byte-identity, round-trip and AFL regression
+  suites pass unchanged against the new reference.
+
+- Rebuild the decompressor benchmark on the compressor benchmark's inputs. The
+  corpora move to a shared `benches/support/corpora.rs` module, so both
+  benchmarks measure identical bytes: the deterministic text, binary,
+  compressible and incompressible inputs plus the six vendored Google Brotli
+  test files. Every corpus is encoded by the C one-shot encoder at all twelve
+  qualities and validated on both decoders before timing, and the groups
+  mirror the compressor's `cold`, `reused`, `presized`, `tiny`, `streaming`
+  and `universal` shapes under a `decompress/` prefix, plus `small-chunks`,
+  `dictionary` and `metadata` groups for the decoder's own boundary cases.
+
 - Optimize the decoder. Replace the per-bit `u128` reservoir with a whole-word
   refill, canonical per-bit Huffman lookup with two-level lookup tables stored in
   flat per-kind groups, and per-byte regeneration with a power-of-two history

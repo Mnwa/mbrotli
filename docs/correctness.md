@@ -16,7 +16,7 @@ checkout; nothing in the record depends on a hosted service.
 
 | Surface | Claim | Oracle |
 | --- | --- | --- |
-| Default features, qualities 0–11, windows 10–24 | Byte identity with Google Brotli v1.2.0 (`brotli-ffi/vendor/brotli` at `028fb5a`) configured with equivalent streaming settings, and decodability by its decoder | C encoder and decoder through `google-brotli-ffi` |
+| Default features, qualities 0–11, windows 10–24 | Byte identity with Google Brotli v1.2.0 as of upstream `master` `4508218e` (`brotli-ffi/vendor/brotli`, 2026-09-01) configured with equivalent streaming settings, and decodability by its decoder | C encoder and decoder through `google-brotli-ffi` |
 | Large Window Brotli, qualities 3–11 | Decodable by the C decoder up to its 30-bit limit; above it, identical to the 30-bit stream apart from the header bits | C decoder; header comparison |
 | Prepared prefix dictionaries, qualities 5–11 | Byte identity with C where C supports the same attachment, and C decoding with the dictionary attached | C encoder and decoder |
 | All serial entry points | Same bytes from `compress`, `compress_into`, `compress_to_slice`, `writer`, `reader`, and `start` at any chunk size, with any backend, from a fresh or reused compressor | Cross-API and cross-backend comparison |
@@ -92,7 +92,7 @@ under `CAMPAIGN_PARALLEL=1`.
 | Item | Value |
 | --- | --- |
 | Revision | `bcd9267` plus the working-tree changes in this record's commit |
-| C reference | Google Brotli v1.2.0, submodule `028fb5a` |
+| C reference | Google Brotli v1.2.0, submodule `028fb5a` at the time of this record; since moved to upstream `4508218e` |
 | Host | Intel Core i7-13700KF, 24 hardware threads, 47 GiB, Ubuntu 22.04 under WSL2 |
 | Stable toolchain | rustc 1.98.1 (2026-09-01), cargo 1.98.1 |
 | Nightly toolchain | rustc 1.100.0-nightly (2026-09-05), Miri of the same date |

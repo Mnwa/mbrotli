@@ -1,6 +1,6 @@
 //! Shared helpers for the integration tests.
 //!
-//! Wraps the pinned Google Brotli C library (v1.2.0, commit `028fb5a`) exposed
+//! Wraps the pinned Google Brotli C library (v1.2.0, upstream `4508218e`) exposed
 //! by the `google-brotli-ffi` workspace crate, and builds the corpora both the
 //! differential and the round-trip tests run over.
 

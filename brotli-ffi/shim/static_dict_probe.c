@@ -147,8 +147,11 @@ void mbrotli_shim_build_meta_block(
   BrotliInitDistanceParams(&params.dist, 0, 0, BROTLI_FALSE);
 
   InitMetaBlockSplit(&mb);
-  BrotliBuildMetaBlock(&m, data, pos, mask, &params, prev_byte, prev_byte2,
-                       commands, num_commands, (ContextType)context_mode, &mb);
+  /* No Base64 regions: the shim reproduces the default encoder, which leaves
+     BROTLI_PARAM_BASE64_MODE disabled. */
+  BrotliBuildMetaBlock(&m, data, pos, mask, NULL, 0, &params, prev_byte,
+                       prev_byte2, commands, num_commands,
+                       (ContextType)context_mode, &mb);
 
   *out_npostfix = params.dist.distance_postfix_bits;
   *out_ndirect = params.dist.num_direct_distance_codes;

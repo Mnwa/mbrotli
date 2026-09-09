@@ -309,8 +309,9 @@ Leave `std` and `hotpath*` disabled throughout the dependency graph for a std-fr
 
 ## Compatibility
 
-The encoder is ported from **Google Brotli v1.2.0**, pinned at `028fb5a` in the test
-reference. Ordinary encoding at qualities **0–11** and windows **10–24** is compared
+The encoder is ported from **Google Brotli v1.2.0** (`028fb5a`); the test
+reference in `brotli-ffi/vendor/brotli` is pinned to upstream `master` at
+`4508218e` (2026-09-01), which still reports version 1.2.0. Ordinary encoding at qualities **0–11** and windows **10–24** is compared
 byte-for-byte with equivalent C streaming settings.
 
 That comparison requires matching configuration, dictionary, declared input size,

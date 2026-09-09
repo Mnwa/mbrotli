@@ -254,17 +254,74 @@ cargo run --release --example profile_decompressor --features hotpath-cpu,hotpat
 cargo test --test decompress_memory --features experimental -- --nocapture
 ```
 
-The benchmark validates output before timing identical C q5/w22 inputs. Shapes
-include cold Vec, warm reused Vec, caller slice, 31-byte input/127-byte output
-sessions, reader/writer, and attached dictionaries. Setup and validation are outside
-timing. Warm Rust retains workspace; C creates/destroys its decoder for each call.
-The short local measurements ran on a shared machine and include outliers; no
-optimization speedup or regression conclusion is inferred from comparisons
-between these runs.
+The benchmark shares its inputs with the compressor benchmark through
+`benches/support/corpora.rs`: the deterministic `text-1KiB`, `text-1MiB`,
+`binary-256KiB`, `compressible-256KiB` and `incompressible-256KiB` corpora plus
+the vendored `alice29.txt`, `lcet10.txt`, `plrabn12.txt`, `mapsdatazrh`,
+`random_org_10k.bin` and `quickfox_repeated` files. Each corpus is encoded once
+by the C one-shot encoder at every quality 0–11 with the default 22-bit window,
+and both decoders must reproduce the payload before any timing; the payload and
+compressed sizes are printed so a throughput figure can be read against the
+ratio of the stream it decoded. The group ids are
+`decompress/<shape>/q<quality>/<c-brotli|mbrotli…>/<corpus>`.
 
-The table below is a later optimized-decoder measurement (i7-13700KF, WSL2,
-Criterion, warm-up 0.3 s, measurement 1 s, sample size 10) after the whole-word
-reservoir, two-level table Huffman, ring history and command fast path landed.
+| Shape | Timed operation | Corpora |
+| --- | --- | --- |
+| `cold` | Create decoder, allocate output, decode once, destroy. C is handed the exact size; Rust grows a `Vec`. | all |
+| `reused` | Warm `decompress_into` after `clear`; C one-shot into a caller buffer. | all |
+| `presized` | Warm `decompress_to_slice`; C one-shot into the same slice. | all |
+| `tiny` | 16, 64, 256 and 1024-byte text payloads, cold and warm. | text prefixes |
+| `streaming` | `DecoderWriter`, `DecoderReader` and a session fed 64 KiB input chunks and drained in 64 KiB windows; C `BrotliDecoderDecompressStream` with the same chunking. | payload ≥ 64 KiB |
+| `small-chunks` | Session and C stream fed 31-byte input and 127-byte output windows. | all |
+| `dictionary` | Attached raw `alice29.txt` first half at q5, q9 and q11, warm Vec and slice; C prepares, attaches and destroys per call. | alice29 halves |
+| `universal` | Empty and 16 KiB incompressible streams at a 10-bit window, q0, q1, q5 and q11. | canonical |
+| `metadata` | A 64 KiB metadata-only stream; throughput is in encoded bytes. | wire fixture |
+
+```mermaid
+flowchart LR
+    Corpora[benches/support/corpora.rs] --> Encode[C one-shot encode at q0..q11, w22]
+    Encode --> Validate{C and Rust decode == payload?}
+    Validate -- no --> Abort[panic before timing]
+    Validate -- yes --> Streams[(OnceLock stream table)]
+    Streams --> Cold[cold] & Reused[reused] & Presized[presized] & Streaming[streaming] & Small[small-chunks]
+    Text[text prefixes] --> Tiny[tiny]
+    Alice[alice29 halves] --> Dictionary[dictionary]
+    Wire[wire fixture] --> Metadata[metadata]
+```
+
+Setup and validation are outside timing. Warm Rust retains workspace; C
+creates and destroys its decoder for each call. The short local measurements
+ran on a shared machine and include outliers; no optimization speedup or
+regression conclusion is inferred from comparisons between these runs.
+
+A short run of the current layout (i7-13700KF, WSL2, warm-up 0.1 s,
+measurement 0.2 s, sample size 10) gives the `presized` shape below, as
+warm Rust throughput divided by C throughput on the same slice:
+
+| Corpus | q5 | q11 |
+| --- | ---: | ---: |
+| text-1KiB | 0.58× | 0.60× |
+| text-1MiB | 0.68× | 0.66× |
+| binary-256KiB | 0.59× | 0.68× |
+| compressible-256KiB | 13.2× | 13.2× |
+| incompressible-256KiB | 1.01× | 1.03× |
+| vendor-alice29.txt | 0.56× | 0.61× |
+| vendor-lcet10.txt | 0.55× | 0.62× |
+| vendor-plrabn12.txt | 0.56× | 0.63× |
+| vendor-mapsdatazrh | 0.58× | 0.87× |
+| vendor-random_org_10k.bin | 1.63× | 1.70× |
+| vendor-quickfox_repeated | 11.5× | 9.6× |
+
+The `cold` shape is lower on small and incompressible inputs (0.3–0.5×)
+because the C one-shot API is handed the exact output size while the Rust
+`decompress` entry point grows its vector; `reused` and `presized` remove that
+allocation difference.
+
+The table below is an earlier measurement of the previous benchmark layout,
+whose synthetic q5-only corpora no longer exist under these group ids. It is
+kept as the record of the decoder rewrite it measured. It was taken on the
+same host (Criterion, warm-up 0.3 s, measurement 1 s, sample size 10) after
+the whole-word reservoir, two-level table Huffman, ring history and command fast path landed.
 It ran on a shared machine and includes outliers; it is evidence, not a
 statistical certification.
 

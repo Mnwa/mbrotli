@@ -6,7 +6,10 @@ a development dependency and is not part of the public compressor API.
 
 ## Build
 
-The `vendor/brotli` git submodule is pinned to v1.2.0, commit `028fb5a`.
+The `vendor/brotli` git submodule is pinned to upstream `master` at commit
+`4508218e` (2026-09-01), which still reports library version 1.2.0; the
+last tagged release is v1.2.0 at `028fb5a`.
+
 Initialize it from the repository root:
 
 ```sh

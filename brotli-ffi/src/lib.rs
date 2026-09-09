@@ -1,9 +1,10 @@
 //! Raw Rust bindings to Google's Brotli C implementation.
 //!
-//! The bundled C source is Brotli v1.2.0. This crate intentionally keeps the
-//! pointer-based semantics of the upstream API; callers must uphold every
-//! buffer validity, lifetime, and aliasing requirement documented by Google
-//! Brotli's public C headers.
+//! The bundled C source is Brotli v1.2.0 plus the upstream `master` commits
+//! up to `4508218e` (2026-09-01), which still report version 1.2.0. This
+//! crate intentionally keeps the pointer-based semantics of the upstream API;
+//! callers must uphold every buffer validity, lifetime, and aliasing
+//! requirement documented by Google Brotli's public C headers.
 
 #![no_std]
 
@@ -40,6 +41,8 @@ pub const SHARED_BROTLI_MIN_DICTIONARY_WORD_LENGTH: usize = 4;
 pub const SHARED_BROTLI_MAX_DICTIONARY_WORD_LENGTH: usize = 31;
 pub const SHARED_BROTLI_NUM_DICTIONARY_CONTEXTS: usize = 64;
 pub const SHARED_BROTLI_MAX_COMPOUND_DICTS: usize = 15;
+/// Practical limit for one RAW dictionary (`SHARED_BROTLI_MAX_RAW_DICT_SIZE`).
+pub const SHARED_BROTLI_MAX_RAW_DICT_SIZE: usize = 1 << (23 + core::mem::size_of::<usize>());
 
 #[allow(non_camel_case_types)]
 pub type brotli_alloc_func =
@@ -97,6 +100,7 @@ pub enum BrotliDecoderErrorCode {
     ErrorFormatPadding1 = -14,
     ErrorFormatPadding2 = -15,
     ErrorFormatDistance = -16,
+    ErrorFormatBlockSwitch = -17,
     ErrorCompoundDictionary = -18,
     ErrorDictionaryNotSet = -19,
     ErrorInvalidArguments = -20,
@@ -147,6 +151,8 @@ pub const BROTLI_DECODER_ERROR_FORMAT_PADDING_2: BrotliDecoderErrorCode =
     BrotliDecoderErrorCode::ErrorFormatPadding2;
 pub const BROTLI_DECODER_ERROR_FORMAT_DISTANCE: BrotliDecoderErrorCode =
     BrotliDecoderErrorCode::ErrorFormatDistance;
+pub const BROTLI_DECODER_ERROR_FORMAT_BLOCK_SWITCH: BrotliDecoderErrorCode =
+    BrotliDecoderErrorCode::ErrorFormatBlockSwitch;
 pub const BROTLI_DECODER_ERROR_COMPOUND_DICTIONARY: BrotliDecoderErrorCode =
     BrotliDecoderErrorCode::ErrorCompoundDictionary;
 pub const BROTLI_DECODER_ERROR_DICTIONARY_NOT_SET: BrotliDecoderErrorCode =
@@ -196,6 +202,34 @@ pub const BROTLI_MODE_TEXT: BrotliEncoderMode = BrotliEncoderMode::Text;
 pub const BROTLI_MODE_FONT: BrotliEncoderMode = BrotliEncoderMode::Font;
 pub const BROTLI_DEFAULT_MODE: BrotliEncoderMode = BROTLI_MODE_GENERIC;
 
+/// Base64 handling selected by `BROTLI_PARAM_BASE64_MODE`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrotliEncoderBase64Mode {
+    Disabled = 0,
+    Detection = 1,
+}
+
+pub const BROTLI_BASE64_MODE_DISABLED: BrotliEncoderBase64Mode = BrotliEncoderBase64Mode::Disabled;
+pub const BROTLI_BASE64_MODE_DETECTION: BrotliEncoderBase64Mode =
+    BrotliEncoderBase64Mode::Detection;
+pub const BROTLI_DEFAULT_BASE64_MODE: BrotliEncoderBase64Mode = BROTLI_BASE64_MODE_DISABLED;
+pub const BROTLI_DEFAULT_MAX_BASE64_REGIONS: c_uint = 16;
+
+/// SIMD hasher usage selected by `BROTLI_PARAM_SIMD_HASHER`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrotliEncoderSimdHasher {
+    Default = 0,
+    Enable = 1,
+    Disable = 2,
+}
+
+pub const BROTLI_SIMD_HASHER_DEFAULT: BrotliEncoderSimdHasher = BrotliEncoderSimdHasher::Default;
+pub const BROTLI_SIMD_HASHER_ENABLE: BrotliEncoderSimdHasher = BrotliEncoderSimdHasher::Enable;
+pub const BROTLI_SIMD_HASHER_DISABLE: BrotliEncoderSimdHasher = BrotliEncoderSimdHasher::Disable;
+pub const BROTLI_DEFAULT_SIMD_HASHER: BrotliEncoderSimdHasher = BROTLI_SIMD_HASHER_DEFAULT;
+
 /// Operation requested from the streaming encoder.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -226,6 +260,9 @@ pub enum BrotliEncoderParameter {
     Npostfix = 7,
     Ndirect = 8,
     StreamOffset = 9,
+    Base64Mode = 10,
+    MaxBase64Regions = 11,
+    SimdHasher = 12,
 }
 
 pub const BROTLI_PARAM_MODE: BrotliEncoderParameter = BrotliEncoderParameter::Mode;
@@ -239,6 +276,10 @@ pub const BROTLI_PARAM_LARGE_WINDOW: BrotliEncoderParameter = BrotliEncoderParam
 pub const BROTLI_PARAM_NPOSTFIX: BrotliEncoderParameter = BrotliEncoderParameter::Npostfix;
 pub const BROTLI_PARAM_NDIRECT: BrotliEncoderParameter = BrotliEncoderParameter::Ndirect;
 pub const BROTLI_PARAM_STREAM_OFFSET: BrotliEncoderParameter = BrotliEncoderParameter::StreamOffset;
+pub const BROTLI_PARAM_BASE64_MODE: BrotliEncoderParameter = BrotliEncoderParameter::Base64Mode;
+pub const BROTLI_PARAM_MAX_BASE64_REGIONS: BrotliEncoderParameter =
+    BrotliEncoderParameter::MaxBase64Regions;
+pub const BROTLI_PARAM_SIMD_HASHER: BrotliEncoderParameter = BrotliEncoderParameter::SimdHasher;
 
 /// Format of an attached shared dictionary.
 #[repr(C)]
