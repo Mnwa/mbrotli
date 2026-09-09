@@ -638,7 +638,7 @@ halves so the "already lapped" property survives the truncation.
 
 ```mermaid
 graph TD
-    A["Compressor::new()"] -->|"Level::try_detect()"| B["Level stored in the Compressor"]
+    A["Compressor::new()"] -->|"Backend::default: detect or no_std baseline"| B["Level stored in the Compressor"]
     B -->|"new encoder"| C["core::dispatch::select(level)"]
     C --> D["retained Selected&lt;S, G&gt; kernel:<br/>S for fragment and high-quality kernels,<br/>G for the greedy loops"]
     D --> E["select concrete matcher and run once per block"]

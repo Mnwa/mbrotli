@@ -31,21 +31,31 @@
 //! A full corpus checkout provides 658 paired Rust/C cases.
 //! Tiny payloads are validated at each quality before their timing begins.
 
+#[cfg(not(feature = "no_std"))]
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+#[cfg(not(feature = "no_std"))]
 use mbrotli::dictionary::DictionaryBuilder;
+#[cfg(not(feature = "no_std"))]
 use mbrotli::io::FinishError;
+#[cfg(not(feature = "no_std"))]
 use mbrotli::{
     Compressor, EncoderConfig, EncoderStatus, InputSize, Operation, Quality, StreamConfig, Window,
 };
+#[cfg(not(feature = "no_std"))]
 use std::hint::black_box;
+#[cfg(not(feature = "no_std"))]
 use std::io::{Read, Write};
+#[cfg(not(feature = "no_std"))]
 use std::path::Path;
+#[cfg(not(feature = "no_std"))]
 use std::time::Duration;
 
 /// Sliding window size used by every benchmark.
+#[cfg(not(feature = "no_std"))]
 const LGWIN: Window = Window::DEFAULT;
 
 /// Returns the configuration a benchmark at `quality` runs under.
+#[cfg(not(feature = "no_std"))]
 fn config(quality: Quality) -> EncoderConfig {
     EncoderConfig::default()
         .with_quality(quality)
@@ -53,6 +63,7 @@ fn config(quality: Quality) -> EncoderConfig {
 }
 
 /// Builds a compressor for `quality`.
+#[cfg(not(feature = "no_std"))]
 fn encoder(quality: Quality) -> Compressor {
     Compressor::new(config(quality)).expect("a legal configuration")
 }
@@ -73,6 +84,7 @@ fn encoder(quality: Quality) -> Compressor {
 /// and Criterion still reports the interval so a reader can see the cost. The
 /// alternative — shortening the input — would change *what* is measured, since
 /// the meta-block and block-splitting decisions depend on length.
+#[cfg(not(feature = "no_std"))]
 fn configure<M: criterion::measurement::Measurement>(
     group: &mut criterion::BenchmarkGroup<'_, M>,
     quality: Quality,
@@ -88,6 +100,7 @@ fn configure<M: criterion::measurement::Measurement>(
 ///
 /// Every implemented quality is gated separately, so a gain at one may not be
 /// used to cover a loss at another.
+#[cfg(not(feature = "no_std"))]
 const QUALITIES: [Quality; 12] = [
     Quality::Q0,
     Quality::Q1,
@@ -104,6 +117,7 @@ const QUALITIES: [Quality; 12] = [
 ];
 
 /// Safe wrappers over the raw C Brotli bindings.
+#[cfg(not(feature = "no_std"))]
 mod c_brotli {
     use google_brotli_ffi as ffi;
     use std::ffi::c_int;
@@ -462,11 +476,13 @@ mod c_brotli {
 }
 
 /// A named benchmark input.
+#[cfg(not(feature = "no_std"))]
 struct Corpus {
     name: String,
     data: Vec<u8>,
 }
 
+#[cfg(not(feature = "no_std"))]
 impl Corpus {
     fn new(name: impl Into<String>, data: Vec<u8>) -> Self {
         Self {
@@ -478,6 +494,7 @@ impl Corpus {
 
 /// Builds the deterministic corpora: text, binary, compressible,
 /// incompressible, small, and large inputs.
+#[cfg(not(feature = "no_std"))]
 fn corpora() -> Vec<Corpus> {
     let mut corpora = vec![
         Corpus::new("text-1KiB", text(1 << 10)),
@@ -491,9 +508,11 @@ fn corpora() -> Vec<Corpus> {
 }
 
 /// Payload sizes used to measure the fixed per-call cost.
+#[cfg(not(feature = "no_std"))]
 const TINY_SIZES: [usize; 4] = [16, 64, 256, 1024];
 
 /// Files of Google Brotli's own corpus used as real-world inputs.
+#[cfg(not(feature = "no_std"))]
 const VENDOR_FILES: [&str; 6] = [
     "alice29.txt",
     "lcet10.txt",
@@ -504,6 +523,7 @@ const VENDOR_FILES: [&str; 6] = [
 ];
 
 /// Reads the vendored reference corpus, skipping files that are not present.
+#[cfg(not(feature = "no_std"))]
 fn vendor_corpora() -> Vec<Corpus> {
     let directory =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("brotli-ffi/vendor/brotli/tests/testdata");
@@ -517,6 +537,7 @@ fn vendor_corpora() -> Vec<Corpus> {
 }
 
 /// Generates `len` bytes of English-like text.
+#[cfg(not(feature = "no_std"))]
 fn text(len: usize) -> Vec<u8> {
     const PARAGRAPH: &str = concat!(
         "Brotli is a generic-purpose lossless compression algorithm that ",
@@ -538,6 +559,7 @@ fn text(len: usize) -> Vec<u8> {
 
 /// Generates `len` bytes of structured binary data: fixed-size records holding
 /// a counter, a derived tag, and bytes drawn from a small pool.
+#[cfg(not(feature = "no_std"))]
 fn binary(len: usize) -> Vec<u8> {
     const POOL: [u8; 8] = [0x00, 0xff, 0x7f, 0x80, 0x01, 0xfe, 0x10, 0xef];
 
@@ -558,6 +580,7 @@ fn binary(len: usize) -> Vec<u8> {
 
 /// Generates `len` bytes of highly compressible data: long runs broken up by a
 /// short repeating marker.
+#[cfg(not(feature = "no_std"))]
 fn compressible(len: usize) -> Vec<u8> {
     let mut bytes = vec![0; len];
     for (index, byte) in bytes.iter_mut().enumerate() {
@@ -569,6 +592,7 @@ fn compressible(len: usize) -> Vec<u8> {
 }
 
 /// Generates `len` bytes of incompressible data from a deterministic PRNG.
+#[cfg(not(feature = "no_std"))]
 fn incompressible(len: usize) -> Vec<u8> {
     let mut state = 0x2545_f491_4f6c_dd1d_u64;
     (0..len)
@@ -583,6 +607,7 @@ fn incompressible(len: usize) -> Vec<u8> {
 
 /// Verifies both implementations against the C decoder and reports the
 /// compressed sizes they produced.
+#[cfg(not(feature = "no_std"))]
 fn validate(quality: Quality, corpus: &Corpus) {
     let numeric = usize::from(quality.get());
     let input = corpus.data.as_slice();
@@ -625,6 +650,7 @@ fn validate(quality: Quality, corpus: &Corpus) {
 /// This is what a caller who compresses one thing pays. Both sides create and
 /// destroy their encoder state inside the timed region, which is what
 /// `BrotliEncoderCompress` does on every call anyway.
+#[cfg(not(feature = "no_std"))]
 fn bench_cold(criterion: &mut Criterion) {
     let corpora = corpora();
 
@@ -680,6 +706,7 @@ fn bench_cold(criterion: &mut Criterion) {
 /// The reference's one-shot entry point builds a whole encoder per call and has
 /// no reuse to compare against, so the `c-brotli` arm is the same work it always
 /// does. That difference is the point of the shape.
+#[cfg(not(feature = "no_std"))]
 fn bench_reused(criterion: &mut Criterion) {
     let corpora = corpora();
 
@@ -735,6 +762,7 @@ fn bench_reused(criterion: &mut Criterion) {
 }
 
 /// Registers the comparison into a caller-owned, pre-sized output buffer.
+#[cfg(not(feature = "no_std"))]
 fn bench_presized(criterion: &mut Criterion) {
     let corpora = corpora();
 
@@ -786,6 +814,7 @@ fn bench_presized(criterion: &mut Criterion) {
 }
 
 /// Registers the per-call overhead measurement, dispatch included.
+#[cfg(not(feature = "no_std"))]
 fn bench_tiny(criterion: &mut Criterion) {
     let payload = text(*TINY_SIZES.iter().max().unwrap_or(&1024));
 
@@ -851,6 +880,7 @@ fn bench_tiny(criterion: &mut Criterion) {
 }
 
 /// Chunk size the streaming groups feed and drain in.
+#[cfg(not(feature = "no_std"))]
 const STREAM_CHUNK: usize = 64 << 10;
 
 /// Qualities the streaming, flush and dictionary groups are measured at.
@@ -858,6 +888,7 @@ const STREAM_CHUNK: usize = 64 << 10;
 /// One from each encoder core, plus quality 5 as the cheapest quality that can
 /// consult a dictionary. Sweeping all twelve would triple a run that already
 /// takes tens of minutes without saying anything the three cores do not.
+#[cfg(not(feature = "no_std"))]
 const REPRESENTATIVE: [Quality; 5] = [
     Quality::Q1,
     Quality::Q2,
@@ -867,6 +898,7 @@ const REPRESENTATIVE: [Quality; 5] = [
 ];
 
 /// Registers the three streaming shapes against the reference's streaming API.
+#[cfg(not(feature = "no_std"))]
 fn bench_streaming(criterion: &mut Criterion) {
     let corpora = corpora();
 
@@ -1002,15 +1034,18 @@ fn bench_streaming(criterion: &mut Criterion) {
 ///
 /// One chunk is the no-flush baseline; the rest flush that many times minus one,
 /// so the cost of a flush and the ratio it gives up are both visible.
+#[cfg(not(feature = "no_std"))]
 const FLUSH_CHUNKS: [usize; 4] = [1, 4, 32, 256];
 
 /// Splits `data` into `count` roughly equal chunks.
+#[cfg(not(feature = "no_std"))]
 fn chunked(data: &[u8], count: usize) -> Vec<&[u8]> {
     let size = data.len().div_ceil(count.max(1));
     data.chunks(size.max(1)).collect()
 }
 
 /// Writes every chunk through the adapter, flushing after all but the last.
+#[cfg(not(feature = "no_std"))]
 fn flush_with_writer(compressor: &mut Compressor, chunks: &[&[u8]]) -> Vec<u8> {
     let mut sink = compressor
         .writer(Vec::new(), StreamConfig::default())
@@ -1032,6 +1067,7 @@ fn flush_with_writer(compressor: &mut Compressor, chunks: &[&[u8]]) -> Vec<u8> {
 /// through `Write::flush`, the reference through `BROTLI_OPERATION_FLUSH`. The
 /// compressed sizes are printed alongside, because a flush trades ratio for
 /// latency and a timing without the size next to it would hide half the trade.
+#[cfg(not(feature = "no_std"))]
 fn bench_flush(criterion: &mut Criterion) {
     let payload = text(1 << 18);
 
@@ -1091,6 +1127,7 @@ fn bench_flush(criterion: &mut Criterion) {
 }
 
 /// Qualities whose match finders consult an attached dictionary.
+#[cfg(not(feature = "no_std"))]
 const PREFIX_QUALITIES: [Quality; 3] = [Quality::Q5, Quality::Q9, Quality::Q11];
 
 /// Registers the attached-dictionary comparison.
@@ -1099,6 +1136,7 @@ const PREFIX_QUALITIES: [Quality; 3] = [Quality::Q5, Quality::Q9, Quality::Q11];
 /// which is the shape a shared dictionary is deployed in. Preparation happens
 /// once, outside the timed region, on both sides: it is a per-connection cost,
 /// not a per-request one, and timing it here would measure the wrong thing.
+#[cfg(not(feature = "no_std"))]
 fn bench_dictionary(criterion: &mut Criterion) {
     let Some(corpus) = vendor_corpora()
         .into_iter()
@@ -1201,6 +1239,7 @@ fn bench_dictionary(criterion: &mut Criterion) {
 }
 
 /// Measures the canonical empty and incompressible cases that used to be rewritten.
+#[cfg(not(feature = "no_std"))]
 fn bench_universal(criterion: &mut Criterion) {
     let noise = incompressible(16 << 10);
     for quality in [Quality::Q0, Quality::Q1, Quality::Q5, Quality::Q11] {
@@ -1250,6 +1289,7 @@ fn bench_universal(criterion: &mut Criterion) {
     }
 }
 
+#[cfg(not(feature = "no_std"))]
 criterion_group!(
     benches,
     bench_cold,
@@ -1261,4 +1301,8 @@ criterion_group!(
     bench_dictionary,
     bench_universal
 );
+#[cfg(not(feature = "no_std"))]
 criterion_main!(benches);
+
+#[cfg(feature = "no_std")]
+fn main() {}

@@ -4,6 +4,8 @@
 //! pinned reference. They are allocated once per encoder and reused for every
 //! block, so no allocation happens inside a match scan or a command replay.
 
+use alloc::vec::Vec;
+
 use super::constants::{NUM_COMMAND_SYMBOLS, NUM_LITERAL_SYMBOLS};
 use super::huffman::HuffmanNode;
 use super::tables::{

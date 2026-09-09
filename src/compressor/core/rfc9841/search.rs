@@ -27,6 +27,8 @@
 //! the whole search runs once per position at qualities five and above; the
 //! measured cost is in the chain walk, not the byte comparison.
 
+use alloc::vec::Vec;
+
 use fearless_simd::Simd;
 
 use super::context::SharedContextInner;

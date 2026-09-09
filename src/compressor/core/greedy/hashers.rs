@@ -17,6 +17,9 @@
 //! where [`prepare_distance_cache`] earns its keep: the extra entries are
 //! near misses derived from the two freshest distances.
 
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
 use fearless_simd::{Simd, SimdBase, SimdMask, u8x16, u8x32};
 
 use super::params::{BucketShape, ChainShape, HasherPlan};
@@ -443,7 +446,7 @@ impl SmallSlots {
 
     fn grow(&mut self) {
         let size = (self.entries.len() * 2).max(32);
-        let previous = std::mem::replace(&mut self.entries, vec![0; size]);
+        let previous = ::core::mem::replace(&mut self.entries, vec![0; size]);
         self.count = 0;
         for entry in previous {
             if entry != 0 {
@@ -496,7 +499,7 @@ impl<const N: usize> QuickSlots for &mut [u32; N] {
 
     #[inline(always)]
     fn replace(&mut self, slot: usize, value: u32) -> u32 {
-        std::mem::replace(&mut self[slot & (N - 1)], value)
+        ::core::mem::replace(&mut self[slot & (N - 1)], value)
     }
 }
 
@@ -999,7 +1002,7 @@ impl KeyMap {
 
     fn grow(&mut self) {
         let size = (self.entries.len() * 2).max(64);
-        let previous = std::mem::replace(&mut self.entries, vec![Self::EMPTY; size]);
+        let previous = ::core::mem::replace(&mut self.entries, vec![Self::EMPTY; size]);
         self.count = 0;
         for entry in previous {
             if entry != Self::EMPTY {
@@ -1183,7 +1186,7 @@ impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize>
 
     /// Creates an empty table expecting `size_hint` bytes of input in total
     /// (zero when unknown).
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     pub(crate) fn new(size_hint: usize) -> Self {
         Self {
             layout: Layout::Sparse,
@@ -2874,7 +2877,8 @@ mod tests {
         // sixteen positions, so the chain walk stops after sixteen too and
         // the compact matcher finds what the sparse one does.
         let data = [b'a'; 200];
-        let level = fearless_simd::Level::new();
+        let level =
+            fearless_simd::Level::try_detect().unwrap_or_else(fearless_simd::Level::baseline);
         let mut compact = BucketMatcher::<false, { 1 << 14 }, 16>::new(0);
         compact.prepare(true, data.len(), &data, true);
         assert_eq!(compact.layout, Layout::Compact);
@@ -3052,7 +3056,7 @@ mod tests {
     #[test]
     fn tag_equality_matches_scalar_comparison_on_every_backend() {
         fn check<const N: usize>(backend: crate::compressor::Backend) {
-            let tags: [u8; N] = std::array::from_fn(|i| (i % 5) as u8);
+            let tags: [u8; N] = ::core::array::from_fn(|i| (i % 5) as u8);
             for tag in 0..5u8 {
                 let expected: u32 = tags
                     .iter()
@@ -3115,7 +3119,12 @@ mod tests {
     }
 
     fn search_at<M: Matcher>(matcher: &mut M, data: &[u8], cur_ix: usize) -> SearchResult {
-        search_with(Level::new(), matcher, data, cur_ix)
+        search_with(
+            Level::try_detect().unwrap_or_else(Level::baseline),
+            matcher,
+            data,
+            cur_ix,
+        )
     }
 
     fn search_with<M: Matcher>(

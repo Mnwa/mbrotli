@@ -1,5 +1,8 @@
 # Parallel compression
 
+This subsystem is omitted when `no_std` is enabled. See
+[feature boundaries](no-std.md) for the alloc-backed API that remains available.
+
 The caller schedules tasks that encode fixed independent segments. Private
 fragment encoders produce aligned non-final blocks, and the batch assembles them
 in source order into one stream. The API supports qualities 0–11 with standard

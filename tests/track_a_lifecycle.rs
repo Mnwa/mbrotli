@@ -1,3 +1,5 @@
+#![cfg(not(feature = "no_std"))]
+
 //! Regression tests for final-output delivery and retention across API shapes.
 
 use mbrotli::{Compressor, EncoderConfig, EncoderStatus, Operation, Quality, RetentionPolicy};

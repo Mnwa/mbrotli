@@ -9,6 +9,8 @@
 //! quality decision; the partition itself is shared, because the bit writer and
 //! the histogram builders read the same shape whichever splitter produced it.
 
+use alloc::vec::Vec;
+
 /// Largest number of block types a meta-block may use.
 pub(crate) const MAX_NUMBER_OF_BLOCK_TYPES: usize = 256;
 

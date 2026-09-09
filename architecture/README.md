@@ -9,6 +9,7 @@ and known gaps. For usage examples, start with the [user guide](../docs/README.m
 | Specification | Scope |
 | --- | --- |
 | [Implementation comparison](benchmark-comparison.md) | Isolated five-encoder Criterion suite, validated exports, equal-weight dataset medians, ranked vertical-bar reports, and current-run provenance. |
+| [No standard library](no-std.md) | Opt-in alloc-backed compression, feature precedence, excluded std APIs, compile-time SIMD, and portable logarithms. |
 | [Compressor](compressor.md) | Configuration, serial APIs, sessions, I/O adapters, and errors. |
 | [Encoder workspace](encoder-workspace.md) | Retained allocations and profiling-aware accounting tests, incremental ring storage, copy-extension SIMD kernels, production versus test backend selection, reset, and writer backpressure. |
 | [Bit output](bit-output.md) | Fixed and growing initialized storage, direct fast appends, bit operations, and overflow propagation. |
@@ -31,10 +32,10 @@ graph TD
     Root[mbrotli crate-root exports] --> API[compressor public API]
     API --> Config[configuration, Backend, retention, errors]
     API --> Serial[Compressor and EncoderSession]
-    API --> IO[io: EncoderReader and EncoderWriter]
+    API --> IO[io: EncoderReader and EncoderWriter, std only]
     API --> Dictionary[dictionary: PreparedDictionary and builder]
-    API --> Parallel[parallel: planner, batches, tasks, sources]
-    API --> Framing[framing: experimental container API]
+    API --> Parallel[parallel: planner, batches, tasks, sources, std only]
+    API --> Framing[framing: experimental container API, std only]
     IO --> Serial
     Serial --> Stream[private core: driver, session, stream, cache]
     Dictionary --> RFC[private core::rfc9841]

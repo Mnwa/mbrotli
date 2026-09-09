@@ -27,7 +27,7 @@ graph TD
         huff["huffman.rs<br/>tree build, canonical codes, serialisation"]
         ml["match_len.rs<br/>hybrid scalar/SIMD match length"]
         bits["bits.rs<br/>LSB-first bit writer"]
-        log["fast_log.rs<br/>reference logarithms"]
+        log["fast_log.rs<br/>table + native or libm logarithms"]
         stabs["tables.rs<br/>entropy-coding tables"]
         sconsts["constants.rs<br/>format constants"]
     end

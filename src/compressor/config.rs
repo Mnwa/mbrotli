@@ -1023,6 +1023,7 @@ pub struct SizeOverflow;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     #[test]
     fn every_quality_the_format_defines_round_trips() {

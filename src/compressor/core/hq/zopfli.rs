@@ -13,6 +13,8 @@
 //! Every comparison below is a strict `<` on an `f32`, so the arithmetic in
 //! [`super::cost`] is as much a part of the output as the decisions here are.
 
+use alloc::vec::Vec;
+
 use fearless_simd::Simd;
 
 use super::cost::ZopfliCostModel;
@@ -632,7 +634,7 @@ fn create_commands(
     clippy::too_many_arguments,
     reason = "mirrors ZopfliIterate, whose parameters are all needed"
 )]
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
+#[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
 fn zopfli_iterate<S: Simd, const INDEPENDENT: bool>(
     simd: S,
     num_bytes: usize,
@@ -789,7 +791,7 @@ fn merge_prefix_matches(prefix: &[(usize, usize)], tree: &mut Vec<BackwardMatch>
     clippy::too_many_arguments,
     reason = "mirrors BrotliZopfliComputeShortestPath, whose parameters are all needed"
 )]
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
+#[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
 fn zopfli_compute_shortest_path<S: Simd, const INDEPENDENT: bool>(
     simd: S,
     num_bytes: usize,
@@ -1016,7 +1018,7 @@ pub(crate) fn create_zopfli_backward_references<S: Simd, const INDEPENDENT: bool
     clippy::too_many_arguments,
     reason = "mirrors BrotliCreateHqZopfliBackwardReferences, whose parameters are all needed"
 )]
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
+#[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
 pub(crate) fn create_hq_zopfli_backward_references<S: Simd, const INDEPENDENT: bool>(
     simd: S,
     num_bytes: usize,
@@ -1288,7 +1290,7 @@ mod tests {
         let mut workspace = ZopfliWorkspace::new(params.dist.alphabet_size_limit as usize);
         let mut state = ZopfliState::default();
         let mut commands = Vec::new();
-        let level = Level::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
 
         dispatch!(level, simd => matcher.stitch_to_previous_block(
             simd, data.len(), 0, buffer.buffer(), buffer.mask()));

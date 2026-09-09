@@ -12,6 +12,8 @@
 //! static map. And all of those histograms are then clustered down to what the
 //! format allows, which is what produces the context map the decoder reads.
 
+use alloc::vec::Vec;
+
 use super::block_splitter::BlockSplitter;
 use super::cluster::{ClusterArena, cluster_histograms};
 use super::params::HqParams;
@@ -383,6 +385,7 @@ impl MetaBlockBuilder {
 mod tests {
     use super::*;
     use crate::compressor::{CompressMode, CompressParams, QualityLevel, WindowBits};
+    use alloc::boxed::Box;
 
     /// Resolves quality eleven's parameters.
     fn params(mode: CompressMode) -> HqParams {

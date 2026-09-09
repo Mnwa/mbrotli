@@ -13,6 +13,8 @@
 //! multiplier, and the sequence is part of the output: change it and a
 //! different partition falls out.
 
+use alloc::vec::Vec;
+
 use fearless_simd::{Select, Simd, SimdBase, SimdMask, f64x8, u64x8};
 
 use super::cluster::{HistogramPair, combine_batch, move_cost};
@@ -390,7 +392,7 @@ pub(crate) fn assign_blocks<S: Simd>(simd: S, input: BlockCosts<'_>) {
     clippy::too_many_arguments,
     reason = "mirrors FindBlocks, whose parameters are all needed"
 )]
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
+#[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
 fn find_blocks<const N: usize>(
     kernels: &dyn Kernels,
     data: &[u16],
@@ -759,7 +761,7 @@ fn split_byte_vector<const N: usize>(
         );
     }
 
-    let block_ids = std::mem::take(&mut arena.block_ids);
+    let block_ids = ::core::mem::take(&mut arena.block_ids);
     cluster_blocks(data, num_blocks, &block_ids, alphabet_size, arena, split);
     arena.block_ids = block_ids;
 }
@@ -875,6 +877,7 @@ impl BlockSplitter {
 mod tests {
     use super::*;
     use crate::compressor::{CompressParams, QualityLevel, WindowBits};
+    use alloc::boxed::Box;
 
     #[test]
     fn assignments_match_scalar_bits_ties_tails_and_prologue_on_every_backend() {
@@ -1132,7 +1135,7 @@ mod tests {
     fn a_stream_that_changes_character_is_split() {
         // Two halves drawn from disjoint alphabets: one code cannot serve both.
         let mut data = vec![7u16; 6000];
-        data.extend(std::iter::repeat_n(200u16, 6000));
+        data.extend(::core::iter::repeat_n(200u16, 6000));
         let split = split_literals(&data, 10);
         assert!(split.num_types >= 2, "a two-part stream was not split");
         assert_eq!(split.lengths.iter().sum::<u32>(), data.len() as u32);
@@ -1145,7 +1148,7 @@ mod tests {
         let mut data = Vec::new();
         for round in 0..4 {
             let symbol = if round % 2 == 0 { 3u16 } else { 180 };
-            data.extend(std::iter::repeat_n(symbol, 4000));
+            data.extend(::core::iter::repeat_n(symbol, 4000));
         }
         let split = split_literals(&data, 10);
         assert!(split.num_types <= 3, "kept {} types", split.num_types);
@@ -1187,7 +1190,7 @@ mod tests {
     fn splitting_is_deterministic() {
         let mut data = Vec::new();
         for segment in 0..6u16 {
-            data.extend(std::iter::repeat_n(segment * 40, 2500));
+            data.extend(::core::iter::repeat_n(segment * 40, 2500));
         }
         let first = split_literals(&data, 10);
         let second = split_literals(&data, 10);
@@ -1202,7 +1205,7 @@ mod tests {
         // stream with structure to find, that is visible in the result.
         let mut data = Vec::new();
         for segment in 0..10u16 {
-            data.extend(std::iter::repeat_n(segment * 25, 1500));
+            data.extend(::core::iter::repeat_n(segment * 25, 1500));
         }
         let few = split_literals(&data, 3);
         let many = split_literals(&data, 10);
@@ -1265,7 +1268,7 @@ mod tests {
                 "two-halves",
                 Box::new(|n| {
                     let mut data = vec![b'x'; n / 2];
-                    data.extend(std::iter::repeat_n(b'Q', n - n / 2));
+                    data.extend(::core::iter::repeat_n(b'Q', n - n / 2));
                     data
                 }),
                 (0..2500)

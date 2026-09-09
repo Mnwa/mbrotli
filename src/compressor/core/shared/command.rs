@@ -311,7 +311,7 @@ pub(crate) struct CommandExtension<'a> {
 }
 
 /// Extends a copy with the retained encoder's selected comparison kernel.
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
+#[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
 #[inline(always)]
 pub(crate) fn extend_last_command<S: fearless_simd::Simd>(simd: S, input: CommandExtension<'_>) {
     let CommandExtension {

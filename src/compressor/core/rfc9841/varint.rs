@@ -14,6 +14,8 @@
 //!
 //! [RFC 9841 section 4]: https://www.rfc-editor.org/rfc/rfc9841.html#section-4
 
+use alloc::vec::Vec;
+
 use thiserror::Error;
 
 /// Most bytes one varint may occupy (`63 / 7`).

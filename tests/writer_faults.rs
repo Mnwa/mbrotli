@@ -1,3 +1,5 @@
+#![cfg(not(feature = "no_std"))]
+
 //! The writer must lose nothing and duplicate nothing when the sink misbehaves.
 //!
 //! Every case here drives the same payload through `EncoderWriter` into a sink

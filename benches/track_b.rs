@@ -1,19 +1,29 @@
 //! Shared dictionary stream creation versus the pinned C implementation.
+#[cfg(not(feature = "no_std"))]
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+#[cfg(not(feature = "no_std"))]
 use google_brotli_ffi as ffi;
+#[cfg(not(feature = "no_std"))]
 use mbrotli::dictionary::{
     DictionaryBuilder, SerializedDictionary, TransformList, TransformOperation, WordList,
 };
+#[cfg(not(feature = "no_std"))]
 use mbrotli::framing::{DictionaryId, DictionaryReference, FramingConfig};
+#[cfg(not(feature = "no_std"))]
 use mbrotli::{Compressor, EncoderConfig, Quality};
+#[cfg(not(feature = "no_std"))]
 use std::hint::black_box;
+#[cfg(not(feature = "no_std"))]
 use std::io::Write;
+#[cfg(not(feature = "no_std"))]
 use std::marker::PhantomData;
 
+#[cfg(not(feature = "no_std"))]
 struct Reference<'a>(
     *mut ffi::BrotliEncoderPreparedDictionary,
     PhantomData<&'a [u8]>,
 );
+#[cfg(not(feature = "no_std"))]
 impl Drop for Reference<'_> {
     fn drop(&mut self) {
         // SAFETY: exclusively owns the instance returned by PrepareDictionary.
@@ -22,6 +32,7 @@ impl Drop for Reference<'_> {
         }
     }
 }
+#[cfg(not(feature = "no_std"))]
 impl<'a> Reference<'a> {
     fn new(bytes: &'a [u8], quality: Quality) -> Self {
         // SAFETY: the caller retains `bytes` for this reference's lifetime.
@@ -81,6 +92,7 @@ impl<'a> Reference<'a> {
     }
 }
 
+#[cfg(not(feature = "no_std"))]
 fn number(mut value: usize, output: &mut Vec<u8>) {
     while value >= 128 {
         output.push(value as u8 | 128);
@@ -91,6 +103,7 @@ fn number(mut value: usize, output: &mut Vec<u8>) {
 
 // C has no container API. This literal RFC single-resource envelope gives its
 // raw encoder the same wire overhead, and is checked against FramedWriter.
+#[cfg(not(feature = "no_std"))]
 fn frame_reference(encoded: &[u8], input_size: usize, output: &mut Vec<u8>) {
     let mut header = vec![2, 3];
     number(input_size, &mut header);
@@ -104,6 +117,7 @@ fn frame_reference(encoded: &[u8], input_size: usize, output: &mut Vec<u8>) {
     output.extend_from_slice(encoded);
 }
 
+#[cfg(not(feature = "no_std"))]
 fn dictionaries(c: &mut Criterion) {
     let description = SerializedDictionary::builder()
         .add_word_list(
@@ -210,6 +224,7 @@ fn dictionaries(c: &mut Criterion) {
         group.finish();
     }
 }
+#[cfg(not(feature = "no_std"))]
 fn metadata_envelope(encoded: &[u8], plain_size: usize, output: &mut Vec<u8>) {
     output.clear();
     output.extend_from_slice(&[0x91, 10, 66, 82, 4]);
@@ -236,6 +251,7 @@ fn metadata_envelope(encoded: &[u8], plain_size: usize, output: &mut Vec<u8>) {
     output.extend_from_slice(&footer);
 }
 
+#[cfg(not(feature = "no_std"))]
 fn metadata(c: &mut Criterion) {
     use mbrotli::framing::{MetadataEncoding, MetadataField, MetadataKind, MetadataOptions};
     let mut random = 7u64;
@@ -348,5 +364,10 @@ fn metadata(c: &mut Criterion) {
     }
 }
 
+#[cfg(not(feature = "no_std"))]
 criterion_group!(benches, dictionaries, metadata);
+#[cfg(not(feature = "no_std"))]
 criterion_main!(benches);
+
+#[cfg(feature = "no_std")]
+fn main() {}

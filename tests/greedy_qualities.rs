@@ -1,3 +1,5 @@
+#![cfg(not(feature = "no_std"))]
+
 //! Byte-for-byte differential tests for qualities two to nine.
 //!
 //! Every parameter these qualities react to changes the emitted bytes, so each

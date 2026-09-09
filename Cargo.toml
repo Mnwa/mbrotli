@@ -24,9 +24,15 @@ exclude = [
 
 [dependencies.fearless_simd]
 version = "0.7"
+default-features = false
+features = ["libm"]
 
 [dependencies.thiserror]
 version = "2"
+default-features = false
+
+[dependencies.libm]
+version = "0.2"
 
 # Profiling instrumentation only. Optional so an ordinary dependant never pulls
 # the proc-macro crate into its tree; every `#[hotpath::measure]` anchor in
@@ -42,6 +48,7 @@ tempfile = "3.27"
 # Retain the independent scalar oracle only for development builds.
 [dev-dependencies.fearless_simd]
 version = "0.7"
+default-features = false
 features = ["force_support_fallback"]
 
 [dev-dependencies.criterion]
@@ -60,6 +67,13 @@ harness = false
 required-features = ["experimental"]
 
 [features]
+default = ["std"]
+# Dependency runtime detection for ordinary builds.
+std = ["fearless_simd/std", "thiserror/std"]
+# Opt-in alloc-backed support; overrides std-only APIs and instrumentation.
+# Disable default features too when targeting a platform without std.
+no_std = []
+
 # RFC 9841's shared dictionary and framing formats, which are specified but
 # have no stable reference encoder: the C library compiles its serialized
 # dictionary parser out unless `BROTLI_EXPERIMENTAL` is defined, and it has no
@@ -95,4 +109,8 @@ resolver = "3"
 
 [[bench]]
 name = "parallel"
+harness = false
+
+[[bench]]
+name = "alloc"
 harness = false

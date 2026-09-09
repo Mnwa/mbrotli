@@ -17,6 +17,8 @@
 //!   not an optimisation: remove it and the prices drift, and with them the
 //!   chosen commands.
 
+use alloc::vec::Vec;
+
 use super::literal_cost::{LiteralCostArena, estimate_bit_costs_for_literals};
 use super::nodes::INFINITY;
 use crate::compressor::core::shared::command::Command;

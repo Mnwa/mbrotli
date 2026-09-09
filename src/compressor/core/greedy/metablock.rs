@@ -85,7 +85,7 @@ pub(crate) fn build_meta_block_greedy(
     clippy::too_many_arguments,
     reason = "the reference's window, contexts and commands plus caller-owned output"
 )]
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
+#[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
 pub(crate) fn build_meta_block_greedy_into(
     ringbuffer: &[u8],
     pos: usize,
@@ -205,6 +205,7 @@ mod tests {
     use crate::compressor::core::shared::distance::DistanceParams;
     use crate::compressor::core::shared::format::STATIC_CONTEXT_MAP_SIMPLE_UTF8;
     use crate::compressor::core::shared::metablock::optimize_histograms;
+    use alloc::vec::Vec;
 
     /// Builds commands that just insert `data` with no copies.
     fn literal_commands(data: &[u8]) -> Vec<Command> {

@@ -11,6 +11,8 @@
 //! emitted bytes. The match finder underneath may be accelerated freely, but
 //! this sequence may not be reordered.
 
+use alloc::vec::Vec;
+
 use fearless_simd::Simd;
 
 use super::hashers::{
@@ -233,7 +235,7 @@ struct Cursor {
     clippy::too_many_arguments,
     reason = "mirrors CreateBackwardReferences, whose parameters are all needed"
 )]
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
+#[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
 pub(crate) fn create_backward_references<
     S: Simd,
     M: Matcher,
@@ -557,7 +559,7 @@ mod tests {
         matcher.prepare(true, data.len(), data, true);
         let mut state = ReferenceState::default();
         let mut commands = Vec::new();
-        let level = Level::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
         let window = Window {
             data,
             mask: usize::MAX,
@@ -599,7 +601,7 @@ mod tests {
                 matcher.prepare(true, payload.len(), &data, true);
                 let mut state = ReferenceState::default();
                 let mut commands = Vec::new();
-                let level = Level::new();
+                let level = Level::try_detect().unwrap_or_else(Level::baseline);
                 let window = Window {
                     data: &data,
                     mask: usize::MAX,
@@ -631,7 +633,7 @@ mod tests {
         matcher.prepare(true, payload, &data, true);
         let mut state = ReferenceState::default();
         let mut commands = Vec::new();
-        let level = Level::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
         let window = Window {
             data: &data,
             mask: usize::MAX,
@@ -669,7 +671,7 @@ mod tests {
         matcher.prepare(true, payload, &data, true);
         let mut state = ReferenceState::default();
         let mut commands = Vec::new();
-        let level = Level::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
         let window = Window {
             data: &data,
             mask: usize::MAX,

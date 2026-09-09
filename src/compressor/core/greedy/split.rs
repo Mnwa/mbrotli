@@ -10,6 +10,8 @@
 //! decision is a comparison of estimated entropies, so the arithmetic and the
 //! order of the comparisons are part of the format contract.
 
+use alloc::vec::Vec;
+
 use crate::compressor::core::shared::block_split::{BlockSplit, MAX_NUMBER_OF_BLOCK_TYPES};
 use crate::compressor::core::shared::format::MAX_STATIC_CONTEXTS;
 use crate::compressor::core::shared::histogram::{
@@ -530,7 +532,7 @@ mod tests {
         let mut symbols = Vec::new();
         for round in 0..40u32 {
             let filler = if round % 2 == 0 { 3u8 } else { 250 };
-            symbols.extend(std::iter::repeat_n(filler, 700));
+            symbols.extend(::core::iter::repeat_n(filler, 700));
         }
         let splitter = split_literals(&symbols);
         assert!(

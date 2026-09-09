@@ -6,6 +6,8 @@
 //! bits above the new position in the byte it lands in, so the writer never
 //! needs a separate "prepare storage" step after the first byte.
 
+use alloc::vec::Vec;
+
 /// Largest number of bits a single [`BitWriter::write`] call accepts.
 pub(crate) const MAX_BITS_PER_WRITE: u32 = 56;
 
@@ -18,7 +20,7 @@ pub(crate) const WRITE_SLACK: usize = 8;
 /// ranges, so its unwritten reserved capacity never needs clearing or copying.
 pub(crate) trait ByteBuffer {
     fn bytes(&self) -> &[u8];
-    fn window(&mut self, range: std::ops::Range<usize>) -> Option<&mut [u8]>;
+    fn window(&mut self, range: ::core::ops::Range<usize>) -> Option<&mut [u8]>;
 
     #[inline(always)]
     fn copy_bytes(&mut self, start: usize, data: &[u8]) -> bool {
@@ -37,7 +39,7 @@ impl ByteBuffer for [u8] {
     }
 
     #[inline(always)]
-    fn window(&mut self, range: std::ops::Range<usize>) -> Option<&mut [u8]> {
+    fn window(&mut self, range: ::core::ops::Range<usize>) -> Option<&mut [u8]> {
         self.get_mut(range)
     }
 }
@@ -57,7 +59,7 @@ impl ByteBuffer for Vec<u8> {
     }
 
     #[inline(always)]
-    fn window(&mut self, range: std::ops::Range<usize>) -> Option<&mut [u8]> {
+    fn window(&mut self, range: ::core::ops::Range<usize>) -> Option<&mut [u8]> {
         if self.len() < range.end {
             // Amortize initialization over small batches of bit writes.
             grow_bit_output(self, range.end);

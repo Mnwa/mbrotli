@@ -266,6 +266,7 @@ const fn choose_distance_params(
 mod tests {
     use super::*;
     use crate::compressor::{BlockBits, DistanceCodes, WindowBits};
+    use alloc::vec::Vec;
 
     /// Resolves the parameters for one quality and window size.
     fn params(quality: QualityLevel, lgwin: u8) -> HqParams {

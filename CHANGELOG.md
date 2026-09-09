@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Add the opt-in `no_std` feature for alloc-backed compression, incremental
+  sessions, and dictionaries. It disables I/O adapters, parallel compression,
+  experimental framing, and profiling instrumentation, and uses compile-time
+  SIMD selection and portable logarithms. Disable default features for a fully
+  std-free dependency tree; ordinary builds retain their existing behavior.
+
 ## [v0.2.0](https://github.com/Mnwa/mbrotli/releases/tag/v0.2.0) - 2026-09-08
 
 - Stop forcing the scalar SIMD fallback into production builds. Keep `Backend`

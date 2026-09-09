@@ -1,5 +1,8 @@
 # Compressor Subsystem
 
+The std-only adapters and error conversions are omitted with `no_std`; serial
+compression and sessions remain available. See [feature boundaries](no-std.md).
+
 Scope: `src/lib.rs`, `src/compressor/`, and the private `src/compressor/core/`
 tree, excluding the three encoder cores themselves, which have their own
 specifications in [fast-encoder.md](fast-encoder.md),
@@ -572,7 +575,7 @@ scratch buffer overflow. No valid caller input produces one.
 
 ```mermaid
 graph TD
-    A["Compressor::new / CompressorBuilder::build"] -->|"Level::try_detect()"| B["Level stored in the Compressor"]
+    A["Compressor::new / CompressorBuilder::build"] -->|"Backend::default: detect or no_std baseline"| B["Level stored in the Compressor"]
     B --> C["EncoderCache::acquire(level, params)"]
     C -->|"new encoder only"| D["core::dispatch::select(level)"]
     D --> E["retained Box dyn Kernels containing Selected&lt;S&gt;"]
@@ -583,6 +586,7 @@ graph TD
 ```
 
 Feature detection happens when the compressor's opaque `Backend` is selected.
+With `no_std`, selection uses the compile-time baseline instead of detection.
 `CompressorBuilder::with_backend` accepts only a host-validated backend; no
 `fearless_simd` type appears in the public API. `Backend::SCALAR` is private to
 unit tests. Production builds do not force fallback support, but retain it on

@@ -360,6 +360,7 @@ impl From<QualityLevel> for usize {
 pub(crate) enum BrotliCompressError {
     /// The inner reader or writer of a streaming adapter failed.
     #[error("IO error: {0}")]
+    #[cfg(not(feature = "no_std"))]
     IOError(#[from] std::io::Error),
     /// The requested quality has no implementation yet.
     #[error("Quality level {0} is not implemented")]

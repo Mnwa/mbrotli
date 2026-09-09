@@ -202,6 +202,7 @@ impl Default for DistanceParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
 
     /// Every `(NPOSTFIX, NDIRECT)` pair the format can express.
     fn legal_pairs() -> Vec<(u32, u32)> {

@@ -10,6 +10,8 @@
 //! small alphabet, how the context map is run-length coded, and how block
 //! switches are encoded.
 
+use alloc::vec::Vec;
+
 use super::bits::BitWriter;
 use super::block_split::{BlockSplit, MAX_NUMBER_OF_BLOCK_TYPES};
 use super::command::Command;
@@ -633,7 +635,7 @@ impl MetaBlockWriter {
         clippy::too_many_arguments,
         reason = "mirrors BrotliStoreMetaBlock, whose parameters are all needed"
     )]
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     pub(crate) fn store_meta_block(
         &mut self,
         input: &[u8],
@@ -804,7 +806,7 @@ impl MetaBlockWriter {
         clippy::too_many_arguments,
         reason = "mirrors BrotliStoreMetaBlockFast, whose parameters are all needed"
     )]
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     pub(crate) fn store_meta_block_fast(
         &mut self,
         input: &[u8],
@@ -932,7 +934,7 @@ impl MetaBlockWriter {
         clippy::too_many_arguments,
         reason = "mirrors BrotliStoreMetaBlockTrivial, whose parameters are all needed"
     )]
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     pub(crate) fn store_meta_block_trivial(
         &mut self,
         input: &[u8],

@@ -2,15 +2,21 @@
 //! Parallel and serial streams have different history policies; only parallel
 //! task-count comparisons are equivalent compressed-output speed measurements.
 #[path = "../tests/support/mod.rs"]
+#[cfg(not(feature = "no_std"))]
 mod support;
+#[cfg(not(feature = "no_std"))]
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+#[cfg(not(feature = "no_std"))]
 use mbrotli::compressor::parallel::{
     BatchConfig, FileSource, ParallelCompressor, ParallelConfig, RandomAccessSource, SeekSource,
     SegmentSize, TaskCount,
 };
+#[cfg(not(feature = "no_std"))]
 use mbrotli::{Compressor, EncoderConfig, Quality};
+#[cfg(not(feature = "no_std"))]
 use std::hint::black_box;
 
+#[cfg(not(feature = "no_std"))]
 fn encode(
     compressor: &mut ParallelCompressor,
     pool: &rayon::ThreadPool,
@@ -37,6 +43,7 @@ fn encode(
     out.clear();
     batch.finish_into(out).unwrap();
 }
+#[cfg(not(feature = "no_std"))]
 fn encode_source(
     compressor: &mut ParallelCompressor,
     pool: &rayon::ThreadPool,
@@ -60,6 +67,7 @@ fn encode_source(
     batch.finish_into(out).unwrap();
     black_box(out);
 }
+#[cfg(not(feature = "no_std"))]
 fn benchmarks(c: &mut Criterion) {
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(4)
@@ -176,5 +184,10 @@ fn benchmarks(c: &mut Criterion) {
         }
     }
 }
+#[cfg(not(feature = "no_std"))]
 criterion_group!(benches, benchmarks);
+#[cfg(not(feature = "no_std"))]
 criterion_main!(benches);
+
+#[cfg(feature = "no_std")]
+fn main() {}

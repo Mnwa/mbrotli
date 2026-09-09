@@ -22,7 +22,10 @@
 //! [RFC 9841 section 3.1.1]:
 //!     https://www.rfc-editor.org/rfc/rfc9841.html#section-3.1.1
 
-use std::borrow::Cow;
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
+use alloc::borrow::Cow;
 
 use thiserror::Error;
 
@@ -206,9 +209,9 @@ impl Default for TransformScratch {
     }
 }
 
-impl std::fmt::Debug for TransformScratch {
+impl ::core::fmt::Debug for TransformScratch {
     /// Prints the buffer's size rather than its contents, which are scratch.
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, formatter: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         formatter
             .debug_struct("TransformScratch")
             .field("bytes", &self.bytes.len())
@@ -711,6 +714,7 @@ fn shift_once(bytes: &mut [u8], position: usize, left: usize, addend: u32) -> us
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     /// Cutoff transform ids of the RFC 7932 list, from `ComputeCutoffTransforms`.
     const BUILTIN_CUTOFFS: [i32; MAX_CUT_OFF + 1] = [0, 12, 27, 23, 42, 63, 56, 48, 59, 64];

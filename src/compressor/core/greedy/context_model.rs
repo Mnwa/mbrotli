@@ -232,6 +232,7 @@ pub(crate) fn decide_over_literal_context_modeling(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
 
     #[test]
     fn contexts_stay_inside_the_six_bit_range() {

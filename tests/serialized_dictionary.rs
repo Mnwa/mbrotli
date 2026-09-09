@@ -601,6 +601,7 @@ fn decode_custom(dictionary: &[u8], compressed: &[u8], expected: &[u8]) {
     assert_eq!(output, expected);
 }
 
+#[cfg(not(feature = "no_std"))]
 #[test]
 fn custom_words_and_transforms_interoperate_at_every_dictionary_quality() {
     use mbrotli::{Compressor, EncoderConfig, Quality};
@@ -821,6 +822,7 @@ fn long_transformed_words_keep_their_base_length_in_hq_commands() {
     }
 }
 
+#[cfg(not(feature = "no_std"))]
 fn c_encode_custom(dictionary: &[u8], input: &[u8], quality: mbrotli::Quality) -> Vec<u8> {
     use google_brotli_ffi as ffi;
     let mut output = vec![0; input.len() * 2 + 4096];
@@ -876,6 +878,7 @@ fn c_encode_custom(dictionary: &[u8], input: &[u8], quality: mbrotli::Quality) -
     output
 }
 
+#[cfg(not(feature = "no_std"))]
 #[test]
 fn a_custom_identity_dictionary_matches_c_and_every_host_backend() {
     use mbrotli::Quality;

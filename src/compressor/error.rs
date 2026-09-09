@@ -88,7 +88,7 @@ pub enum EncodeError {
     },
     /// A session was abandoned without being dropped, and its state is unknown.
     ///
-    /// `std::mem::forget` can skip a session's destructor, which is the one way
+    /// `::core::mem::forget` can skip a session's destructor, which is the one way
     /// a compressor can be left holding state no operation has cleaned up.
     /// Rather than trusting it, the compressor refuses until
     /// [`Compressor::recover`](crate::Compressor::recover) has put it back into
@@ -136,6 +136,7 @@ impl EncodeError {
             },
             // The encoders perform no I/O; the variant exists for the low-level
             // error type alone.
+            #[cfg(not(feature = "no_std"))]
             BrotliCompressError::IOError(_) => Self::InternalInvariant {
                 detail: "an encoder reported an I/O failure it cannot perform",
             },
@@ -143,6 +144,7 @@ impl EncodeError {
     }
 }
 
+#[cfg(not(feature = "no_std"))]
 impl From<EncodeError> for std::io::Error {
     /// Carries an encoding failure through a [`std::io`] adapter.
     ///
@@ -174,7 +176,8 @@ impl From<EncodeError> for std::io::Error {
 mod tests {
     use super::*;
     use crate::compressor::shared::SharedBrotliError;
-    use std::error::Error as _;
+    use ::core::error::Error as _;
+    use alloc::string::ToString;
 
     #[test]
     fn a_short_destination_reports_what_it_was_given() {
@@ -199,6 +202,7 @@ mod tests {
             BrotliCompressError::BufferOverflow,
             BrotliCompressError::UnsupportedQuality(5),
             BrotliCompressError::Shared(SharedBrotliError::UnsupportedLargeWindow { quality: 0 }),
+            #[cfg(not(feature = "no_std"))]
             BrotliCompressError::IOError(std::io::Error::other("nowhere")),
         ] {
             assert!(matches!(
@@ -217,6 +221,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "no_std"))]
     fn every_variant_maps_to_a_distinguishable_io_kind() {
         let cases = [
             (

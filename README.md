@@ -10,6 +10,20 @@ Brotli compression in safe Rust, with qualities 0–11, reusable encoder storage
 streaming I/O, and caller-scheduled parallel compression. This crate provides
 compression only; it does not include a decoder.
 
+## `no_std`
+
+The opt-in `no_std` feature supports compression, incremental sessions, and
+prepared dictionaries using `core` and `alloc`:
+
+```toml
+mbrotli = { version = "0.2", default-features = false, features = ["no_std"] }
+```
+
+Supply a global allocator. I/O adapters, parallel compression, experimental
+framing, and profiling instrumentation are disabled. SIMD uses compile-time
+target features. Cargo features are additive: leave `std` and `hotpath*` disabled
+to avoid standard-library dependencies. Normal default builds are unchanged.
+
 ## Benchmark results
 
 ![Median compression speed and output size by quality](docs/benchmarks/competitor-paths-charts/tradeoff.svg)

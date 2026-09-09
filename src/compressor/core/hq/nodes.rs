@@ -268,6 +268,7 @@ impl StartPosQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
 
     /// Builds a candidate whose only interesting field is its cost difference.
     fn candidate(pos: usize, costdiff: f32) -> PosData {

@@ -1,5 +1,7 @@
 //! The stateful, reusable encoder.
 
+use alloc::vec::Vec;
+
 use super::config::{ConfigError, EncoderConfig, SizeOverflow};
 use super::core::bound::bound;
 use super::core::driver::{
@@ -9,8 +11,8 @@ use super::dictionary::PreparedDictionary;
 use super::error::EncodeError;
 use super::internal::{CompressParams, QualityLevel, WindowBits};
 use super::session::{EncoderSession, StreamConfig};
+use ::core::ops::Range;
 use fearless_simd::Level;
-use std::ops::Range;
 
 /// The configuration whose compressed-size bound is the loosest.
 ///
@@ -626,7 +628,7 @@ impl Compressor {
 
     /// Puts the compressor back into a known state after a leaked session.
     ///
-    /// Only needed when a session was passed to [`std::mem::forget`], which
+    /// Only needed when a session was passed to [`::core::mem::forget`], which
     /// skips the cleanup dropping it would have done. Ordinary use never needs
     /// this.
     ///
@@ -636,7 +638,7 @@ impl Compressor {
     /// use mbrotli::{Compressor, EncodeError, EncoderConfig, Quality};
     ///
     /// let mut encoder = Compressor::new(EncoderConfig::default().with_quality(Quality::Q1))?;
-    /// std::mem::forget(encoder.start(Default::default())?);
+    /// ::core::mem::forget(encoder.start(Default::default())?);
     ///
     /// assert!(matches!(encoder.compress(b"payload"), Err(EncodeError::AbandonedSession)));
     ///
@@ -931,9 +933,7 @@ impl CompressorBuilder {
     pub fn build(self) -> Result<Compressor, ConfigError> {
         self.config.validate()?;
         Ok(Compressor {
-            level: self
-                .level
-                .unwrap_or_else(|| Level::try_detect().unwrap_or_else(Level::baseline)),
+            level: self.level.unwrap_or_else(|| super::Backend::default().0),
             config: self.config,
             retention: self.retention,
             workspace: EncoderCache::default(),
@@ -952,6 +952,16 @@ mod tests {
 
     fn compressor(quality: Quality) -> Compressor {
         Compressor::new(EncoderConfig::default().with_quality(quality)).expect("a legal config")
+    }
+
+    #[cfg(feature = "no_std")]
+    #[test]
+    fn default_construction_uses_the_compile_time_backend() {
+        let encoder = compressor(Quality::Q5);
+        assert_eq!(
+            super::super::Backend(encoder.level),
+            super::super::Backend(Level::baseline())
+        );
     }
 
     #[test]

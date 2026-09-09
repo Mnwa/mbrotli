@@ -11,6 +11,8 @@
 //! first tail byte until a lap writes over it. Reproducing the same filler is
 //! what makes the encoder deterministic on data it never actually copied.
 
+use alloc::vec::Vec;
+
 /// Bytes of margin past the window, so eight-byte loads always have data.
 const SLACK_FOR_EIGHT_BYTE_HASHING: usize = 7;
 
@@ -113,7 +115,7 @@ impl RingBuffer {
     }
 
     /// Grows the backing storage to `buflen` bytes (`RingBufferInitBuffer`).
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     fn init_buffer(&mut self, buflen: usize) {
         // Previously initialized capacity remains usable after reset. History
         // outside the written range is never a valid match; write establishes
@@ -160,7 +162,7 @@ impl RingBuffer {
     }
 
     /// Appends `bytes` to the window (`RingBufferWrite`).
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     pub(crate) fn write(&mut self, bytes: &[u8]) {
         let end = self.pos as usize + bytes.len();
         if self.cur_size < self.total_size && end < self.size.saturating_sub(8) {

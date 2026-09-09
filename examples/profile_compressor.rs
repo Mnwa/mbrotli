@@ -3,7 +3,7 @@
 use mbrotli::{Compressor, EncoderConfig, Quality};
 use std::hint::black_box;
 
-#[cfg_attr(feature = "hotpath", hotpath::main)]
+#[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::main)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let text = b"the quick brown fox jumps over the lazy dog 0123456789\n".repeat(1300);
     for number in 0..=11 {

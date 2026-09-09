@@ -1,5 +1,7 @@
 //! Shared block scheduling for one-shot and incremental compression.
 
+use alloc::vec::Vec;
+
 use super::driver::Encoder;
 use super::fast::FastEncoder;
 use super::rfc9841::context::SharedContextInner;

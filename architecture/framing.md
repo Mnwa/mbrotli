@@ -1,5 +1,8 @@
 # Shared Brotli framing writer
 
+This subsystem is omitted when `no_std` is enabled. See
+[feature boundaries](no-std.md) for the alloc-backed API that remains available.
+
 `compressor::framing` is an `experimental`, separate container API. Raw
 compression never gains a container header implicitly. Its public adapters own
 ergonomic configuration and borrows; private `framing::core` owns ordering,

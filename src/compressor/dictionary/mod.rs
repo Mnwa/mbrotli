@@ -16,6 +16,9 @@
 //!
 //! [RFC 9841]: https://www.rfc-editor.org/rfc/rfc9841.html
 
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
 use super::core::rfc9841::context::{Budget, SharedContextInner};
 use super::shared::SharedBrotliError;
 use thiserror::Error;
@@ -1300,6 +1303,7 @@ impl DictionaryError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     #[test]
     fn the_attachment_limit_is_configurable_and_never_above_the_format_one() {

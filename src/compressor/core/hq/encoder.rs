@@ -10,6 +10,9 @@
 //! all of it was resolved before the encoder was built, so nothing about the
 //! machine can reach a decision that shows up in the output.
 
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
 use crate::compressor::core::dispatch::{self, HqInput, Kernels};
 use fearless_simd::Level;
 
@@ -67,11 +70,13 @@ pub(crate) struct HqEncoder {
 
 impl HqEncoder {
     /// Installs fragment-only kernels when constructing an independent worker.
+    #[cfg(not(feature = "no_std"))]
     pub(crate) fn select_fragment_kernels(&mut self, level: Level) {
         self.kernels = dispatch::select_independent(level);
     }
 
     /// Resets the header and seeds only this segment's literal context/history.
+    #[cfg(not(feature = "no_std"))]
     pub(crate) fn begin_fragment(&mut self, prefix: &[u8]) -> BrotliResult<()> {
         self.last_bytes = 0;
         self.last_bytes_bits = 0;
@@ -82,6 +87,7 @@ impl HqEncoder {
     }
 
     /// Confirms the flush left no pending partial byte.
+    #[cfg(not(feature = "no_std"))]
     pub(crate) const fn fragment_aligned(&self) -> bool {
         self.last_bytes_bits == 0
     }
@@ -203,7 +209,7 @@ impl HqEncoder {
     ///
     /// Returns [`BrotliCompressError::BufferOverflow`] when the scratch buffer
     /// proved too small, which would indicate a bug in the size bound.
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     #[cfg(test)]
     pub(crate) fn encode_block(&mut self, input: &[u8], is_last: bool) -> BrotliResult<&[u8]> {
         debug_assert!(!self.finished);
@@ -222,7 +228,7 @@ impl HqEncoder {
     ///
     /// Returns [`BrotliCompressError::BufferOverflow`] when the scratch buffer
     /// proved too small, which would indicate a bug in the size bound.
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     pub(crate) fn encode_block_with(
         &mut self,
         input: &[u8],
@@ -255,7 +261,7 @@ impl HqEncoder {
     ///
     /// Returns [`BrotliCompressError::BufferOverflow`] when the scratch buffer
     /// proved too small, which would indicate a bug in the size bound.
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     pub(crate) fn flush_block(
         &mut self,
         input: &[u8],
@@ -732,12 +738,17 @@ mod tests {
     /// Builds an encoder for one quality.
     fn encoder(quality: QualityLevel) -> HqEncoder {
         let params = CompressParams::new(quality, WindowBits::DEFAULT);
-        HqEncoder::new(Level::new(), &params).expect("supported quality")
+        HqEncoder::new(Level::try_detect().unwrap_or_else(Level::baseline), &params)
+            .expect("supported quality")
     }
 
     /// Compresses `data` in blocks and returns the whole stream.
     fn compress(quality: QualityLevel, data: &[u8]) -> Vec<u8> {
-        compress_with(Level::new(), quality, data)
+        compress_with(
+            Level::try_detect().unwrap_or_else(Level::baseline),
+            quality,
+            data,
+        )
     }
 
     /// As [`compress`], on a chosen SIMD backend.
@@ -837,7 +848,11 @@ mod tests {
         let data: Vec<u8> = (0..120_000u32).map(|i| (i * 7 % 253) as u8).collect();
         for quality in [QualityLevel::Q10, QualityLevel::Q11] {
             let mut streams = Vec::new();
-            for level in [Level::new(), Level::baseline(), Level::fallback()] {
+            for level in [
+                Level::try_detect().unwrap_or_else(Level::baseline),
+                Level::baseline(),
+                Level::fallback(),
+            ] {
                 streams.push(compress_with(level, quality, &data));
             }
             assert!(

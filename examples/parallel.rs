@@ -1,9 +1,12 @@
 //! Compress a regular file using caller-owned scoped threads and disk staging.
+#[cfg(not(feature = "no_std"))]
 use mbrotli::compressor::parallel::{
     BatchConfig, FileSource, ParallelCompressor, ParallelConfig, TaskCount,
 };
+#[cfg(not(feature = "no_std"))]
 use mbrotli::{EncoderConfig, Quality};
 #[cfg_attr(feature = "hotpath", hotpath::main)]
+#[cfg(not(feature = "no_std"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<_> = std::env::args_os().collect();
     if arguments.len() != 3 {
@@ -35,3 +38,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     Ok(())
 }
+
+#[cfg(feature = "no_std")]
+fn main() {}

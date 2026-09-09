@@ -45,7 +45,12 @@
 //!
 //! [RFC 9841]: https://www.rfc-editor.org/rfc/rfc9841.html
 
-use std::borrow::Cow;
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
+
+use alloc::borrow::Cow;
 
 use thiserror::Error;
 
@@ -152,9 +157,9 @@ impl From<OmitLength> for u8 {
     }
 }
 
-impl std::fmt::Display for OmitLength {
+impl ::core::fmt::Display for OmitLength {
     /// Prints the number of bytes dropped.
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, formatter: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         write!(formatter, "{}", self.0)
     }
 }
@@ -453,7 +458,7 @@ impl AsRef<[u8]> for ContextMap {
     }
 }
 
-impl std::ops::Index<usize> for ContextMap {
+impl ::core::ops::Index<usize> for ContextMap {
     type Output = u8;
 
     /// Returns the combination one context starts from.

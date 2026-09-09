@@ -774,6 +774,7 @@ fn long_prefix(data: &[u8], max_length: usize, matches: &mut [u32]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
 
     /// Runs the search over `data`, returning the per-length match table.
     fn find(data: &[u8]) -> [u32; MAX_STATIC_DICTIONARY_MATCH_LEN + 1] {

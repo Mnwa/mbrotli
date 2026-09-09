@@ -12,6 +12,8 @@
 //! above relies on: it walks the matches expecting each to be longer than the
 //! last.
 
+use alloc::vec::Vec;
+
 use fearless_simd::{Simd, SimdBase, SimdMask, u8x32};
 
 use crate::compressor::core::shared::constants::{HASH_MUL32, WINDOW_GAP};
@@ -627,7 +629,12 @@ mod tests {
     /// Every position is queried, which also stores it, so afterwards the tree
     /// holds the whole prefix. Returns the matches found at `end`.
     fn walk(data: &[u8], end: usize, short_scan: usize) -> Vec<BackwardMatch> {
-        walk_with(Level::new(), data, end, short_scan)
+        walk_with(
+            Level::try_detect().unwrap_or_else(Level::baseline),
+            data,
+            end,
+            short_scan,
+        )
     }
 
     /// As [`walk`], on a chosen SIMD backend.
@@ -783,7 +790,11 @@ mod tests {
         ];
         corpora.push(repeated());
 
-        for level in [Level::new(), Level::baseline(), Level::fallback()] {
+        for level in [
+            Level::try_detect().unwrap_or_else(Level::baseline),
+            Level::baseline(),
+            Level::fallback(),
+        ] {
             for data in &corpora {
                 // No wrap, then a ring of 512 whose positions wrap around it.
                 for mask in [usize::MAX, 511] {
@@ -848,7 +859,7 @@ mod tests {
         let mut matcher = BinaryTreeMatcher::new(22);
         matcher.prepare(false, 0);
         let mut out = Vec::new();
-        let level = Level::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
         dispatch!(level, simd => matcher.find_all_matches(
             simd, &data, usize::MAX, 300, data.len() - 300, 300,
             usize::MAX >> 1, 0, 64, &mut out,
@@ -891,7 +902,7 @@ mod tests {
         let mut matcher = BinaryTreeMatcher::new(22);
         matcher.prepare(false, 0);
         let mut out = Vec::new();
-        let level = Level::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
         let mut checked = 0usize;
         for position in 0..payload {
             out.clear();
@@ -935,7 +946,7 @@ mod tests {
         let mut matcher = BinaryTreeMatcher::new(22);
         matcher.prepare(false, 0);
         let mut out = Vec::new();
-        let level = Level::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
         dispatch!(level, simd => matcher.find_all_matches(
             simd, &data, usize::MAX, 5, data.len() - 5, 5,
             usize::MAX >> 1, 0, 64, &mut out,
@@ -960,7 +971,7 @@ mod tests {
             let mut matcher = BinaryTreeMatcher::new(22);
             matcher.prepare(false, 0);
             let mut out = Vec::new();
-            let level = Level::new();
+            let level = Level::try_detect().unwrap_or_else(Level::baseline);
             dispatch!(level, simd => matcher.find_all_matches(
                 simd, &data, usize::MAX, cur, data.len() - cur, cur,
                 usize::MAX >> 1, 0, scan, &mut out,
@@ -980,7 +991,7 @@ mod tests {
 
         let mut matcher = BinaryTreeMatcher::new(22);
         matcher.prepare(false, 0);
-        let level = Level::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
         dispatch!(level, simd => matcher.store_range(simd, &data, usize::MAX, 0, 400));
 
         // A position inside the dense tail is stored: querying its repeat
@@ -1023,7 +1034,7 @@ mod tests {
 
         let mut matcher = BinaryTreeMatcher::new(22);
         matcher.prepare(false, 0);
-        let level = Level::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
         dispatch!(level, simd => matcher.store_range(simd, &data, usize::MAX, 0, 2000));
 
         for (offset, stored) in [(800usize, true), (801, false)] {
@@ -1045,7 +1056,11 @@ mod tests {
     fn every_backend_finds_the_same_matches() {
         let data = repeated();
         let mut results = Vec::new();
-        for level in [Level::new(), Level::baseline(), Level::fallback()] {
+        for level in [
+            Level::try_detect().unwrap_or_else(Level::baseline),
+            Level::baseline(),
+            Level::fallback(),
+        ] {
             results.push(walk_with(level, &data, 300, 64));
         }
         assert!(results.windows(2).all(|pair| pair[0] == pair[1]));
@@ -1054,7 +1069,7 @@ mod tests {
     #[test]
     fn stitching_stores_the_positions_before_the_boundary() {
         let data = repeated();
-        let level = Level::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
 
         // Nothing happens before the tree has a full comparison length of
         // history behind it.

@@ -24,6 +24,9 @@
 //! borrow the compression entry points take is what makes one context back at
 //! most one active session.
 
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
 use crate::compressor::shared::SharedBrotliError;
 
 use super::prefix::{MAX_PREFIX_DICTIONARIES, MAX_PREFIX_SEGMENT_BYTES, PrefixSources};

@@ -1,8 +1,8 @@
 //! The incremental encoder: one stream, driven a chunk at a time.
 //!
 //! [`EncoderSession`] is the low-level state machine every streaming path in
-//! this crate is built on. [`EncoderReader`](super::io::EncoderReader) and
-//! [`EncoderWriter`](super::io::EncoderWriter) are adapters over it, and they
+//! this crate is built on. `EncoderReader` and
+//! `EncoderWriter` are adapters over it, and they
 //! add buffering and `std::io` conventions rather than a second encoder.
 //!
 //! A session borrows its compressor exclusively for as long as it lives, and

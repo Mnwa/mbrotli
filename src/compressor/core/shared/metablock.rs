@@ -8,6 +8,8 @@
 //! high-quality one for qualities ten and eleven. The bit writer reads it
 //! without caring which, so the shape and the histogram optimisation live here.
 
+use alloc::vec::Vec;
+
 use super::block_split::BlockSplit;
 use super::constants::{NUM_COMMAND_SYMBOLS, NUM_LITERAL_SYMBOLS};
 use super::histogram::{

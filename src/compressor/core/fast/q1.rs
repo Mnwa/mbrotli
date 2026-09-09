@@ -18,6 +18,9 @@
 //!   most from `ip - 5` through `ip + 6`. `ip` is at least `input + MIN_MATCH`
 //!   at those points, so the lower end never underflows.
 
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
 use fearless_simd::Simd;
 
 use super::bits::{BitWriter, ByteBuffer};
@@ -216,7 +219,7 @@ struct Pass1<'a> {
 }
 
 /// First pass: finds matches and records commands and literals.
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
+#[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
 fn create_commands<
     S: Simd,
     const TABLE_BITS: usize,
@@ -412,7 +415,7 @@ fn create_commands<
 }
 
 /// Builds the command and distance prefix codes and stores them.
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
+#[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
 fn build_and_store_command_prefix_code<const INDEPENDENT: bool>(
     histogram: &[u32; 128],
     depth: &mut [u8; 128],
@@ -462,7 +465,7 @@ fn build_and_store_command_prefix_code<const INDEPENDENT: bool>(
 }
 
 /// Second pass: builds exact prefix codes and replays the buffered commands.
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
+#[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
 fn store_commands<const INDEPENDENT: bool>(
     arena: &mut TwoPassArena,
     literals: &[u8],
@@ -553,7 +556,7 @@ fn bits_entropy(population: &[u32]) -> f64 {
 }
 
 /// Decides whether the block is worth compressing at all.
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
+#[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
 fn should_compress(
     histogram: &mut [u32; NUM_LITERAL_SYMBOLS],
     input: &[u8],

@@ -25,7 +25,10 @@
 //!
 //! [RFC 9841 section 5]: https://www.rfc-editor.org/rfc/rfc9841.html#section-5
 
-use std::borrow::Cow;
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
+use alloc::borrow::Cow;
 
 use thiserror::Error;
 

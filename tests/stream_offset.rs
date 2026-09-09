@@ -1,3 +1,5 @@
+#![cfg(not(feature = "no_std"))]
+
 //! Headerless continuation streams, compared against the pinned C encoder.
 #![cfg(feature = "experimental")]
 mod support;

@@ -1,3 +1,5 @@
+#![cfg(not(feature = "no_std"))]
+
 //! `Write::flush` must make the stream readable without terminating it.
 //!
 //! Three properties are asserted, at every implemented quality:

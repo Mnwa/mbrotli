@@ -1,5 +1,7 @@
 //! Independently startable, byte-aligned, non-final parts (RFC 7932 §11.3).
 
+use alloc::vec::Vec;
+
 use super::driver::Encoder;
 use super::fast::commands::store_meta_block_header;
 use super::rfc9841::window::ResolvedWindow;
@@ -33,7 +35,7 @@ impl FragmentEncoder {
         self.bytes.capacity() + self.encoder.as_ref().map_or(0, Encoder::retained_bytes)
     }
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     pub(crate) fn encode(&mut self, src: &[u8], first: bool) -> BrotliResult<AlignedFragment<'_>> {
         if src.is_empty() {
             return Err(BrotliCompressError::BufferOverflow);

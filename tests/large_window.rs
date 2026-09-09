@@ -1,3 +1,5 @@
+#![cfg(not(feature = "no_std"))]
+
 //! RFC 9841 Large Window Brotli, over the public API.
 //!
 //! Every stream produced here is handed back to the pinned Google Brotli C

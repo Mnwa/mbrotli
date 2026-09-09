@@ -27,10 +27,27 @@ jobs:
       # is not committed and a fresh checkout has none to honour. The
       # repository's own checks use it because a working tree has one.
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo clippy --workspace --all-targets --features experimental,diagnostics,hotpath-cpu,hotpath-alloc -- -D warnings
       - run: cargo doc --workspace --all-features --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
       - run: cargo package --allow-dirty
+
+  no-std:
+    name: no_std host tests and bare-metal compilation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabi
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --lib --no-default-features --features no_std --target thumbv7em-none-eabi
+      - run: cargo check --lib --no-default-features --features no_std,experimental --target thumbv7em-none-eabi
+      - run: cargo test --release --no-default-features --features no_std
+      - run: cargo test --release --no-default-features --features no_std,experimental
 
   semver:
     name: public API semver compatibility

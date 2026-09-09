@@ -376,6 +376,7 @@ pub(crate) mod one_pass {
 /// Quality 1 command emitters, packing a code and its extra bits into a word.
 pub(crate) mod two_pass {
     use super::{LONG_INSERT_LIMIT, SHORT_INSERT_LIMIT, log2_floor_non_zero};
+    use alloc::vec::Vec;
 
     /// Appends the packed representation of an insert length.
     #[inline(always)]
@@ -477,6 +478,7 @@ pub(crate) mod two_pass {
 mod tests {
     use super::*;
     use crate::compressor::core::fast::tables::{INSERT_OFFSET, NUM_EXTRA_BITS};
+    use alloc::vec::Vec;
 
     fn one_pass_code(emit: impl FnOnce(&mut [u32; 128], &mut BitWriter)) -> (usize, Vec<usize>) {
         let mut storage = vec![0u8; 64];

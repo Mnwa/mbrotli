@@ -323,6 +323,7 @@ fn scan_windows<S: Simd>(simd: S, left_window: &[u8], right_window: &[u8]) -> us
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
     use fearless_simd::{Level, dispatch};
 
     /// Straight-line reference implementation used as the oracle.
@@ -333,7 +334,7 @@ mod tests {
     }
 
     fn measure(data: &[u8], left: usize, right: usize, limit: usize) -> usize {
-        let level = Level::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
         dispatch!(level, simd => find_match_length(simd, data, left, right, limit))
     }
 
@@ -443,7 +444,7 @@ mod tests {
                 window - window % stride
             );
         }
-        dispatch!(Level::new(), simd => check(simd));
+        dispatch!(Level::try_detect().unwrap_or_else(Level::baseline), simd => check(simd));
         dispatch!(Level::fallback(), simd => check(simd));
     }
 
@@ -458,7 +459,10 @@ mod tests {
         for mismatch in [0usize, 3, 7, 8, 9, 15, 16, 31, 32, 63, 64, 99] {
             right[mismatch] ^= 1;
             assert_eq!(common_prefix_len(&left, &right, 100), mismatch);
-            for level in [Level::new(), Level::fallback()] {
+            for level in [
+                Level::try_detect().unwrap_or_else(Level::baseline),
+                Level::fallback(),
+            ] {
                 let wide =
                     dispatch!(level, simd => common_prefix_len_simd(simd, &left, &right, 100));
                 assert_eq!(wide, mismatch, "{mismatch}");

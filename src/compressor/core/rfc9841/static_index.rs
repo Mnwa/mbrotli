@@ -1,5 +1,8 @@
 //! Immutable custom dictionary search, in RFC combination/address order.
 
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
 use super::serialized::{ListRef, SerializedDictionaryData};
 use super::transform::{TransformList, TransformScratch};
 use super::words::WordList;
@@ -227,7 +230,7 @@ impl StaticIndex {
             .last()
             .map_or(4, |m| m.length().saturating_add(1).max(4));
         for index in
-            std::iter::once(first).chain((0..self.combinations.len()).filter(|&i| i != first))
+            ::core::iter::once(first).chain((0..self.combinations.len()).filter(|&i| i != first))
         {
             let combination = &self.combinations[index];
             let key = head(input);

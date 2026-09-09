@@ -13,7 +13,7 @@
 //!   knowledge many compressors can share at once.
 //!
 //! [`EncoderSession`] is the state machine underneath all of it, and the
-//! [`io`] adapters are conveniences over that.
+//! `io` adapters (available without `no_std`) are conveniences over that.
 
 mod backend;
 mod config;
@@ -25,9 +25,11 @@ mod session;
 mod shared;
 
 pub mod dictionary;
-#[cfg(feature = "experimental")]
+#[cfg(all(feature = "experimental", not(feature = "no_std")))]
 pub mod framing;
+#[cfg(not(feature = "no_std"))]
 pub mod io;
+#[cfg(not(feature = "no_std"))]
 pub mod parallel;
 
 pub use backend::Backend;

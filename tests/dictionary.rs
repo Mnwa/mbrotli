@@ -1,3 +1,5 @@
+#![cfg(not(feature = "no_std"))]
+
 //! RFC 9841 LZ77 prefix dictionaries, from the outside.
 //!
 //! The oracle is the reference's own compound dictionary: the same bytes are

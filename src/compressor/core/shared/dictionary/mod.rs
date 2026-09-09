@@ -93,6 +93,7 @@ pub(crate) struct DictionaryStats {
 
 impl DictionaryStats {
     /// Permanently disables dictionary probing for an independent fragment.
+    #[cfg(not(feature = "no_std"))]
     pub(crate) const DISABLED: Self = Self {
         lookups: 128,
         matches: 0,

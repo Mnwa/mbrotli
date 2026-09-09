@@ -32,12 +32,28 @@ pub(crate) fn fast_log2(value: usize) -> f64 {
 #[cold]
 #[inline(never)]
 fn log2_beyond_table(value: usize) -> f64 {
-    (value as f64).log2()
+    #[cfg(not(feature = "no_std"))]
+    {
+        (value as f64).log2()
+    }
+    #[cfg(feature = "no_std")]
+    {
+        libm::log2(value as f64)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "no_std")]
+    #[test]
+    fn portable_logarithms_match_the_reference_within_one_ulp() {
+        for value in [257, 1023, 65535, 1 << 24, usize::MAX] {
+            let expected = (value as f64).log2();
+            assert!(fast_log2(value).to_bits().abs_diff(expected.to_bits()) <= 1);
+        }
+    }
 
     #[test]
     fn floor_log2_matches_the_bit_width() {

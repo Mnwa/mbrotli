@@ -14,6 +14,8 @@
 //! array is full — is what keeps the merge order, and therefore the context
 //! map, identical.
 
+use alloc::vec::Vec;
+
 use crate::compressor::core::shared::bit_cost::population_cost;
 use crate::compressor::core::shared::fast_log::fast_log2;
 use crate::compressor::core::shared::histogram::Histogram;

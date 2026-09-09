@@ -19,6 +19,9 @@
 //! prefix dictionary yet, so there is no profile that would justify
 //! vectorising it, and the repository's rule is to measure first.
 
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
 /// Dictionaries one context may attach (`SHARED_BROTLI_MAX_COMPOUND_DICTS`).
 pub(crate) const MAX_PREFIX_DICTIONARIES: usize = 15;
 

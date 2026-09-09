@@ -9,6 +9,9 @@
 //! same header and terminal bits without allocating an unused encoder. Other
 //! streams follow the incremental scheduler; no path rewrites the encoding.
 
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
 use fearless_simd::Level;
 
 use super::fast::FastEncoder;
@@ -207,7 +210,7 @@ impl EncoderCache {
     ///
     /// Propagates whatever [`Encoder::new`] reports when a new encoder has to
     /// be built.
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     pub(crate) fn acquire(
         &mut self,
         level: Level,
@@ -529,7 +532,7 @@ mod tests {
 
     #[test]
     fn quality_routing_reaches_both_encoders() {
-        let level = Level::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
         for quality in IMPLEMENTED {
             let encoder = Encoder::new(level, &params(quality, 22), 0).expect("routed");
             match (quality, encoder) {
@@ -553,7 +556,7 @@ mod tests {
 
     #[test]
     fn every_quality_the_format_defines_now_compresses() {
-        let level = Level::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
         for quality in IMPLEMENTED {
             let mut out = Vec::new();
             let outcome = compress_to_vec(level, &params(quality, 22), b"data data data", &mut out);
@@ -564,7 +567,7 @@ mod tests {
 
     #[test]
     fn slice_output_reports_a_too_small_buffer() {
-        let level = Level::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
         let mut dst = [0u8; 1];
         for quality in IMPLEMENTED {
             assert!(matches!(
@@ -581,7 +584,7 @@ mod tests {
 
     #[test]
     fn vector_and_slice_outputs_agree() {
-        let level = Level::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
         for quality in IMPLEMENTED {
             let params = params(quality, 22);
             let input: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
@@ -597,7 +600,7 @@ mod tests {
 
     #[test]
     fn an_empty_input_preserves_the_configured_stream_header() {
-        let level = Level::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
         for quality in IMPLEMENTED {
             let mut out = Vec::new();
             compress_to_vec(level, &params(quality, 22), b"", &mut out).expect("empty input");
@@ -626,7 +629,7 @@ mod tests {
 
     #[test]
     fn the_cache_reuses_an_encoder_of_the_same_shape() {
-        let level = Level::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
         for quality in IMPLEMENTED {
             // The hint is pinned, so two different input lengths still resolve
             // to the same match finder and the same block sizes.
@@ -648,7 +651,7 @@ mod tests {
 
     #[test]
     fn the_cache_rebuilds_when_the_shape_changes() {
-        let level = Level::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
         let mut cache = EncoderCache::default();
         // Quality 0 and quality 11 do not even share an encoder core, so a
         // reset could not possibly serve both.
@@ -668,7 +671,7 @@ mod tests {
 
     #[test]
     fn the_cache_rebuilds_when_the_size_hint_moves_the_matcher() {
-        let level = Level::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
         // Quality 5 picks a different match finder above one mebibyte, so the
         // resolved parameters differ and the encoder must be rebuilt.
         let small = params(QualityLevel::Q5, 22).with_size_hint(Some(1024));
@@ -689,7 +692,7 @@ mod tests {
 
     #[test]
     fn invalidating_drops_the_retained_encoder() {
-        let level = Level::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
         let mut cache = EncoderCache::default();
         cache
             .acquire(level, &params(QualityLevel::Q5, 22), 1000)

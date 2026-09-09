@@ -14,6 +14,8 @@
 //! two contexts prepared from the same dictionary are byte-identical whatever
 //! machine, backend or thread built them.
 
+use alloc::boxed::Box;
+
 /// Multiplier the prepared index hashes with (`kPreparedDictionaryHashMul64Long`).
 const HASH_MUL64: u64 = 0x1FE3_5A7B_D357_9BD3;
 
@@ -335,6 +337,7 @@ impl Iterator for Candidates<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
 
     fn corpus(len: usize) -> Vec<u8> {
         // Deliberately repetitive: identical eight-byte windows are what put

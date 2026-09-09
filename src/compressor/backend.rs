@@ -1,5 +1,7 @@
 //! Opaque, host-validated execution backends; implementation tokens stay private.
 
+use alloc::vec::Vec;
+
 use fearless_simd::Level;
 
 /// A supported execution backend, independent of the SIMD implementation crate.
@@ -30,7 +32,8 @@ impl Backend {
     /// Scalar fallback is included only when the host requires it. Internal unit
     /// tests additionally include the independent scalar implementation.
     ///
-    /// Detection occurs here, never inside a compression loop.
+    /// Detection occurs here, never inside a compression loop. With `no_std`,
+    /// only backends supported by compile-time target features are available.
     pub fn available() -> Vec<Self> {
         let detected = Self::default().0;
         let mut backends = Vec::new();
@@ -100,18 +103,22 @@ impl Backend {
 
 impl Default for Backend {
     fn default() -> Self {
-        Self(Level::try_detect().unwrap_or_else(Level::baseline))
+        #[cfg(not(feature = "no_std"))]
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
+        #[cfg(feature = "no_std")]
+        let level = Level::baseline();
+        Self(level)
     }
 }
 
-impl std::fmt::Debug for Backend {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl ::core::fmt::Debug for Backend {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.write_str(self.name())
     }
 }
 
-impl std::fmt::Display for Backend {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl ::core::fmt::Display for Backend {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.write_str(self.name())
     }
 }
@@ -127,6 +134,24 @@ impl Eq for Backend {}
 mod tests {
     use super::Backend;
     use crate::{Compressor, EncoderConfig, Quality, Window};
+    use alloc::vec::Vec;
+
+    #[test]
+    fn backend_formats_as_its_stable_name() {
+        for backend in Backend::available() {
+            assert_eq!(format!("{backend}"), backend.name());
+            assert_eq!(format!("{backend:?}"), backend.name());
+        }
+    }
+
+    #[cfg(feature = "no_std")]
+    #[test]
+    fn no_std_selects_the_compile_time_baseline_even_with_std_dependencies() {
+        assert_eq!(
+            Backend::default(),
+            Backend(fearless_simd::Level::baseline())
+        );
+    }
 
     #[test]
     fn scalar_is_included_once_in_the_internal_backend_matrix() {

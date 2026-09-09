@@ -134,6 +134,7 @@ fn utf8_bytes_wrapping(data: &[u8], pos: usize, mask: usize, length: usize) -> u
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
 
     /// Runs the ratio test over a contiguous slice.
     fn mostly_utf8(data: &[u8]) -> bool {

@@ -7,10 +7,14 @@
 //! cargo run --example compress
 //! ```
 
+#[cfg(not(feature = "no_std"))]
 use mbrotli::io::FinishError;
+#[cfg(not(feature = "no_std"))]
 use mbrotli::{Compressor, EncoderConfig, InputSize, Quality, StreamConfig};
+#[cfg(not(feature = "no_std"))]
 use std::io::{Read, Write};
 
+#[cfg(not(feature = "no_std"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = EncoderConfig::default().with_quality(Quality::Q5);
     let mut encoder = Compressor::new(config)?;
@@ -66,3 +70,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     Ok(())
 }
+
+#[cfg(feature = "no_std")]
+fn main() {}

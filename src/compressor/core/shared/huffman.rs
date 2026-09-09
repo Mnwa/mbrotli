@@ -5,6 +5,8 @@
 //! Tie-breaking, sort order and the RLE representation of code lengths are all
 //! observable in the bitstream, so this module reproduces them exactly.
 
+use alloc::vec::Vec;
+
 use super::bits::{BitWriter, ByteBuffer};
 use super::constants::{
     CODE_LENGTH_CODES, INITIAL_REPEATED_CODE_LENGTH, NUM_COMMAND_SYMBOLS,
@@ -459,7 +461,7 @@ fn store_code_length_code(
 }
 
 /// Serialises `depths[..num]` as a Brotli prefix-code description.
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
+#[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
 pub(crate) fn store_huffman_tree(
     depths: &[u8],
     num: usize,
@@ -540,7 +542,7 @@ fn store_simple_code(
 /// Mirrors `BrotliBuildAndStoreHuffmanTreeFast`: leaves are ordered by count
 /// only, the internal depth limit is fourteen, and the emitted description uses
 /// the static code-length code.
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
+#[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
 pub(crate) fn build_and_store_huffman_tree_fast(
     tree: &mut Vec<HuffmanNode>,
     histogram: &[u32],

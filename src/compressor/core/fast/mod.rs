@@ -10,6 +10,9 @@
 //! a freshly cleared hash table, and the trailing partial byte is carried into
 //! the next fragment.
 
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
 pub(crate) mod commands;
 pub(crate) mod constants;
 pub(crate) mod histogram;
@@ -212,12 +215,14 @@ pub(crate) struct FastEncoder {
 
 impl FastEncoder {
     /// Installs fragment-only kernels when constructing an independent worker.
+    #[cfg(any(test, not(feature = "no_std")))]
     pub(crate) fn select_fragment_kernels(&mut self, level: Level) {
         self.kernels = dispatch::select_independent(level);
         self.independent = true;
     }
 
     /// Resets the header and seeds only this segment's literal context/history.
+    #[cfg(not(feature = "no_std"))]
     pub(crate) fn begin_fragment(&mut self, prefix: &[u8]) -> BrotliResult<()> {
         self.last_bytes = 0;
         self.last_bytes_bits = 0;
@@ -226,6 +231,7 @@ impl FastEncoder {
     }
 
     /// Confirms the flush left no pending partial byte.
+    #[cfg(not(feature = "no_std"))]
     pub(crate) const fn fragment_aligned(&self) -> bool {
         self.last_bytes_bits == 0
     }
@@ -395,7 +401,7 @@ impl FastEncoder {
     }
 
     /// Encodes directly into an append destination, initializing only output.
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     pub(crate) fn encode_block_append(
         &mut self,
         input: &[u8],
@@ -438,7 +444,7 @@ impl FastEncoder {
     ///
     /// Returns [`BrotliCompressError::BufferOverflow`] if the internal scratch
     /// buffer proved too small, which would indicate a bug in the size bound.
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     pub(crate) fn encode_block(&mut self, input: &[u8], is_last: bool) -> BrotliResult<&[u8]> {
         debug_assert!(!self.finished);
         debug_assert!(input.len() <= self.block_size_limit);
@@ -472,7 +478,7 @@ impl FastEncoder {
     ///
     /// Returns [`BrotliCompressError::BufferOverflow`] if the internal scratch
     /// buffer proved too small, which would indicate a bug in the size bound.
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     pub(crate) fn flush_block(&mut self, input: &[u8]) -> BrotliResult<&[u8]> {
         debug_assert!(!self.finished);
         debug_assert!(input.len() <= self.block_size_limit);
@@ -527,7 +533,7 @@ impl FastEncoder {
     /// Returns [`BrotliCompressError::OutputTooSmall`] when `dst` is shorter
     /// than the reservation, and [`BrotliCompressError::BufferOverflow`] if
     /// the encoder still ran out of room.
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     pub(crate) fn encode_block_into(
         &mut self,
         input: &[u8],
@@ -614,7 +620,7 @@ mod tests {
 
     #[test]
     fn block_size_limit_follows_the_requested_window() -> Result<(), BrotliCompressError> {
-        let level = Level::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
         for lgwin in [10u8, 16, 18, 22, 24] {
             let lgwin_bits = WindowBits::standard(lgwin).unwrap_or(WindowBits::DEFAULT);
             let params = CompressParams::new(QualityLevel::Q0, lgwin_bits);

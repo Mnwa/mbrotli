@@ -3,6 +3,9 @@
 //! Dynamic calls stop at this boundary. Each selected implementation enters a
 //! feature-enabled function once and passes its concrete token to inner loops.
 
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
 use fearless_simd::{Level, Simd, dispatch};
 
 use super::fast::{FastCore, encode_fragment};
@@ -111,6 +114,7 @@ pub(crate) fn select(level: Level) -> Box<dyn Kernels> {
 }
 
 /// Selects isolated fragment kernels once per worker allocation.
+#[cfg(any(test, not(feature = "no_std")))]
 pub(crate) fn select_independent(level: Level) -> Box<dyn Kernels> {
     dispatch!(level, simd => boxed::<_, true>(simd))
 }

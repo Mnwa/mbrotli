@@ -11,6 +11,16 @@
 //! There is no decoder: round-trip verification uses Google's C decoder, and
 //! this crate compresses only.
 //!
+//! # `no_std` support
+//!
+//! Enable `no_std` with `default-features = false` for targets without the
+//! standard library. Compression, sessions and dictionaries require `alloc`
+//! and a global allocator. I/O adapters, parallel compression, experimental
+//! framing and hotpath instrumentation are disabled by `no_std`.
+//! SIMD selection uses compile-time target features in this mode.
+//! Cargo features are additive: omit `std` and `hotpath*` features to keep
+//! the dependency tree free of the standard library.
+//!
 //! # The shape of the API
 //!
 //! ```text
@@ -33,7 +43,7 @@
 //! parallel, build one per worker with [`Compressor::fork_empty`]; a lock around
 //! a single compressor would serialise the compression itself, not merely the access.
 //! To compress one input across workers, use
-//! [`ParallelCompressor`](compressor::parallel::ParallelCompressor) as shown below.
+//! `ParallelCompressor` as shown below.
 //!
 //! # Choosing a quality
 //!
@@ -85,13 +95,15 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
-//! # Streaming
+//! # Streaming (requires std)
 //!
-//! [`Compressor::writer`] compresses everything written to it. `Write` has no
+//! `Compressor::writer` compresses everything written to it. `Write` has no
 //! closing hook and a meta-block boundary need not land on a byte boundary, so
 //! the stream is terminated explicitly:
 //!
 //! ```
+//! # #[cfg(not(feature = "no_std"))]
+//! # {
 //! use mbrotli::io::FinishError;
 //! use mbrotli::{Compressor, EncoderConfig, InputSize, Quality};
 //! use std::io::Write;
@@ -109,23 +121,26 @@
 //! };
 //!
 //! assert_eq!(streamed, encoder.compress(&payload)?);
+//! # }
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
 //! Declaring [`InputSize::Exact`] is what makes that last assertion hold:
 //! qualities four and five choose their match finder from how much input is
 //! coming, so a stream that does not say produces different — equally valid —
-//! bytes. [`Compressor::reader`] is the pull-shaped counterpart, and
+//! bytes. `Compressor::reader` is the pull-shaped counterpart, and
 //! [`Compressor::start`] is the state machine both are built on.
 //!
-//! # Parallel compression
+//! # Parallel compression (requires std)
 //!
-//! [`ParallelCompressor`](compressor::parallel::ParallelCompressor) splits an
+//! `ParallelCompressor` splits an
 //! input into independent segments and assembles them into one Brotli stream.
 //! The caller schedules the tasks; this example uses scoped threads and
 //! automatically sized memory staging:
 //!
 //! ```
+//! # #[cfg(not(feature = "no_std"))]
+//! # {
 //! use mbrotli::compressor::parallel::{
 //!     BatchConfig, ParallelCompressor, ParallelConfig, TaskCount,
 //! };
@@ -151,6 +166,7 @@
 //!
 //! assert_eq!(result.stats.effective_tasks, 2);
 //! assert!(compressed.len() < payload.len());
+//! # }
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
@@ -234,18 +250,44 @@
 // and reach nothing that ships, so the ban is on everything but the test
 // build rather than weakened to a `deny` the shipped code could opt out of.
 #![cfg_attr(not(test), forbid(unsafe_code))]
+#![cfg_attr(feature = "no_std", no_std)]
+#![cfg_attr(
+    feature = "no_std",
+    doc = "
+Std-only modules are unavailable in this mode:
+
+```compile_fail
+use mbrotli::io::EncoderWriter;
+```
+
+```compile_fail
+use mbrotli::compressor::parallel::ParallelCompressor;
+```
+
+```compile_fail
+use mbrotli::framing::FramingConfig;
+```"
+)]
 #![deny(missing_docs)]
 #![deny(missing_debug_implementations)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
+#[macro_use]
+extern crate alloc;
+
+#[cfg(test)]
+extern crate std;
+
 pub mod compressor;
 
-#[cfg(feature = "experimental")]
+pub use compressor::dictionary;
+#[cfg(all(feature = "experimental", not(feature = "no_std")))]
 pub use compressor::framing;
+#[cfg(not(feature = "no_std"))]
+pub use compressor::io;
 pub use compressor::{
     Backend, BlockBits, BlockSize, CompressionMode, Compressor, CompressorBuilder, ConfigError,
     DistanceParams, EncodeError, EncoderConfig, EncoderSession, EncoderStatus, InputSize,
     LiteralContextMode, Operation, Progress, Quality, RetentionPolicy, SizeOverflow, StreamConfig,
     Window, WindowEncoding,
 };
-pub use compressor::{dictionary, io};

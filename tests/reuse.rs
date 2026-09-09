@@ -1,3 +1,5 @@
+#![cfg(not(feature = "no_std"))]
+
 //! A reused compressor must produce exactly what a fresh one produces.
 //!
 //! Reuse exists only to keep allocations alive; the moment it changes a byte it

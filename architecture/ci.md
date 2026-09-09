@@ -1,5 +1,13 @@
 # Continuous integration
 
+The `no-std` CI job compiles stable and experimental alloc-backed APIs for
+`thumbv7em-none-eabi` and executes host tests without default features.
+All-features checks exercise the `no_std` override; an explicit std feature set
+also receives Clippy checks. Coverage uses explicit std features so I/O,
+parallel compression, framing, and instrumentation remain covered. A second
+all-features unit and `tests/no_std.rs` run accumulates the no_std overrides
+into the same report without clearing the std coverage profiles.
+
 Routine validation runs automatically; expensive checks run on manual dispatch.
 All workflows check out the vendored submodules recursively.
 
@@ -7,6 +15,7 @@ All workflows check out the vendored submodules recursively.
 flowchart TD
     automatic["Push to master or pull request"] --> fast["ci.yml: CI"]
     fast --> check["Formatting, Clippy, docs and packaging"]
+    fast --> nostd["no_std: host tests and thumbv7em-none-eabi builds<br/>Stable and experimental alloc-backed APIs"]
     fast --> semver["Default public API semver compatibility<br/>Against the latest crates.io release"]
     fast --> tests["Release tests: default, all features and experimental<br/>Linux x86-64, Linux ARM64, macOS and MSRV"]
     fast --> replaySetup["Restore Cargo cache without target artifacts<br/>Force reinstall cargo-afl and build runtime"]
@@ -18,7 +27,7 @@ flowchart TD
     fuzz --> findings["Check saved crashes and hangs"]
     findings --> archive["Always archive existing findings as tar.gz<br/>Upload archive preserving AFL filenames"]
     manual --> bench["ci-benchmarks.yml<br/>Criterion validation and timing<br/>Linux x86-64 and ARM64"]
-    manual --> coverage["ci-coverage.yml<br/>Clean coverage artifacts<br/>Instrumented workspace tests with CARGO_INCREMENTAL=1"]
+    manual --> coverage["ci-coverage.yml<br/>Clean coverage artifacts<br/>Std workspace tests plus no_std unit/API tests<br/>CARGO_INCREMENTAL=1"]
     coverage --> coverageGate["Print summary and enforce 100% function coverage"]
     coverageGate --> coverageReport["Always render and upload HTML report"]
     manual --> miri["ci-miri.yml<br/>Miri retained-storage checks"]

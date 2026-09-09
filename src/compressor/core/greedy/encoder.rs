@@ -10,6 +10,9 @@
 //! encoder was built, so nothing about the machine can reach a decision that
 //! shows up in the output.
 
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
 use crate::compressor::core::dispatch::{self, GreedyInput, Kernels};
 use fearless_simd::Level;
 
@@ -89,11 +92,13 @@ pub(crate) struct GreedyEncoder {
 
 impl GreedyEncoder {
     /// Installs fragment-only kernels when constructing an independent worker.
+    #[cfg(not(feature = "no_std"))]
     pub(crate) fn select_fragment_kernels(&mut self, level: Level) {
         self.kernels = dispatch::select_independent(level);
     }
 
     /// Resets the header and seeds only this segment's literal context/history.
+    #[cfg(not(feature = "no_std"))]
     pub(crate) fn begin_fragment(&mut self, prefix: &[u8]) -> BrotliResult<()> {
         self.last_bytes = 0;
         self.last_bytes_bits = 0;
@@ -106,6 +111,7 @@ impl GreedyEncoder {
     }
 
     /// Confirms the flush left no pending partial byte.
+    #[cfg(not(feature = "no_std"))]
     pub(crate) const fn fragment_aligned(&self) -> bool {
         self.last_bytes_bits == 0
     }
@@ -221,7 +227,7 @@ impl GreedyEncoder {
         // Clean the match finder before the window it read from is dropped:
         // the sweep hashes the very bytes the previous stream stored, and they
         // are still where that stream left them.
-        match std::mem::replace(&mut self.cleanup, Cleanup::Nothing) {
+        match ::core::mem::replace(&mut self.cleanup, Cleanup::Nothing) {
             Cleanup::Replay(input_size) => {
                 self.matcher
                     .prepare(true, input_size, self.ringbuffer.buffer(), true);
@@ -261,7 +267,7 @@ impl GreedyEncoder {
     ///
     /// Returns [`BrotliCompressError::BufferOverflow`] when the scratch buffer
     /// proved too small, which would indicate a bug in the size bound.
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     #[cfg(test)]
     pub(crate) fn encode_block(&mut self, input: &[u8], is_last: bool) -> BrotliResult<&[u8]> {
         debug_assert!(!self.finished);
@@ -280,7 +286,7 @@ impl GreedyEncoder {
     ///
     /// Returns [`BrotliCompressError::BufferOverflow`] when the scratch buffer
     /// proved too small, which would indicate a bug in the size bound.
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     pub(crate) fn encode_block_with(
         &mut self,
         input: &[u8],
@@ -314,7 +320,7 @@ impl GreedyEncoder {
     ///
     /// Returns [`BrotliCompressError::BufferOverflow`] when the scratch buffer
     /// proved too small, which would indicate a bug in the size bound.
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     pub(crate) fn flush_block(
         &mut self,
         input: &[u8],
@@ -593,7 +599,7 @@ impl GreedyEncoder {
     /// Sets the matcher up and hands it the block boundary positions.
     ///
     /// Mirrors `InitOrStitchToPreviousBlock`.
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     fn prepare_matcher(&mut self, position: usize, input_size: usize, is_last: bool) {
         let data = self.ringbuffer.buffer();
         let mask = self.ringbuffer.mask();
@@ -816,7 +822,12 @@ mod tests {
 
     fn encoder(quality: QualityLevel, size_hint: usize) -> GreedyEncoder {
         let params = CompressParams::new(quality, WindowBits::DEFAULT);
-        GreedyEncoder::new(Level::new(), &params, size_hint).expect("supported quality")
+        GreedyEncoder::new(
+            Level::try_detect().unwrap_or_else(Level::baseline),
+            &params,
+            size_hint,
+        )
+        .expect("supported quality")
     }
 
     /// Compresses `data` in blocks and returns the whole stream.
@@ -940,7 +951,11 @@ mod tests {
         for quality in [QualityLevel::Q3, QualityLevel::Q4, QualityLevel::Q5] {
             let params = CompressParams::new(quality, WindowBits::DEFAULT);
             let mut streams = Vec::new();
-            for level in [Level::new(), Level::baseline(), Level::fallback()] {
+            for level in [
+                Level::try_detect().unwrap_or_else(Level::baseline),
+                Level::baseline(),
+                Level::fallback(),
+            ] {
                 let mut encoder =
                     GreedyEncoder::new(level, &params, data.len()).expect("supported quality");
                 let limit = encoder.block_size_limit();

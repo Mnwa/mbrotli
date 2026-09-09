@@ -8,6 +8,7 @@ pub(crate) mod bound;
 pub(crate) mod dispatch;
 pub(crate) mod driver;
 pub(crate) mod fast;
+#[cfg(not(feature = "no_std"))]
 pub(crate) mod fragment;
 pub(crate) mod greedy;
 pub(crate) mod hq;
