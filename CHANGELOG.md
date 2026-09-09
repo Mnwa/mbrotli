@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Add an AFL C-encoder-to-Rust-decoder round-trip target with one-shot and
+  streaming checks, shared encoder seeds, Q0–Q11 regression coverage, and
+  base/experimental campaigns. Extend small parameter seed headers to Q5–Q11
+  and add arbitrary-byte decoder seeds with panic/progress regression checks.
+
 - Align the crate-level API guide with the README, covering both codecs, memory
   reuse, reader/writer adapters, parallel compression, decoder limits, and features.
 

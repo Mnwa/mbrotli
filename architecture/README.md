@@ -26,7 +26,7 @@ and known gaps. For usage examples, start with the [user guide](../docs/README.m
 | [Serialized dictionaries](serialized-dictionary.md) | Experimental parsing, serialization, transforms, and resource limits. |
 | [Custom encoding and continuations](rfc9841-encoding.md) | Experimental static indexes, context combinations, and stream offsets. |
 | [Framing](framing.md) | Experimental resources, metadata, references, directory, and footer. |
-| [Fuzzing](fuzzing.md) | Isolated AFL package, stable and experimental target selection, input models, target oracles, campaign structure, and regression replay. |
+| [Fuzzing](fuzzing.md) | Isolated AFL package, stable and experimental target selection, input models, bidirectional C/Rust round-trip oracles, shared encoder seeds, campaign structure, and regression replay. |
 | [Continuous integration](ci.md) | Automatic checks, tag-triggered fuzz/Miri/ASan, API compatibility, feature-isolated AFL replay, cache boundaries, archived findings and function-coverage gating. |
 
 ## Module map

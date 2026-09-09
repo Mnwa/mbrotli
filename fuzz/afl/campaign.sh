@@ -1,8 +1,8 @@
 #!/bin/sh
 # Runs one AFL++ instance per fuzz target, for both feature configurations.
 #
-# The stable phase fuzzes the 21 stable targets from a --no-default-features
-# build. The experimental phase fuzzes all 23 targets, the stable ones
+# The stable phase fuzzes 22 targets from a --no-default-features
+# build. The experimental phase fuzzes 24 targets, the stable ones
 # included, from a --features experimental build: the feature reaches into the
 # encoder, so the two builds run different code even for the shared targets.
 # Every worker in a phase runs in parallel for the same fixed duration, from
@@ -13,7 +13,7 @@
 # The phases run one after the other by default, so each worker owns a hardware
 # thread. Set CAMPAIGN_PARALLEL=1 to run both phases at once: the campaign then
 # takes the duration of a single phase in wall clock, at the cost of
-# oversubscribing the host (44 workers) and the lower executions per second
+# oversubscribing the host (46 workers) and the lower executions per second
 # that follows.
 #
 # Run prepare-seeds.sh and minimise-seeds.sh first. Both builds are produced
@@ -55,7 +55,7 @@ export AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHE
 stable="q0_roundtrip q1_roundtrip q3_roundtrip q4_roundtrip q5_roundtrip q6_roundtrip \
 q7_roundtrip q8_roundtrip q9_roundtrip q10_roundtrip q11_roundtrip params_roundtrip \
 simd_equivalence differential_c streaming_equivalence output_capacity parameter_parsing \
-large_window dictionary compressor_lifecycle parallel"
+large_window dictionary compressor_lifecycle parallel decode_roundtrip"
 experimental="$stable serialized_dictionary framing"
 
 seeds_for() {
@@ -72,7 +72,7 @@ seeds_for() {
 build() {
     config=$1
     features=$2
-    if [ ! -x "target/$config/release/differential_c" ]; then
+    if [ ! -x "target/$config/release/differential_c" ] || [ ! -x "target/$config/release/decode_roundtrip" ]; then
         cargo afl build --release --no-default-features $features --target-dir "target/$config"
     fi
 }

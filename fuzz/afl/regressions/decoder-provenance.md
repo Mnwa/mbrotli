@@ -34,3 +34,11 @@ same-process calls; the six experimental and five base 60-second fork-mode
 campaigns completed with 100% stability and no saved crashes/hangs. The cause
 of the original persistent events remains unresolved. See
 `architecture/decompressor-compatibility.md` for exact executions and limitations.
+
+`arbitrary-8.bin`, `arbitrary-32.bin`, and `arbitrary-256.bin` in `decompress`
+and `decode_streaming` are synthetic arbitrary bytes, with no encoder header or
+pre-compression step. They were generated sequentially with xorshift64 shifts
+13/7/17, initial state `0x9e3779b97f4a7c15`, taking bits 32–39 after each update.
+These seeds exercise error returns without requiring successful decoding; AFL
+mutates them directly. The focused arbitrary-byte test replays sizes 0 through
+4096 on every available host backend using the same deterministic PRNG.

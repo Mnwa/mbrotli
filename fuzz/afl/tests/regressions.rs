@@ -13,9 +13,15 @@ use std::path::{Path, PathBuf};
 
 /// Returns the `.bin` inputs committed for one target, in a stable order.
 fn inputs_for(target: &str) -> Vec<PathBuf> {
+    // Both directions consume the encoder's common parameter header + payload.
+    let corpus = if target == "decode_roundtrip" {
+        "params_roundtrip"
+    } else {
+        target
+    };
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("regressions")
-        .join(target);
+        .join(corpus);
     let entries = fs::read_dir(&dir).unwrap_or_else(|error| panic!("{}: {error}", dir.display()));
 
     let mut paths: Vec<PathBuf> = entries
@@ -24,6 +30,62 @@ fn inputs_for(target: &str) -> Vec<PathBuf> {
         .collect();
     paths.sort();
     paths
+}
+
+#[test]
+fn c_encoded_payloads_roundtrip_at_every_quality_on_each_host_backend() {
+    for level in mbrotli_afl::host_levels() {
+        let context = Context {
+            level,
+            levels: vec![level],
+        };
+        for quality in 0..12 {
+            for window in [0, 14] {
+                for mode in 0..3 {
+                    let mut input = vec![quality, window, 0, mode, 0, 0];
+                    input.extend_from_slice(b"The quick brown fox jumps over the lazy dog. ");
+                    input.extend_from_slice(&[0, 255, 128, 0, 1, 2, 3]);
+                    mbrotli_afl::decode_targets::decode_roundtrip(&context, &input);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn c_to_rust_roundtrip_handles_empty_short_and_capped_payloads() {
+    let context = Context::default();
+    for input in [&[][..], &[11], &[11, 14, 0, 0, 0, 0], &[0; 7]] {
+        mbrotli_afl::decode_targets::decode_roundtrip(&context, input);
+    }
+    for length in [64 * 1024, 64 * 1024 + 1, mbrotli_afl::MAX_PAYLOAD + 1] {
+        let mut input = vec![11, 14, 0, 2, 24, 255];
+        input.extend((0..length).map(|index| (index * 37) as u8));
+        mbrotli_afl::decode_targets::decode_roundtrip(&context, &input);
+    }
+}
+
+#[test]
+fn arbitrary_decoder_bytes_do_not_panic_on_any_host_backend() {
+    for level in mbrotli_afl::host_levels() {
+        let context = Context {
+            level,
+            levels: vec![level],
+        };
+        // Fixed PRNG state keeps arbitrary-byte failures reproducible in replay.
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        for length in [0, 1, 2, 3, 7, 31, 256, 4096] {
+            let mut input = Vec::with_capacity(length);
+            for _ in 0..length {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                input.push((state >> 32) as u8);
+            }
+            mbrotli_afl::decode_targets::decompress(&context, &input);
+            mbrotli_afl::decode_targets::decode_streaming(&context, &input);
+        }
+    }
 }
 
 #[test]

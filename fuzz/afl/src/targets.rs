@@ -27,10 +27,11 @@ pub type TargetFn = fn(&Context, &[u8]);
 
 /// Every target enabled by this build's features, addressable by its binary name.
 ///
-/// `tests/regressions.rs` walks `regressions/<name>/` and replays each file
-/// through the matching body, so adding a target here is all it takes to give
-/// it a regression corpus.
+/// `tests/regressions.rs` replays `regressions/<name>/` through each body,
+/// with `decode_roundtrip` sharing the `params_roundtrip` corpus. Every
+/// registered target must have a nonempty corpus.
 pub const TARGETS: &[(&str, TargetFn)] = &[
+    ("decode_roundtrip", crate::decode_targets::decode_roundtrip),
     ("decompress", crate::decode_targets::decompress),
     (
         "decode_dictionary",

@@ -25,7 +25,7 @@ flowchart TD
     manual["Independent workflow_dispatch triggers"] --> fuzzSetup["ci-fuzz.yml: restore Cargo cache without target artifacts<br/>Force reinstall cargo-afl and build runtime"]
     fuzzSetup --> crashSetup["Configure direct core dumps on the disposable Ubuntu runner"]
     crashSetup --> seeds["Select target-specific seeds<br/>Lifecycle, framing and parallel use regressions"]
-    seeds --> fuzz["Eighteen ten-minute AFL campaigns<br/>Experimental matrix plus five base decoder targets"]
+    seeds --> fuzz["Twenty ten-minute AFL campaigns<br/>Experimental matrix plus six base decoder targets"]
     fuzz --> findings["Check saved crashes and hangs"]
     findings --> archive["Always archive existing findings as tar.gz<br/>Upload archive preserving AFL filenames"]
     manual --> bench["ci-benchmarks.yml<br/>Criterion validation and timing<br/>Linux x86-64 and ARM64"]
@@ -44,8 +44,9 @@ stable Rust on all three operating-system runners and Rust 1.89 on Linux
 x86-64. The separate AFL package keeps its lint checks and committed regression
 replay in this automatic workflow. Both Clippy and AFL replay run without
 default features, then with `experimental` enabled. Tag-triggered and manual fuzz
-campaigns build the full experimental matrix and repeat the five base decoder
-targets without experimental features.
+campaigns build the full experimental matrix and repeat the six base decoder
+targets without experimental features. `decode_roundtrip` uses the encoder's
+`seeds/params` in both profiles, covering generated valid C streams at Q0–Q11.
 
 The `semver` job uses `obi1kenobi/cargo-semver-checks-action@v2` to check only
 `mbrotli` against its latest published crates.io release, using stable Rust.

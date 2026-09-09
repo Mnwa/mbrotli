@@ -145,6 +145,7 @@ target that can reach the validating conversions and the large-window refusal.
 | `q9_roundtrip` | payload | same, at quality 9 |
 | `q10_roundtrip` | payload | same, at quality 10 |
 | `q11_roundtrip` | payload | same, at quality 11 |
+| `decode_roundtrip` | shared encoder header | independent C compression, exact native decoding and streaming equivalence; plaintext capped at 64 KiB |
 | `params_roundtrip` | header | bound, round-trip, and that a reused compressor, a second call on it and a fresh one all agree, over every legal setting |
 | `simd_equivalence` | header | every distinct host backend emits identical bytes |
 | `differential_c` | header | byte identity with Google Brotli v1.2.0 streaming FINISH configured with the same quality, window, mode, block size, size hint, distance layout and context setting, including empty input |
@@ -219,7 +220,8 @@ stateDiagram-v2
 ```
 
 `tests/regressions.rs` walks the `TARGETS` registry, and for each entry replays
-every `.bin` file under `regressions/<name>/` through that target's body. It
+every `.bin` file under `regressions/<name>/` through that target's body.
+`decode_roundtrip` aliases the encoder's `regressions/params_roundtrip` corpus. It
 checks that experimental targets are registered exactly when their feature is
 enabled. CI and local completion checks run Clippy and `cargo afl test` both
 with `--no-default-features` and with
@@ -237,12 +239,14 @@ vendored submodule at `brotli-ffi/vendor/brotli/tests/testdata`, and
 `minimise-seeds.sh` reduces each corpus with `cargo afl cmin`, keeping the
 unminimised original alongside as `seeds/*.raw`. `seeds/generic` is the raw
 test data (24 files, minimised to 21); `seeds/params` is the same files behind
-a parameter header (127, minimised to 85 — most headers reach the same code);
+a parameter header (historically 127, minimised to 85; the generator now also
+includes Q5–Q11 headers for small inputs);
 `seeds/dictionary` is each parameter seed behind two more bytes, at four
 attachment counts (0, 1, 15, 16 — the refused-empty path, one dictionary, the
 format's limit and one past it) crossed with a generous and an impossible
-budget (1016 files, minimised to 90). `seeds/large_window` reduces to 101 of
-its 508.
+budget (historically 1016 files, minimised to 90). `seeds/large_window`
+historically reduced to 101 of 508. Those counts predate the Q5–Q11 header
+expansion; current counts depend on the generated and minimized corpus.
 
 `seeds/serialized` is the exception: RFC 9841 dictionary streams have no
 counterpart in the upstream test data, so the seeds are copies of the committed
@@ -266,10 +270,11 @@ forkserver timeouts during corpus minimization. It measures coverage with the
 
 ## Campaign structure
 
-`campaign.sh` is the whole-suite campaign: one AFL++ worker per target per
+`campaign.sh` runs encoder targets plus `decode_roundtrip`: one AFL++ worker per
+target per
 feature configuration, each with its own seed corpus and output directory, all
 bounded by the same wall-clock duration and a fixed execution timeout. The
-`experimental` feature reaches into the encoder, so the 21 stable targets are
+`experimental` feature reaches into the encoder, so its 22 stable targets are
 fuzzed twice — once from each build — and the two experimental-only targets
 once. The builds occupy separate target directories, because the shared
 binaries have the same names.
@@ -281,10 +286,10 @@ flowchart TD
     Builds["cargo afl build --release<br/>target/stable, target/experimental"] --> Choice
     Choice{"CAMPAIGN_PARALLEL"}
     Choice -->|"unset: phases in sequence,<br/>one thread per worker"| Stable
-    Choice -->|"1: phases together,<br/>44 workers oversubscribed"| Both
-    Stable["stable phase: 21 workers"] --> Experimental["experimental phase: 23 workers"]
+    Choice -->|"1: phases together,<br/>46 workers oversubscribed"| Both
+    Stable["stable phase: 22 workers"] --> Experimental["experimental phase: 24 workers"]
     Experimental --> Findings
-    Both["stable 21 + experimental 23"] --> Findings
+    Both["stable 22 + experimental 24"] --> Findings
     Findings["findings/&lt;root&gt;/&lt;build&gt;/&lt;target&gt;<br/>queue, crashes, hangs, fuzzer_stats"] --> Triage["tmin → regressions/ → cargo afl test"]
 ```
 
@@ -339,7 +344,7 @@ absolute offsets and length checks under the same decode/determinism oracle.
 
 ## Native decoder boundaries
 
-`decode_targets` adds `decompress`, `decode_streaming`, `decode_dictionary`,
+`decode_targets` adds `decompress`, `decode_roundtrip`, `decode_streaming`, `decode_dictionary`,
 `decode_lifecycle`, and `decode_io_limits` in the base profile, with
 `decode_serialized` gated at binary, body and registry levels by `experimental`.
 The first target compares independent C results and exact member consumption;
@@ -364,3 +369,54 @@ C-unsupported wide windows. Resource refusal is not treated as a format verdict.
 against prebuilt binaries and fails on saved crashes/hangs. Build the matching
 profile first. Decoder fixtures and upstream seeds are described in
 `fuzz/afl/regressions/decoder-provenance.md` and the decoder compatibility report.
+
+### C encoder to native decoder round-trip
+
+`decode_roundtrip` reuses the encoder's `decode_case` six-byte parameter header
+and `seeds/params` corpus. Byte zero selects one quality with `% 12`; the small
+parameter seeds include Q0–Q11. Each iteration compresses at one quality, not
+all twelve. Windows 10–24, mode, block size, literal context and distance settings
+use the same legal configuration mapping as the encoder targets. Plaintext is
+capped at 64 KiB before calling `c_compress_with`, whose size hint uses that
+actual capped length.
+
+The independent C streaming encoder produces a valid stream; a fresh native
+`Decompressor` using the context's already-selected backend must return the
+exact plaintext. Every decoding error is a failure here, including resource
+refusal: these generated inputs must fit the 64 KiB output and 8 MiB workspace
+budgets. The same compressed bytes also reach `decode_streaming`, which checks
+chunked equivalence, exact consumption, cumulative progress and termination.
+Encoder state and decoder state are owned by the iteration; no state survives
+between fuzz inputs, and no production API or SIMD dispatch boundary changes.
+
+```mermaid
+flowchart LR
+    Input[encoder seeds/params or AFL mutation] --> Header[decode_case: Q0–Q11 and legal settings]
+    Header --> Cap[plaintext capped at 64 KiB]
+    Cap --> C[independent C encoder through FFI]
+    C --> Rust[native one-shot decoder: selected host backend]
+    Cap --> Equal[assert exact plaintext equality]
+    Rust --> Equal
+    C --> Stream[existing chunked decoder oracle]
+    Stream --> Progress[assert equivalence and bounded progress]
+```
+
+Regression replay aliases this target to `regressions/params_roundtrip`, so it
+shares the encoder's committed inputs without duplicating files. Focused tests
+exercise every quality, all modes, both standard-window endpoints and every
+available host backend, plus empty, short and capped payloads. CI and
+`scripts/fuzz_decoder.sh` run this target in base and experimental profiles;
+`fuzz/afl/campaign.sh` includes it in both of its phases. Generate `seeds/params`
+with `prepare-seeds.sh` before running the decoder campaign script.
+
+Known gaps: generated streams use ordinary standard windows and no attached
+dictionaries. Arbitrary-byte and dictionary decoder targets remain responsible
+for malformed streams and attachment boundaries. AFL mutation does not guarantee
+equal time on each quality, and corpus minimization may drop quality-specific
+seeds; deterministic tests retain the full quality matrix.
+
+The arbitrary-byte `decompress` and `decode_streaming` corpora also contain
+8/32/256-byte deterministic pseudorandom seeds, consumed directly with no
+compression step. Errors from malformed input are expected; panics and oracle
+violations fail replay. A focused test feeds arbitrary byte arrays of lengths
+0, 1, 2, 3, 7, 31, 256 and 4096 through both targets on every host backend.

@@ -16,6 +16,35 @@ fn config() -> DecoderConfig {
     )
 }
 
+/// C-encoded payloads at qualities 0–11 must decode exactly, including streaming.
+///
+/// Uses the common six-byte parameter header and caps plaintext at 64 KiB so
+/// successful decoding fits the same budgets as the arbitrary-byte targets.
+/// One input selects one quality; seeds and regression inputs are shared with
+/// the encoder's parameterized targets.
+///
+/// # Panics
+///
+/// Panics if C compression fails, Rust rejects the valid stream, the plaintext
+/// differs, or chunked decoding violates its progress/equivalence oracle.
+pub fn decode_roundtrip(ctx: &Context, input: &[u8]) {
+    let case = crate::decode_case(input);
+    let payload = &case.data[..case.data.len().min(MAX_OUTPUT)];
+    let compressed = crate::c_compress_with(&case.config, payload);
+    let mut decoder = Decompressor::builder(config())
+        .with_backend(ctx.level)
+        .build()
+        .unwrap();
+    let actual = decoder
+        .decompress(&compressed)
+        .expect("Rust must decode the bounded C-encoded payload");
+    assert_eq!(
+        actual, payload,
+        "C-to-Rust round-trip changed the plaintext"
+    );
+    decode_streaming(ctx, &compressed);
+}
+
 /// Arbitrary compressed bytes reach the grammar directly; C success must not
 /// become a Rust format failure. RFC windows beyond C's range are Rust-only.
 pub fn decompress(ctx: &Context, data: &[u8]) {

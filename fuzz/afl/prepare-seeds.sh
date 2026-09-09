@@ -70,7 +70,7 @@ for path in "$testdata"/*; do
     count=$((count + 1))
 done
 
-# Parameter headers, one per field: byte 0 the quality (index into the five
+# Parameter headers, one per field: byte 0 the quality (index into the twelve
 # implemented ones), byte 1 the window size (10 + value % 15), byte 2 the chunk
 # size (1 << (value % 18)), byte 3 the mode and the context modelling flag,
 # byte 4 the block size, byte 5 the distance layout.
@@ -79,7 +79,9 @@ done
 # the corpus stays small enough for the fuzzer to cycle through quickly.
 small_bytes=8192
 full_headers="0:0:0:0:0:0 1:8:12:0:0:0 2:12:17:0:0:0 2:14:0:1:18:5 \
-3:0:0:0:0:0 3:12:12:4:0:9 4:8:12:2:20:0 4:14:17:0:0:0"
+3:0:0:0:0:0 3:12:12:4:0:9 4:8:12:2:20:0 4:14:17:0:0:0 \
+5:12:12:0:0:0 6:12:12:0:0:0 7:12:12:0:0:0 8:12:12:0:0:0 \
+9:12:12:0:0:0 10:12:12:0:0:0 11:12:12:0:0:0"
 large_headers="1:12:12:0:0:0 3:12:12:0:0:0 4:12:12:0:0:0"
 
 for path in "$generic"/*; do
