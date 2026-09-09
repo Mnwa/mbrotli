@@ -1,3 +1,4 @@
+#![cfg(feature = "compression")]
 //! Allocation-backed regression for the public preparation peak budget.
 #![cfg(feature = "experimental")]
 

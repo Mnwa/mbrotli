@@ -21,9 +21,11 @@ impl Prefixes {
         let mut result = Self::default();
         let mut source_bytes = 0u64;
         for attachment in attachments {
+            #[cfg(not(feature = "experimental"))]
+            let DictionaryAttachment::Raw(source) = attachment;
+            #[cfg(feature = "experimental")]
             let source = match attachment {
                 DictionaryAttachment::Raw(source) => source,
-                #[cfg(feature = "experimental")]
                 DictionaryAttachment::Serialized(source) => source,
             };
             source_bytes = source_bytes

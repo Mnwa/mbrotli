@@ -1,3 +1,4 @@
+#![cfg(feature = "compression")]
 //! Round-trip tests against an independent RFC 7932 decoder.
 //!
 //! The decoder is Google's C implementation, pinned to the same v1.2.0 commit

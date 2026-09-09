@@ -1,3 +1,4 @@
+#![cfg(feature = "compression")]
 #![cfg(not(feature = "no_std"))]
 
 //! Headerless continuation streams, compared against the pinned C encoder.

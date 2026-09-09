@@ -1,3 +1,4 @@
+#![cfg(feature = "compression")]
 //! The encoder checked against Google Brotli's own test corpus.
 //!
 //! `brotli-ffi/vendor/brotli/tests/testdata` is the corpus the reference

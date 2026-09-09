@@ -12,11 +12,23 @@ caller-scheduled parallel compression.
 
 ## `no_std`
 
+The `compression` and `decompression` features are both enabled by default.
+To use only one codec, disable default features and select it explicitly:
+
+```toml
+# Decoder only; use "compression" instead for an encoder-only dependency.
+mbrotli = { version = "0.2", default-features = false, features = ["std", "decompression"] }
+```
+
+A disabled codec's module, types, dictionaries and I/O adapters are unavailable.
+Common window, backend and retention types remain available with either codec.
+Cargo features are additive: another dependency can enable either codec again.
+
 The opt-in `no_std` feature supports compression, decompression, incremental sessions, and
 prepared or decode-only dictionaries using `core` and `alloc`:
 
 ```toml
-mbrotli = { version = "0.2", default-features = false, features = ["no_std"] }
+mbrotli = { version = "0.2", default-features = false, features = ["no_std", "compression", "decompression"] }
 ```
 
 Supply a global allocator. I/O adapters, parallel compression, experimental
@@ -39,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 `decompress_into` appends to a reusable Vec and rolls back the append on error;
 `decompress_to_slice` uses caller storage. Sessions expose consumed/produced
 counts, `Process`/`Finish`, and precise member boundaries. Standard and extended
-windows, metadata, and RAW dictionaries are supported without feature gates.
+windows, metadata, and RAW dictionaries do not require `experimental`.
 Serialized/custom dictionaries require `experimental`. Reader/writer adapters
 are available under `mbrotli::io` when `no_std` is disabled.
 
@@ -67,7 +79,7 @@ Requires Rust 1.89 or later.
 
 ```toml
 [dependencies]
-mbrotli = "0.1"
+mbrotli = "0.2"
 ```
 
 ```rust
@@ -221,7 +233,7 @@ The experimental API may change in a patch release.
 
 ```toml
 [dependencies]
-mbrotli = { version = "0.1", features = ["experimental"] }
+mbrotli = { version = "0.2", features = ["experimental"] }
 ```
 
 The encoder is a port of Google's Brotli v1.2.0, pinned in the repository's

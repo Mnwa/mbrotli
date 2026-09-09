@@ -1,3 +1,4 @@
+#![cfg(feature = "compression")]
 //! Byte-for-byte differential tests against the pinned C encoder.
 //!
 //! Every quality is a port of `google/brotli` v1.2.0 (commit `028fb5a`), so

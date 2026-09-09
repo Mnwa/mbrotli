@@ -3,7 +3,7 @@
 `no_std` is opt-in and disabled by default. The default `std` feature enables
 standard-library support in `fearless_simd` and `thiserror`. To build for a target
 without `std`, depend on `mbrotli` with `default-features = false` and
-`features = ["no_std"]`. The library uses `#![no_std]` and `extern crate alloc`;
+`features = ["no_std", "compression", "decompression"]` (or select just one codec). The library uses `#![no_std]` and `extern crate alloc`;
 applications supply a global allocator. This is not allocation-free compression.
 
 The `no_std` feature enables the optional `libm` dependency and
@@ -36,7 +36,7 @@ flowchart TD
 
 ## API and ownership
 
-The compressor, configuration, high-level errors, retained workspace, slice and
+When `compression` is enabled, the compressor, configuration, high-level errors, retained workspace, slice and
 vector output, incremental sessions, and prepared dictionaries remain available.
 Experimental serialized dictionaries and stream offsets also remain available
 with `experimental`. Their ownership, state transitions, progress accounting,
@@ -95,7 +95,9 @@ allocator and the independent C decoder.
 
 ## Native decoding
 
-The alloc-only surface also includes `Decompressor`, `DecoderSession`,
+With `decompression`, the alloc-only surface also includes `Decompressor`, `DecoderSession`,
 `DecodeDictionary` and RAW dictionary views. Serialized/custom mappings follow
 the same experimental gate in std and alloc profiles. See [decoder mechanics](decompressor.md)
 and the four-profile [compatibility report](decompressor-compatibility.md).
+
+Codec selection is independent of `no_std`; see [codec features](codec-features.md).

@@ -1,3 +1,4 @@
+#![cfg(feature = "compression")]
 //! Thread-local allocator accounting checks the public retention contract.
 
 use mbrotli::{Compressor, EncoderConfig, Quality, RetentionPolicy};

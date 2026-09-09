@@ -1,3 +1,4 @@
+#![cfg(feature = "compression")]
 #![cfg(not(feature = "no_std"))]
 
 //! The writer must lose nothing and duplicate nothing when the sink misbehaves.

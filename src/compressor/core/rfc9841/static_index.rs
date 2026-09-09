@@ -64,6 +64,7 @@ fn check(bytes: usize, limit: u64) -> Result<(), SharedBrotliError> {
 impl StaticIndex {
     /// Reads the effective prepared representation without consulting indexes or
     /// rebuilding the caller's original attachment recipe.
+    #[cfg(feature = "decompression")]
     pub(crate) fn decode_word(
         &self,
         mut address: u64,

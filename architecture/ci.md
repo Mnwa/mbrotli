@@ -164,3 +164,10 @@ graph TD
     Release[tag or workflow dispatch] --> Heavy[far history and >4 GiB counters]
     Fuzz[base + experimental campaigns] --> Registry[committed regression replay]
 ```
+
+The ordinary check job also runs `scripts/check_codec_features.py`: isolated
+production consumers cover all codec combinations in std/no_std and experimental
+modes, including imports rejected when the owning codec is disabled. Existing
+no_std jobs explicitly select both codec features; the heavy decoder workflow
+selects only `decompression` so its fixtures exercise encoder-independent builds.
+See the [codec feature specification](codec-features.md) for the gate diagram.

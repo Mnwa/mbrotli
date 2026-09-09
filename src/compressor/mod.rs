@@ -15,7 +15,6 @@
 //! [`EncoderSession`] is the state machine underneath all of it, and the
 //! `io` adapters (available without `no_std`) are conveniences over that.
 
-mod backend;
 mod config;
 pub(crate) mod core;
 mod encoder;
@@ -32,12 +31,12 @@ pub mod io;
 #[cfg(not(feature = "no_std"))]
 pub mod parallel;
 
-pub use backend::Backend;
+pub use crate::{Backend, RetentionPolicy};
 pub use config::{
     BlockBits, BlockSize, CompressionMode, ConfigError, DistanceParams, EncoderConfig,
     LiteralContextMode, Quality, SizeOverflow, Window, WindowEncoding,
 };
-pub use encoder::{Compressor, CompressorBuilder, RetentionPolicy};
+pub use encoder::{Compressor, CompressorBuilder};
 pub use error::EncodeError;
 pub use session::{EncoderSession, EncoderStatus, InputSize, Operation, Progress, StreamConfig};
 

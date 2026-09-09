@@ -151,11 +151,11 @@ cargo clippy --workspace --all-targets --features experimental --locked -- -D wa
 cargo test --workspace --all-features --locked
 cargo test --release --workspace --locked
 cargo test --release --workspace --features experimental --locked
-cargo test --release --workspace --no-default-features --features no_std --locked
-cargo test --release --workspace --no-default-features --features no_std,experimental --locked
+cargo test --release --workspace --no-default-features --features compression,decompression,no_std --locked
+cargo test --release --workspace --no-default-features --features compression,decompression,no_std,experimental --locked
 python3 scripts/check_decoder_features.py
-cargo check --lib --no-default-features --features no_std --target thumbv7em-none-eabi --locked
-cargo check --lib --no-default-features --features no_std,experimental --target thumbv7em-none-eabi --locked
+cargo check --lib --no-default-features --features compression,decompression,no_std --target thumbv7em-none-eabi --locked
+cargo check --lib --no-default-features --features compression,decompression,no_std,experimental --target thumbv7em-none-eabi --locked
 cargo package --allow-dirty --offline
 ```
 

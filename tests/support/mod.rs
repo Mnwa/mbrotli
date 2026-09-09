@@ -7,6 +7,7 @@
 #![allow(dead_code, reason = "each integration test uses a different subset")]
 
 use google_brotli_ffi as ffi;
+#[cfg(feature = "compression")]
 use mbrotli::{Compressor, EncoderConfig, Quality, Window};
 use std::ffi::c_int;
 
@@ -490,6 +491,7 @@ pub fn c_decompress_large_window(input: &[u8], expected_size: usize) -> Option<V
 }
 
 /// Returns the numeric quality of a level, for the C side.
+#[cfg(feature = "compression")]
 pub fn quality_number(quality: Quality) -> c_int {
     c_int::from(quality.get())
 }
@@ -499,6 +501,7 @@ pub fn quality_number(quality: Quality) -> c_int {
 /// # Panics
 ///
 /// Panics when `lgwin` is outside the range the Brotli format allows.
+#[cfg(feature = "compression")]
 pub fn config(quality: Quality, lgwin: u8) -> EncoderConfig {
     EncoderConfig::default()
         .with_quality(quality)
@@ -510,6 +513,7 @@ pub fn config(quality: Quality, lgwin: u8) -> EncoderConfig {
 /// # Panics
 ///
 /// Panics when the configuration is one no compressor can be built for.
+#[cfg(feature = "compression")]
 pub fn encoder(quality: Quality, lgwin: u8) -> Compressor {
     Compressor::new(config(quality, lgwin)).expect("a legal configuration")
 }
@@ -519,6 +523,7 @@ pub fn encoder(quality: Quality, lgwin: u8) -> Compressor {
 /// # Panics
 ///
 /// Panics when the configuration is one no compressor can be built for.
+#[cfg(feature = "compression")]
 pub fn encoder_on(level: mbrotli::Backend, quality: Quality, lgwin: u8) -> Compressor {
     Compressor::builder(config(quality, lgwin))
         .with_backend(level)
@@ -527,9 +532,11 @@ pub fn encoder_on(level: mbrotli::Backend, quality: Quality, lgwin: u8) -> Compr
 }
 
 /// The two qualities the fast encoder implements.
+#[cfg(feature = "compression")]
 pub const FAST_QUALITIES: [Quality; 2] = [Quality::Q0, Quality::Q1];
 
 /// The eight qualities the greedy encoder implements.
+#[cfg(feature = "compression")]
 pub const GREEDY_QUALITIES: [Quality; 8] = [
     Quality::Q2,
     Quality::Q3,
@@ -542,6 +549,7 @@ pub const GREEDY_QUALITIES: [Quality; 8] = [
 ];
 
 /// The two qualities the high-quality encoder implements.
+#[cfg(feature = "compression")]
 pub const HQ_QUALITIES: [Quality; 2] = [Quality::Q10, Quality::Q11];
 
 /// Largest input the high-quality qualities are exercised over by default.
@@ -560,6 +568,7 @@ pub const HQ_INPUT_CAP: usize = 1 << 16;
 /// coverage to the tests built for it: `vendor_corpus.rs`'s multi-fragment
 /// case, and `streaming.rs`'s chunk-boundary cases, both of which still run
 /// these qualities over inputs spanning several blocks.
+#[cfg(feature = "compression")]
 pub fn prefix_for(quality: Quality, data: &[u8]) -> &[u8] {
     if quality >= Quality::Q10 {
         &data[..data.len().min(HQ_INPUT_CAP)]
@@ -569,6 +578,7 @@ pub fn prefix_for(quality: Quality, data: &[u8]) -> &[u8] {
 }
 
 /// Every quality this crate implements.
+#[cfg(feature = "compression")]
 pub const IMPLEMENTED_QUALITIES: [Quality; 12] = [
     Quality::Q0,
     Quality::Q1,

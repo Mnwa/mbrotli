@@ -1,3 +1,4 @@
+#![cfg(feature = "compression")]
 //! The RFC 9841 serialized shared dictionary format, end to end.
 //!
 //! Behind the `experimental` feature, which also builds the vendored C library
@@ -363,6 +364,7 @@ fn a_stream_the_reference_leaves_a_tail_on_is_refused_here() {
 }
 
 #[test]
+#[cfg(feature = "decompression")]
 fn every_transform_operation_matches_the_reference() {
     let operations = [
         TransformOperation::Identity,
@@ -857,6 +859,7 @@ fn long_transformed_words_keep_their_base_length_in_hq_commands() {
     }
 }
 
+#[cfg(any(feature = "decompression", not(feature = "no_std")))]
 fn c_encode_custom(dictionary: &[u8], input: &[u8], quality: mbrotli::Quality) -> Vec<u8> {
     use google_brotli_ffi as ffi;
     let mut output = vec![0; input.len() * 2 + 4096];
@@ -913,6 +916,7 @@ fn c_encode_custom(dictionary: &[u8], input: &[u8], quality: mbrotli::Quality) -
 }
 
 #[test]
+#[cfg(feature = "decompression")]
 fn decode_only_and_prepared_custom_dictionaries_accept_c_streams() {
     use mbrotli::dictionary::{DecodeDictionary, DecodeDictionaryLimits, DictionaryAttachment};
     use mbrotli::{DecoderConfig, Decompressor, Quality};
@@ -948,6 +952,7 @@ fn decode_only_and_prepared_custom_dictionaries_accept_c_streams() {
 }
 
 #[test]
+#[cfg(feature = "decompression")]
 fn decode_dictionary_parser_rejects_truncations_and_obeys_c_replacement_rules() {
     use mbrotli::dictionary::{
         DecodeDictionary, DecodeDictionaryError, DecodeDictionaryLimits, DictionaryAttachment,
@@ -1190,6 +1195,7 @@ fn a_combination_naming_a_missing_list_is_refused() {
 }
 
 #[test]
+#[cfg(feature = "decompression")]
 fn custom_dictionary_continuations_and_concatenation_preserve_context() {
     use google_brotli_ffi as ffi;
     use mbrotli::dictionary::{DecodeDictionary, DecodeDictionaryLimits, DictionaryAttachment};

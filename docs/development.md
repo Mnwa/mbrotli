@@ -86,3 +86,10 @@ Routine CI runs formatting, lint, documentation, packaging, tests, and AFL
 regression replay. Coverage, Miri, sanitizer, fuzz campaigns, and benchmarks are
 separate manual workflows. See [CI mechanics](../architecture/ci.md) and
 [benchmark commands](benchmarking.md).
+
+Codec feature isolation is checked with `python3 scripts/check_codec_features.py`.
+It compiles independent consumers for all codec combinations in std and no_std,
+with and without experimental APIs, including imports that must fail. Run
+`python3 scripts/check_decoder_features.py` for prepared/decode-only dictionary
+interoperability gates. When disabling defaults, explicitly select each codec
+under test alongside `std` or `no_std`.

@@ -1,3 +1,4 @@
+#![cfg(feature = "compression")]
 //! Randomised property tests over structured inputs.
 //!
 //! The generator is seeded deterministically, so a failure reproduces exactly.

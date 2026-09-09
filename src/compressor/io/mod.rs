@@ -8,8 +8,9 @@
 mod reader;
 mod writer;
 
+pub use crate::io::FinishError;
 pub use reader::{EncoderReader, EncoderReaderParts};
-pub use writer::{EncoderWriter, FinishError};
+pub use writer::EncoderWriter;
 
 use super::dictionary::PreparedDictionary;
 use super::encoder::Compressor;

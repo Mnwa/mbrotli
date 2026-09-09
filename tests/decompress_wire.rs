@@ -1,3 +1,4 @@
+#![cfg(feature = "decompression")]
 mod support;
 #[path = "decode_support/wire.rs"]
 mod wire;

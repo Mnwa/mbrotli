@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        features: ['std', 'std,experimental', 'no_std', 'no_std,experimental']
+        features: ['std,decompression', 'std,decompression,experimental', 'no_std,decompression', 'no_std,decompression,experimental']
     steps:
       - uses: actions/checkout@v4
         with:

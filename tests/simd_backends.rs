@@ -1,3 +1,4 @@
+#![cfg(feature = "compression")]
 //! Every available SIMD backend must produce the same bytes.
 //! Scalar equivalence is covered by private unit tests.
 //!

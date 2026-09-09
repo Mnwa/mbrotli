@@ -1,5 +1,10 @@
 # Compressor Subsystem
 
+The `compression` feature gates the entire compressor API and implementation.
+Shared backend, retention, window and I/O finish-error types live in private
+crate-root modules and retain compressor re-exports. See
+[codec features](codec-features.md) for the ownership and build boundaries.
+
 The std-only adapters and error conversions are omitted with `no_std`; serial
 compression and sessions remain available. See [feature boundaries](no-std.md).
 
@@ -624,7 +629,7 @@ graph LR
 | `tests/vendor_corpus.rs` | The same, over Google Brotli's own test data, including a multi-fragment 12 MiB input. |
 | `tests/roundtrip.rs` | Independent decoder round-trip, determinism between warm and cold compressors, and the compressed-size bound. |
 | `tests/simd_backends.rs` | Byte identity between the production backends the host supports. |
-| `src/compressor/backend.rs` unit tests | Private scalar versus every supported SIMD backend, across qualities, windows and vector boundaries. |
+| `src/backend.rs` unit tests | Private scalar versus every supported SIMD backend, across qualities, windows and vector boundaries. |
 | `tests/streaming.rs` | Chunk-size independence, agreement between writer, reader and session, one-shot equivalence when the size is declared, the zero-progress rule, and reader read-ahead recovery. |
 | `tests/flush.rs` | Flush semantics against the reference driven with `BROTLI_OPERATION_FLUSH`. |
 | `tests/writer_faults.rs` | The transactional proof: a scripted sink failing at **every** byte position of a q0, q1, q5, q9 and q11 stream, short writes of one to sixty-four bytes, `Interrupted`, `WouldBlock`, `Ok(0)`, a failing inner flush, a failing finish handing the writer back, and an abandoned writer. Every schedule has to yield exactly one copy of the one-shot stream. |

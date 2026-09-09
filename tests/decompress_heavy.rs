@@ -1,3 +1,4 @@
+#![cfg(feature = "decompression")]
 //! Reproducible heavy release checks: cargo test --release --test
 //! decompress_heavy -- --ignored --test-threads=1. Peak live history < 3 GiB.
 #[path = "decode_support/c_decoder.rs"]

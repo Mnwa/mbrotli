@@ -22,8 +22,8 @@ use alloc::vec::Vec;
 use super::core::rfc9841::context::{Budget, SharedContextInner};
 use super::shared::SharedBrotliError;
 
-mod decode;
-pub use decode::{
+#[cfg(feature = "decompression")]
+pub use crate::dictionary::{
     DecodeDictionary, DecodeDictionaryError, DecodeDictionaryLimits, DictionaryAttachment,
     DictionaryRef,
 };

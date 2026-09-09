@@ -1,3 +1,4 @@
+#![cfg(feature = "decompression")]
 //! Pure Rust fixture replay, also runnable under Miri without executing C FFI.
 use mbrotli::{DecodeOperation, DecodeStreamConfig, DecoderConfig, DecoderStatus, Decompressor};
 const FIXTURES: [(&[u8], &[u8]); 3] = [

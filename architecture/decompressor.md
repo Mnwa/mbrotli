@@ -1,19 +1,22 @@
 # Native decompressor
 
-The public `decompressor` module owns configuration, reusable decoder ownership,
+The `decompression` feature enables the public `decompressor` module, which owns configuration, reusable decoder ownership,
 operation sessions, typed errors, and synchronous adapters. Its private `core`
 owns wire parsing and regeneration. Production decoding uses safe Rust and
 `alloc`, without a C or third-party decoder dependency. `no_std` disables I/O
 adapters and profiling. Serialized/custom dictionaries require `experimental`;
 RAW prefixes, built-in words/transforms, large windows, and ordinary context maps
-do not.
+need only `decompression`. Shared window, backend and retention types remain
+available without the encoder. Prepared dictionary views additionally require
+`compression`; see [codec features](codec-features.md).
 
 ```mermaid
 graph TD
     API[decompressor: config, decoder, session, error] --> Core[private decompressor::core]
     IO[decompressor::io: reader / writer] --> API
     Facade[mbrotli::io] --> IO
-    Facade --> EncoderIO[compressor::io and the existing FinishError]
+    Facade --> Finish[private finish_error: shared FinishError]
+    Facade -->|compression enabled| EncoderIO[compressor::io]
     Core --> Bits[bits / header]
     Core --> Entropy[huffman / block / context_map]
     Core --> Regen[stream / distance / dictionary]

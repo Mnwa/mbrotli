@@ -32,6 +32,7 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
       - run: python3 scripts/check_decoder_features.py
+      - run: python3 scripts/check_codec_features.py
       - run: cargo package --allow-dirty
 
   no-std:
@@ -45,10 +46,10 @@ jobs:
         with:
           targets: thumbv7em-none-eabi
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --lib --no-default-features --features no_std --target thumbv7em-none-eabi
-      - run: cargo check --lib --no-default-features --features no_std,experimental --target thumbv7em-none-eabi
-      - run: cargo test --release --no-default-features --features no_std
-      - run: cargo test --release --no-default-features --features no_std,experimental
+      - run: cargo check --lib --no-default-features --features compression,decompression,no_std --target thumbv7em-none-eabi
+      - run: cargo check --lib --no-default-features --features compression,decompression,no_std,experimental --target thumbv7em-none-eabi
+      - run: cargo test --release --no-default-features --features compression,decompression,no_std
+      - run: cargo test --release --no-default-features --features compression,decompression,no_std,experimental
 
   semver:
     name: public API semver compatibility

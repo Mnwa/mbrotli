@@ -1,3 +1,4 @@
+#![cfg(feature = "compression")]
 //! Exercises the alloc-backed API with the library's std-only surface removed.
 #![cfg(feature = "no_std")]
 

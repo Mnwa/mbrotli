@@ -1,3 +1,4 @@
+#![cfg(feature = "compression")]
 #![cfg(not(feature = "no_std"))]
 
 //! RFC 9841 LZ77 prefix dictionaries, from the outside.

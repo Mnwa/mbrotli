@@ -2,7 +2,11 @@
 
 ## [Unreleased]
 
-- Run AFL fuzzing, Miri and AddressSanitizer workflows on every pushed tag,
+- Add independent `compression` and `decompression` features, both enabled by
+  default. Disabling either removes its public API and implementation while
+  retaining common configuration and dictionary types needed by the other codec.
+
+- Run AFL fuzzing, Miri and AddressSanitizer workflows on every pushed version tag,
   while retaining manual dispatch.
 - Add native Brotli decompression: reusable Vec/slice APIs, incremental sessions,
   concatenated members, exact-size validation, explicit resource budgets, and

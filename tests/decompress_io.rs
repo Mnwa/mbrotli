@@ -1,3 +1,4 @@
+#![cfg(feature = "decompression")]
 #![cfg(not(feature = "no_std"))]
 
 mod support;

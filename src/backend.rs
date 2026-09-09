@@ -13,10 +13,13 @@ use fearless_simd::Level;
 /// # Examples
 ///
 /// ```
+/// # #[cfg(feature = "compression")]
+/// # {
 /// use mbrotli::{Backend, Compressor, EncoderConfig};
 /// let mut compressor = Compressor::builder(EncoderConfig::default())
 ///     .with_backend(Backend::default()).build()?;
 /// assert!(!compressor.compress(b"payload")?.is_empty());
+/// # }
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Copy, Clone)]
@@ -133,7 +136,9 @@ impl Eq for Backend {}
 #[cfg(test)]
 mod tests {
     use super::Backend;
+    #[cfg(feature = "compression")]
     use crate::{Compressor, EncoderConfig, Quality, Window};
+    #[cfg(feature = "compression")]
     use alloc::vec::Vec;
 
     #[test]
@@ -164,6 +169,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "compression")]
     #[test]
     fn every_host_backend_matches_scalar_across_qualities_windows_and_boundaries() {
         let backends = Backend::available();

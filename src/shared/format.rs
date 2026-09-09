@@ -63,6 +63,7 @@ pub(crate) const CONTEXT_LUT_SIGNED: [u8; 512] = [
 /// The numeric values are what `BrotliStoreMetaBlock` writes into the header,
 /// so they are format, not implementation.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+#[cfg(feature = "compression")]
 pub(crate) enum ContextMode {
     /// Second-order model tuned for UTF-8 text (`CONTEXT_UTF8`).
     #[default]
@@ -71,6 +72,7 @@ pub(crate) enum ContextMode {
     Signed,
 }
 
+#[cfg(feature = "compression")]
 impl ContextMode {
     /// Returns the lookup table this mode computes contexts from.
     pub(crate) const fn lut(self) -> &'static [u8; 512] {
@@ -159,18 +161,21 @@ pub(crate) const PREFIX_CODE_RANGES: [(u32, u32); NUM_BLOCK_LEN_SYMBOLS] = [
 ];
 
 /// Two-context map over UTF-8 prefixes (`kStaticContextMapSimpleUTF8`).
+#[cfg(feature = "compression")]
 pub(crate) const STATIC_CONTEXT_MAP_SIMPLE_UTF8: [u32; 64] = [
     0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
 /// Three-context map over UTF-8 prefixes (`kStaticContextMapContinuation`).
+#[cfg(feature = "compression")]
 pub(crate) const STATIC_CONTEXT_MAP_CONTINUATION: [u32; 64] = [
     1, 1, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
 /// Number of contexts the complex static map distinguishes.
+#[cfg(feature = "compression")]
 pub(crate) const MAX_STATIC_CONTEXTS: usize = 13;
 
 /// Thirteen-context map over UTF-8 prefixes (`kStaticContextMapComplexUTF8`).
@@ -178,6 +183,7 @@ pub(crate) const MAX_STATIC_CONTEXTS: usize = 13;
 /// The rows group the source classes: special, line feed, space, punctuation,
 /// quotes, percent, opening and closing brackets, colons, full stop, greater
 /// than, digits, upper case and lower case.
+#[cfg(feature = "compression")]
 pub(crate) const STATIC_CONTEXT_MAP_COMPLEX_UTF8: [u32; 64] = [
     11, 11, 12, 12, //
     0, 0, 0, 0, //
@@ -197,7 +203,7 @@ pub(crate) const STATIC_CONTEXT_MAP_COMPLEX_UTF8: [u32; 64] = [
     6, 6, 6, 6, //
 ];
 
-#[cfg(test)]
+#[cfg(all(test, feature = "compression"))]
 mod tests {
     use super::*;
 

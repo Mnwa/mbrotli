@@ -1,3 +1,4 @@
+#![cfg(feature = "compression")]
 #![cfg(not(feature = "no_std"))]
 
 //! Byte-for-byte differential tests for qualities two to nine.

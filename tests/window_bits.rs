@@ -1,3 +1,4 @@
+#![cfg(feature = "compression")]
 //! Public API behaviour of [`Window`], its two headers and their bounds.
 
 use mbrotli::{Compressor, ConfigError, EncoderConfig, Quality, Window, WindowEncoding};

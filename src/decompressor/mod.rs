@@ -8,8 +8,9 @@
 //!
 //! A strict one-shot operation rejects trailing bytes and can reuse storage:
 //! ```
-//! use mbrotli::{Compressor, EncoderConfig, DecoderConfig, Decompressor};
-//! let compressed = Compressor::new(EncoderConfig::default())?.compress(b"hello")?;
+//! use mbrotli::{DecoderConfig, Decompressor};
+//! // An uncompressed Brotli meta-block containing "hello".
+//! let compressed = [0x0b, 0x02, 0x80, b'h', b'e', b'l', b'l', b'o', 0x03];
 //! let mut decoder = Decompressor::new(DecoderConfig::default())?;
 //! assert_eq!(decoder.decompress(&compressed)?, b"hello");
 //! assert_eq!(decoder.decompress(&compressed)?, b"hello");

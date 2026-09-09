@@ -1,3 +1,4 @@
+#![cfg(feature = "decompression")]
 #[path = "decode_support/c_encoder.rs"]
 pub mod c_encoder;
 mod support;
@@ -212,6 +213,7 @@ fn multiple_c_restarts_form_one_member() {
 
 #[cfg(not(feature = "no_std"))]
 #[test]
+#[cfg(feature = "compression")]
 fn assembled_parallel_encoder_output_decodes_as_one_member() {
     use mbrotli::compressor::parallel::{
         BatchConfig, ParallelCompressor, ParallelConfig, SegmentSize, TaskCount,

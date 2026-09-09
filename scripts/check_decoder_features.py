@@ -21,6 +21,7 @@ custom = '''pub fn custom(bytes: &[u8]) {
 }
 '''
 for name, features in [("base-std", ["std"]), ("experimental-std", ["std", "experimental"]), ("base-alloc", ["no_std"]), ("experimental-alloc", ["no_std", "experimental"])]:
+    features += ["compression", "decompression"]
     (consumer / "Cargo.toml").write_text(f'''[package]
 name = "decoder-feature-consumer"
 version = "0.0.0"

@@ -1,3 +1,4 @@
+#![cfg(feature = "decompression")]
 //! Allocator-observed storage and deterministic fallible-allocation paths.
 mod support;
 use mbrotli::{DecodeError, DecodeLimits, DecoderConfig, Decompressor, RetentionPolicy};

@@ -24,10 +24,12 @@ exclude = [
 
 [dependencies.fearless_simd]
 version = "0.7"
+optional = true
 default-features = false
 
 [dependencies.thiserror]
 version = "2"
+optional = true
 default-features = false
 
 [dependencies.libm]
@@ -49,7 +51,7 @@ tempfile = "3.27"
 [dev-dependencies.fearless_simd]
 version = "0.7"
 default-features = false
-features = ["force_support_fallback"]
+features = ["force_support_fallback", "std"]
 
 [dev-dependencies.criterion]
 version = "0.8"
@@ -60,19 +62,23 @@ path = "brotli-ffi"
 [[bench]]
 name = "compress"
 harness = false
+required-features = ["compression"]
 
 [[bench]]
 name = "track_b"
 harness = false
-required-features = ["experimental"]
+required-features = ["compression", "experimental"]
 
 [features]
-default = ["std"]
+default = ["std", "compression", "decompression"]
+# Independently selectable public codecs and their private implementations.
+compression = ["dep:fearless_simd", "dep:thiserror"]
+decompression = ["dep:fearless_simd", "dep:thiserror"]
 # Dependency runtime detection for ordinary builds.
-std = ["fearless_simd/std", "thiserror/std"]
+std = ["fearless_simd?/std", "thiserror?/std"]
 # Opt-in alloc-backed support; overrides std-only APIs and instrumentation.
 # Disable default features too when targeting a platform without std.
-no_std = ["dep:libm", "fearless_simd/libm"]
+no_std = ["dep:libm", "fearless_simd?/libm"]
 
 # RFC 9841's shared dictionary and framing formats, which are specified but
 # have no stable reference encoder: the C library compiles its serialized
@@ -110,11 +116,30 @@ resolver = "3"
 [[bench]]
 name = "parallel"
 harness = false
+required-features = ["compression"]
 
 [[bench]]
 name = "alloc"
 harness = false
+required-features = ["compression"]
 
 [[bench]]
 name = "decompress"
 harness = false
+required-features = ["decompression"]
+
+[[example]]
+name = "compress"
+required-features = ["compression"]
+
+[[example]]
+name = "parallel"
+required-features = ["compression"]
+
+[[example]]
+name = "profile_compressor"
+required-features = ["compression"]
+
+[[example]]
+name = "profile_decompressor"
+required-features = ["compression", "decompression"]

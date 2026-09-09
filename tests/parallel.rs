@@ -1,3 +1,4 @@
+#![cfg(feature = "compression")]
 #![cfg(not(feature = "no_std"))]
 
 //! One-stream interoperability, scheduler determinism, resource ownership and faults.

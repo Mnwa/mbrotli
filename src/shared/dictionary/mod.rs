@@ -16,14 +16,19 @@
 //! the exhaustive one qualities ten and eleven use, which reports the best word
 //! at every length so the dynamic program can price them all.
 
+#[cfg(feature = "compression")]
 pub(crate) mod all_matches;
+#[cfg(any(feature = "decompression", feature = "experimental"))]
 pub(crate) mod transform;
 
+#[cfg(feature = "compression")]
 use crate::shared::constants::HASH_MUL32;
+#[cfg(feature = "compression")]
 use crate::shared::score::{SearchResult, backward_reference_score};
 
 /// Longest match the static dictionary can produce
 /// (`BROTLI_MAX_STATIC_DICTIONARY_MATCH_LEN`).
+#[cfg(feature = "compression")]
 pub(crate) const MAX_STATIC_DICTIONARY_MATCH_LEN: usize = 37;
 
 /// Word data of the built-in dictionary (`kBrotliDictionaryData`).
@@ -37,12 +42,15 @@ pub(crate) static BUILTIN_WORDS: &[u8; 122_784] = include_bytes!("words.bin");
 ///
 /// Stored little-endian, two bytes per bucket, from
 /// `c/enc/dictionary_hash_inc.h` of the pinned reference.
+#[cfg(feature = "compression")]
 static HASH_WORDS: &[u8; 2 * NUM_HASH_BUCKETS] = include_bytes!("hash_words.bin");
 
 /// Word lengths of the hash table (`kStaticDictionaryHashLengths`).
+#[cfg(feature = "compression")]
 static HASH_LENGTHS: &[u8; NUM_HASH_BUCKETS] = include_bytes!("hash_lengths.bin");
 
 /// Number of buckets in the dictionary hash (`BROTLI_ENC_NUM_HASH_BUCKETS`).
+#[cfg(feature = "compression")]
 const NUM_HASH_BUCKETS: usize = 32_768;
 
 /// Where the words of each length start inside [`BUILTIN_WORDS`].
@@ -59,11 +67,13 @@ pub(crate) const BUILTIN_SIZE_BITS_BY_LENGTH: [u8; 32] = [
 ];
 
 /// How many prefix cuts have a dedicated transform (`kCutoffTransformsCount`).
+#[cfg(feature = "compression")]
 pub(super) const CUTOFF_TRANSFORMS_COUNT: usize = 10;
 
 /// Packed transform id per prefix cut (`kCutoffTransforms`).
 ///
 /// Six bits per cut, cut zero in the low bits.
+#[cfg(feature = "compression")]
 pub(super) const CUTOFF_TRANSFORMS: u64 = 0x071B_520A_DA2D_3200;
 
 /// Returns the dictionary hash of the four bytes at the start of `data`.
@@ -71,6 +81,7 @@ pub(super) const CUTOFF_TRANSFORMS: u64 = 0x071B_520A_DA2D_3200;
 /// Mirrors `Hash14`: the high bits carry the most mixing from the multiply, so
 /// the key is taken from there.
 #[inline(always)]
+#[cfg(feature = "compression")]
 fn hash14(data: &[u8]) -> usize {
     let word = match data.first_chunk::<4>() {
         Some(chunk) => u32::from_le_bytes(*chunk),
@@ -79,6 +90,7 @@ fn hash14(data: &[u8]) -> usize {
     (word.wrapping_mul(HASH_MUL32) >> (32 - 14)) as usize
 }
 
+#[cfg(feature = "compression")]
 pub(super) use crate::shared::match_len::common_prefix_len;
 
 /// Running statistics that decide whether probing is still worth it.
@@ -87,11 +99,13 @@ pub(super) use crate::shared::match_len::common_prefix_len;
 /// stream: once a hundred and twenty-eight lookups have gone by per match,
 /// the encoder stops paying for the probe.
 #[derive(Copy, Clone, Debug, Default)]
+#[cfg(feature = "compression")]
 pub(crate) struct DictionaryStats {
     lookups: usize,
     matches: usize,
 }
 
+#[cfg(feature = "compression")]
 impl DictionaryStats {
     /// Permanently disables dictionary probing for an independent fragment.
     #[cfg(not(feature = "no_std"))]
@@ -111,6 +125,7 @@ impl DictionaryStats {
     clippy::too_many_arguments,
     reason = "same inputs as the reference static dictionary query"
 )]
+#[cfg(feature = "compression")]
 pub(crate) fn search_custom(
     dictionary: &crate::compressor::core::rfc9841::static_index::StaticCombination,
     stats: &mut DictionaryStats,
@@ -139,6 +154,7 @@ pub(crate) fn search_custom(
 ///
 /// Mirrors `TestStaticDictionaryItem`. Returns whether the entry produced a
 /// match good enough to replace `out`.
+#[cfg(feature = "compression")]
 fn test_item(
     len: usize,
     word_idx: usize,
@@ -191,6 +207,7 @@ fn test_item(
 /// Mirrors `SearchInStaticDictionary`, including the point at which it gives up
 /// on the dictionary entirely for this stream.
 #[inline(always)]
+#[cfg(feature = "compression")]
 pub(crate) fn search(
     stats: &mut DictionaryStats,
     data: &[u8],
@@ -223,6 +240,7 @@ pub(crate) fn search(
 /// Probes the dictionary buckets of `data`'s hash (`SearchInStaticDictionary`
 /// after its give-up test).
 #[inline(never)]
+#[cfg(feature = "compression")]
 fn probe(
     stats: &mut DictionaryStats,
     data: &[u8],
@@ -264,7 +282,7 @@ fn probe(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "compression"))]
 mod tests {
     use super::*;
 
@@ -310,6 +328,7 @@ mod tests {
     }
 
     /// Runs a probe with a window small enough that a match can still win.
+    #[cfg(feature = "compression")]
     fn probe(data: &[u8], shallow: bool) -> (DictionaryStats, SearchResult) {
         let mut stats = DictionaryStats::default();
         let mut out = SearchResult::empty();

@@ -1,3 +1,4 @@
+#[cfg(feature = "compression")]
 use super::PreparedDictionary;
 use crate::shared::decode_dictionary::Prefixes;
 
@@ -56,11 +57,13 @@ impl DecodeDictionary {
 #[derive(Clone, Copy, Debug)]
 pub enum DictionaryRef<'a> {
     /// Reuses a prepared encoder dictionary without copying its payload.
+    #[cfg(feature = "compression")]
     Prepared(&'a PreparedDictionary),
     /// Uses a dictionary built without encoder search indexes.
     DecodeOnly(&'a DecodeDictionary),
 }
 
+#[cfg(feature = "compression")]
 impl<'a> From<&'a PreparedDictionary> for DictionaryRef<'a> {
     fn from(value: &'a PreparedDictionary) -> Self {
         Self::Prepared(value)
@@ -82,6 +85,7 @@ impl DictionaryRef<'_> {
         scratch: &mut [u8; crate::shared::dictionary::transform::SCRATCH_BYTES],
     ) -> Option<Result<usize, crate::DecodeError>> {
         match self {
+            #[cfg(feature = "compression")]
             Self::Prepared(value) => value
                 .inner()
                 .static_index
@@ -97,12 +101,14 @@ impl DictionaryRef<'_> {
 
     pub(crate) fn prefix_len(self) -> u64 {
         match self {
+            #[cfg(feature = "compression")]
             Self::Prepared(value) => value.inner().dictionaries().prefix().total_len(),
             Self::DecodeOnly(value) => value.prefixes.total(),
         }
     }
     pub(crate) fn prefix_byte(self, offset: u64) -> Option<u8> {
         match self {
+            #[cfg(feature = "compression")]
             Self::Prepared(value) => value
                 .inner()
                 .dictionaries()

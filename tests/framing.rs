@@ -1,3 +1,4 @@
+#![cfg(feature = "compression")]
 #![cfg(not(feature = "no_std"))]
 
 //! RFC framing wire fixtures and recovery under programmable sink faults.

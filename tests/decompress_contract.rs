@@ -1,3 +1,4 @@
+#![cfg(feature = "decompression")]
 mod support;
 use mbrotli::*;
 

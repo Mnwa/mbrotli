@@ -1,3 +1,4 @@
+#![cfg(feature = "decompression")]
 mod support;
 
 use mbrotli::{
@@ -161,6 +162,7 @@ fn strict_and_concatenated_operations_handle_member_boundaries() {
 }
 
 #[test]
+#[cfg(feature = "compression")]
 fn raw_prefixes_decode_from_both_dictionary_representations() {
     use mbrotli::dictionary::{
         DecodeDictionary, DecodeDictionaryLimits, DictionaryAttachment, DictionaryBuilder,

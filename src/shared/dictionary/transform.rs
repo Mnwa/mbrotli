@@ -1,7 +1,9 @@
 //! Borrowed word transformations. No transformed dictionary is materialized.
 
 pub(crate) const SCRATCH_BYTES: usize = 2 * 255 + 31;
+#[cfg(feature = "decompression")]
 const TRIPLES: &[u8; 363] = include_bytes!("builtin_transforms.bin");
+#[cfg(feature = "decompression")]
 const STRINGS: &[u8; 217] = include_bytes!("builtin_prefix_suffix.bin");
 
 /// Validated operation inputs. Prefix/suffix and word bytes remain borrowed.
@@ -14,6 +16,7 @@ pub(crate) struct Transform<'a> {
     pub(crate) parameter: u16,
 }
 
+#[cfg(feature = "decompression")]
 impl Transform<'static> {
     pub(crate) fn builtin(index: usize) -> Option<Self> {
         let triple = TRIPLES.get(index.checked_mul(3)?..)?.first_chunk::<3>()?;
@@ -27,6 +30,7 @@ impl Transform<'static> {
     }
 }
 
+#[cfg(feature = "decompression")]
 fn stringlet(id: u8) -> &'static [u8] {
     let mut start = 0;
     for _ in 0..id {
