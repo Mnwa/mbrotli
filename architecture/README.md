@@ -9,7 +9,7 @@ and known gaps. For usage examples, start with the [user guide](../docs/README.m
 | Specification | Scope |
 | --- | --- |
 | [Implementation comparison](benchmark-comparison.md) | Isolated five-encoder Criterion suite, validated exports, equal-weight dataset medians, ranked vertical-bar reports, and current-run provenance. |
-| [No standard library](no-std.md) | Opt-in alloc-backed compression, feature precedence, excluded std APIs, compile-time SIMD, and portable logarithms. |
+| [No standard library](no-std.md) | Opt-in alloc-backed compression, feature precedence, excluded std APIs, compile-time SIMD, and no_std-only libm dependencies. |
 | [Compressor](compressor.md) | Configuration, serial APIs, sessions, I/O adapters, and errors. |
 | [Encoder workspace](encoder-workspace.md) | Retained allocations and profiling-aware accounting tests, incremental ring storage, copy-extension SIMD kernels, production versus test backend selection, reset, and writer backpressure. |
 | [Bit output](bit-output.md) | Fixed and growing initialized storage, direct fast appends, bit operations, and overflow propagation. |

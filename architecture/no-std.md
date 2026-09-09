@@ -6,6 +6,10 @@ without `std`, depend on `mbrotli` with `default-features = false` and
 `features = ["no_std"]`. The library uses `#![no_std]` and `extern crate alloc`;
 applications supply a global allocator. This is not allocation-free compression.
 
+The `no_std` feature enables the optional `libm` dependency and
+`fearless_simd/libm`; ordinary std builds enable neither. Select `std` or
+`no_std` when disabling default features so `fearless_simd` has a math provider.
+
 Cargo features are additive. `no_std` overrides the library's std-only API and
 instrumentation gates even if `std` or profiling features are also enabled, but
 cannot remove dependencies enabled by those features. Bare-metal applications
@@ -17,6 +21,7 @@ flowchart TD
     Feature{no_std enabled?}
     Feature -->|no| Std[std API: I/O, parallel tasks, optional framing]
     Feature -->|yes| Alloc[core + alloc: compressor, sessions, dictionaries]
+    Feature -->|yes| Portable[enable libm and fearless_simd/libm]
     Std --> Engine[private compressor::core encoder state machines]
     Alloc --> Engine
     Feature -->|no| Detect[runtime SIMD detection when dependency std is enabled]

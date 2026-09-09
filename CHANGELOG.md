@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Only enable `libm` and `fearless_simd/libm` with `no_std`, removing `libm`
+  from ordinary std builds.
+
 - Add the opt-in `no_std` feature for alloc-backed compression, incremental
   sessions, and dictionaries. It disables I/O adapters, parallel compression,
   experimental framing, and profiling instrumentation, and uses compile-time
