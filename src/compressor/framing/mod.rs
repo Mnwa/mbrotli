@@ -3,6 +3,31 @@
 //! Finish each resource, then finish the container. Neither destructor writes.
 //! Chunk methods accept a chunk into a bounded queue; [`FramedWriter::flush`]
 //! drains that queue. After a sink error, retry draining or finalization.
+//! The resulting container is not a raw Brotli stream: a container parser must
+//! extract its resources before passing their compressed data to a raw decoder.
+//! This crate does not yet provide that parser.
+//!
+//! # Examples
+//!
+//! Attach a filename to an uncompressed resource, then finalize the container:
+//!
+//! ```
+//! use mbrotli::{Compressor, framing::{FramingConfig, MetadataField, MetadataKind}};
+//! use std::io::Write;
+//! let mut compressor = Compressor::new(Default::default())?;
+//! let mut container = compressor.framed_writer(Vec::new(), FramingConfig::default())?;
+//! container.metadata(MetadataKind::Resource,
+//!     &[MetadataField { code: *b"id", value: b"hello.txt" }])?;
+//! {
+//!     let mut resource = container.uncompressed_resource(Default::default())?;
+//!     resource.write_all(b"hello")?;
+//!     resource.try_finish()?;
+//! } // Release the resource's borrow before finalizing the container.
+//! container.padding(4)?;
+//! let bytes = container.finish().map_err(|failure| failure.error)?;
+//! assert_eq!(&bytes[..4], &[0x91, 0x0a, 0x42, 0x52]);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 mod core;
 
@@ -12,6 +37,11 @@ use std::io::{self, Write};
 use thiserror::Error;
 
 /// Container policy and explicit resource ceilings.
+///
+/// Defaults enable a container and central directory, without repeated
+/// metadata. Validation occurs in [`Compressor::framed_writer`]. Use struct
+/// update syntax to override only selected fields; see
+/// [`FramedWriter::repeat_metadata_fields`] for an example.
 #[derive(Debug, Clone, Copy)]
 pub struct FramingConfig {
     /// Include a final footer and permit multiple resources and metadata.
@@ -68,6 +98,9 @@ pub enum DictionaryReference {
 }
 
 /// Resource visibility and optional caller-supplied checksum.
+///
+/// Defaults to visible with no checksum. Setting `id` only records the supplied
+/// value; the writer does not compute or verify it against the resource bytes.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ResourceOptions {
     /// Suppress implicit extraction, for example for dictionary resources.
@@ -166,6 +199,11 @@ pub struct FramingFinishError<T> {
 }
 
 /// A container borrowing one worker-local compressor.
+///
+/// See [`Compressor::framed_writer`] for compressed resource creation and the
+/// [module example](self) for metadata and uncompressed resources. Finish and
+/// drop each [`ResourceWriter`] before continuing container operations, then
+/// call [`Self::finish`] to emit the directory and footer.
 #[derive(Debug)]
 pub struct FramedWriter<'c, W> {
     compressor: &'c mut Compressor,
@@ -270,6 +308,7 @@ impl<W: Write> FramedWriter<'_, W> {
     }
 
     /// Starts an uncompressed resource with the same bounded, retryable writer.
+    /// See the [module example](self) for the complete resource lifecycle.
     ///
     /// # Errors
     /// Rejects invalid order or resource limits, or a pending sink error.
@@ -419,6 +458,11 @@ impl<W: Write> FramedWriter<'_, W> {
 }
 
 /// One bounded resource stream. Finish explicitly before starting another.
+///
+/// [`Write::flush`] drains available output but does not finish the resource.
+/// Call [`Self::try_finish`] and then drop this borrow before using the container
+/// again. Dropping an unfinished resource abandons it and prevents successful
+/// container finalization. See [`Compressor::framed_writer`] for an example.
 #[derive(Debug)]
 pub struct ResourceWriter<'a, 'd, W> {
     inner: core::Resource<'a, 'd, W>,

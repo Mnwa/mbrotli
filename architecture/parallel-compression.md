@@ -27,6 +27,13 @@ Rayon is a development dependency for examples of scheduling in tests/benchmarks
 The private `parallel::core::spool` module uses the standard library for exclusive
 spool creation and cleanup.
 
+Public source rustdoc includes a custom immutable snapshot with a version token,
+absolute reads through `SeekSource`, and a compile-checked `FileSource::open`
+example. Source identity is compared as caller-supplied bytes; it is not a
+library-computed content hash. An open file handle does not freeze file contents,
+and callers must keep input immutable throughout a batch. `FileSource` uses
+positional reads on Unix and Windows and returns `Unsupported` elsewhere.
+
 ```mermaid
 graph TD
     Public[compressor::parallel public wrappers] --> Planner[parallel::core::Compressor and Plan]

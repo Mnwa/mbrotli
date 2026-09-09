@@ -211,6 +211,29 @@ live until a successful replacement; prefix-only descriptions reset it to built-
 Prepared dictionaries resolve through their existing immutable static index and
 prefix representation. Common transform application lives in `shared::dictionary`.
 
+## Executable API contracts
+
+Rustdoc examples beside the public decoder APIs exercise complete Vec/slice
+decoding, append rollback, unchanged slice tails, output backpressure with a
+two-byte buffer, exact-size validation, concatenated members, session recovery,
+retention and independent workspaces. The session example advances by per-call
+counts and reoffers precisely the remaining suffix under `Finish`; it also
+checks aggregate counters and the accepted window header.
+
+Reader examples recover protocol suffixes by chaining `unread_input` before the
+returned source. Writer examples explicitly finalize and distinguish codec
+completion from delivery and sink flushing. Decode-only dictionary examples run
+without compression; the encoder/decoder prefix round-trip example is gated by
+`compression`. They document that dictionary identity is a caller contract.
+
+```mermaid
+flowchart LR
+    Docs[Public rustdoc examples] --> Buffers[Vec rollback and slice prefix checks]
+    Docs --> Session[Finish suffix and progress checks]
+    Docs --> IO[Reader suffix and writer finalization checks]
+    Docs --> Dictionary[Owned dictionary and borrowed session checks]
+```
+
 ## I/O and error propagation
 
 ```mermaid

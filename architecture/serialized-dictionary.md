@@ -128,13 +128,19 @@ on; `parse_exact` is what the public API calls and refuses a tail.
 
 ## 4. Transform application
 
-`TransformList::apply` is a port of `BrotliTransformDictionaryWord`. It writes
-into a caller-held `TransformScratch`, so a search allocates nothing per
-candidate.
+The private `core::rfc9841::transform::TransformList::apply` is a port of
+`BrotliTransformDictionaryWord`. It writes into a caller-held `TransformScratch`,
+so a search allocates nothing per candidate. Public `TransformList::apply` and
+`TransformListView::apply` copy that result into a new Vec for inspection.
+Both truncate input to 31 bytes before applying a transform; an out-of-range
+index returns that truncated input unchanged. Rustdoc examples exercise both
+valid transforms and this fallback. `operation(index)` returns `None` for a
+missing transform, allowing callers to distinguish it from identity.
 
 ```mermaid
 flowchart TD
-    start["apply(index, word, scratch)"] --> bounds{"index < len?"}
+    start["apply(index, word, scratch)"] --> truncate["truncate word to 31 bytes"]
+    truncate --> bounds{"index < len?"}
     bounds -- no --> copy["copy the word, return"]
     bounds -- yes --> pre["write the prefix"]
     pre --> narrow{"operation"}
@@ -183,6 +189,10 @@ added to the 7-, 11-, 16- or 21-bit scalar the encoding pattern describes.
 - the context map present exactly when the dictionary is context based;
 - the stringlet table in first-use order with duplicates merged, the
   zero-length terminator last and doubling as the empty prefix or suffix.
+
+`write_to` appends the same encoding to a caller-owned Vec without an
+intermediate Vec or an enclosing length prefix. Its rustdoc example checks
+the original prefix, appended length, and parsing of the appended slice.
 
 The RFC permits a longer varint than a value needs. Such an encoding is
 accepted on parse and normalised on write, which is the documented treatment of

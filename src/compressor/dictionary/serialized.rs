@@ -935,7 +935,9 @@ impl TransformList {
     /// through a reusable buffer and allocates nothing per candidate.
     ///
     /// A `word` longer than thirty-one bytes is truncated to it, which is the
-    /// longest word the format can hold.
+    /// longest word the format can hold. An index past the end returns the
+    /// truncated word unchanged; use [`Self::operation`] to check whether the
+    /// transform exists before applying it.
     ///
     /// # Examples
     ///
@@ -1058,6 +1060,22 @@ impl<'a> TransformListView<'a> {
     ///
     /// Allocates; compression applies transforms through a reusable buffer
     /// instead. A `word` longer than thirty-one bytes is truncated to it.
+    /// An index past the end returns the truncated word unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::dictionary::{TransformList, TransformOperation};
+    /// let list = TransformList::builder()
+    ///     .add_transform(b"[", TransformOperation::Identity, b"]")
+    ///     .build()?;
+    /// let view = list.as_view();
+    /// assert_eq!(view.apply(0, b"word"), b"[word]");
+    /// assert_eq!(view.apply(view.len(), b"word"), b"word");
+    /// assert_eq!(view.operation(view.len()), None);
+    /// assert_eq!(view.apply(view.len(), &[b'x'; 40]), [b'x'; 31]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     #[must_use]
     pub fn apply(&self, index: usize, word: &[u8]) -> Vec<u8> {
         let mut scratch = TransformScratch::default();
@@ -1494,6 +1512,23 @@ impl SerializedDictionary {
     ///
     /// The same bytes [`SerializedDictionary::to_bytes`] returns, without the
     /// intermediate allocation, for a caller assembling a larger container.
+    /// Preserves existing bytes and grows `out` as needed; it does not add a
+    /// length prefix for the enclosing container.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::dictionary::SerializedDictionary;
+    /// let dictionary = SerializedDictionary::builder().with_prefix(&b"prefix"[..]).build()?;
+    /// let mut container = b"header".to_vec();
+    /// let start = container.len();
+    /// dictionary.write_to(&mut container);
+    /// assert_eq!(&container[..start], b"header");
+    /// assert_eq!(container.len() - start, dictionary.serialized_len());
+    /// let parsed = SerializedDictionary::try_from(&container[start..])?;
+    /// assert_eq!(parsed.prefix(), b"prefix");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn write_to(&self, out: &mut Vec<u8>) {
         // `serialize` can only fail on a prefix longer than a varint can
         // express, which no constructed dictionary holds: both the builder and

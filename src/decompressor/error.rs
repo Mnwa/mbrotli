@@ -1,6 +1,16 @@
 use thiserror::Error;
 
 /// Invalid decoder policy values.
+///
+/// # Examples
+///
+/// ```
+/// use mbrotli::{DecodeConfigError, WindowLimit};
+/// assert!(matches!(WindowLimit::standard(25),
+///     Err(DecodeConfigError::StandardWindow { max_bits: 25 })));
+/// assert!(matches!(WindowLimit::large(63),
+///     Err(DecodeConfigError::LargeWindow { max_bits: 63 })));
+/// ```
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Error)]
 #[non_exhaustive]
 pub enum DecodeConfigError {
@@ -19,6 +29,10 @@ pub enum DecodeConfigError {
 }
 
 /// Format structure in which invalid data was detected.
+///
+/// Carried by [`DecodeError::InvalidData`]. Describes the malformed structure,
+/// not a byte offset; incremental callers obtain accepted-byte counts from
+/// [`super::DecodeFailure`].
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Error)]
 #[non_exhaustive]
 pub enum InvalidDataKind {
@@ -46,6 +60,25 @@ pub enum InvalidDataKind {
 }
 
 /// Decompression failure. Raw Brotli does not authenticate dictionary identity.
+///
+/// One-shot methods return this directly; sessions wrap it in
+/// [`super::DecodeFailure`] to preserve partial progress. I/O adapters wrap it
+/// in `std::io::Error` when standard I/O is available. Include a fallback arm
+/// when matching this non-exhaustive enum.
+///
+/// # Examples
+///
+/// ```
+/// use mbrotli::{DecodeError, DecoderConfig, Decompressor};
+/// let mut decoder = Decompressor::new(DecoderConfig::default())?;
+/// match decoder.decompress(&[0x3b, 0xaa]) {
+///     Err(DecodeError::TrailingData { offset }) => assert_eq!(offset, 1),
+///     other => panic!("expected a trailing-data error, got {other:?}"),
+/// }
+/// // A failed one-shot operation does not prevent decoder reuse.
+/// assert!(decoder.decompress(&[0x3b])?.is_empty());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DecodeError {

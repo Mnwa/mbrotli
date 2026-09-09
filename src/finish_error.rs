@@ -4,8 +4,10 @@ use std::io::Error;
 ///
 /// `EncoderWriter::finish` or `DecoderWriter::finish` consumes the adapter, which would strand the
 /// stream if a recoverable sink failure destroyed it. Instead the adapter comes
-/// back here: retry with the adapter’s `try_finish`, or take the sink out
-/// and abandon the stream.
+/// back here: retry with the adapter's `try_finish`, or drop it to abandon the
+/// stream. [`Self::into_error`] keeps only the error and drops the adapter.
+/// Decoder format, resource-limit, and truncated-input failures are terminal;
+/// retaining the adapter only makes sink delivery failures retryable.
 ///
 /// # Examples
 ///

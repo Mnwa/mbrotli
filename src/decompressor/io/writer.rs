@@ -11,6 +11,16 @@ enum Lifecycle {
 }
 
 /// Compressed-input writer with a bounded outbox of decompressed payload.
+///
+/// Construct with [`super::super::Decompressor::writer`]. Call [`Self::finish`]
+/// or [`Self::try_finish`] to validate EOF and deliver all pending output;
+/// dropping the writer performs no I/O and can discard buffered payload.
+/// Ordinary [`Write::flush`] does not declare EOF or detect truncated input.
+///
+/// `write` may accept a prefix before encountering a codec or sink error. It
+/// returns the accepted count and defers that error to the next write, flush,
+/// or finalization. Sink errors preserve pending output for retry; codec errors
+/// are terminal. Output already delivered is not rolled back on failure.
 #[derive(Debug)]
 pub struct DecoderWriter<'d, 'dict, W> {
     session: DecoderSession<'d, 'dict>,
@@ -115,6 +125,23 @@ impl<'d, 'dict, W: Write> DecoderWriter<'d, 'dict, W> {
     /// # Errors
     /// Reports incomplete or invalid input, codec resource errors, and sink
     /// failures. After this call, new compressed input is no longer accepted.
+    /// A successful call is idempotent; subsequent calls return `Ok(())`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{DecoderConfig, Decompressor};
+    /// use std::io::Write;
+    /// let mut decoder = Decompressor::new(DecoderConfig::default())?;
+    /// let mut writer = decoder.writer(Vec::new(), Default::default())?;
+    /// writer.write_all(&[0x3b])?;
+    /// assert!(!writer.is_finished()); // Sink finalization is still pending.
+    /// writer.try_finish()?;
+    /// writer.try_finish()?;
+    /// assert!(writer.is_finished());
+    /// assert!(writer.get_ref().is_empty());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn try_finish(&mut self) -> io::Result<()> {
         if self.lifecycle == Lifecycle::Finished {
             return Ok(());
@@ -136,6 +163,9 @@ impl<'d, 'dict, W: Write> DecoderWriter<'d, 'dict, W> {
     ///
     /// # Errors
     /// Wraps [`Self::try_finish`] failures with the recoverable adapter.
+    /// A retained adapter can retry sink failures, but cannot repair invalid or
+    /// incomplete compressed input. See [`super::super::Decompressor::writer`]
+    /// for successful finalization and [`FinishError`] for sink-retry mechanics.
     pub fn finish(mut self) -> Result<W, FinishError<Self>> {
         match self.try_finish() {
             Ok(()) => Ok(self.writer),

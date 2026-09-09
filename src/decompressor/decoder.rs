@@ -7,6 +7,21 @@ use ::core::ops::Range;
 use alloc::vec::Vec;
 
 /// Reusable Brotli decoder with exclusive per-operation access.
+///
+/// Keep this object alive to reuse workspace between payloads. One-shot methods
+/// require complete input; use [`Self::start`] for incremental decoding. The
+/// default retention policy keeps allocations after each operation.
+///
+/// # Examples
+///
+/// ```
+/// use mbrotli::{DecoderConfig, Decompressor};
+/// let compressed = [0x0b, 0x02, 0x80, b'h', b'e', b'l', b'l', b'o', 0x03];
+/// let mut decoder = Decompressor::new(DecoderConfig::default())?;
+/// assert_eq!(decoder.decompress(&compressed)?, b"hello");
+/// assert_eq!(decoder.decompress(&compressed)?, b"hello");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug)]
 pub struct Decompressor {
     pub(super) config: DecoderConfig,
@@ -17,6 +32,23 @@ pub struct Decompressor {
 }
 
 /// Decoder construction with an optional backend and retention policy.
+///
+/// Obtain this from [`Decompressor::builder`]. Every backend currently uses the
+/// same scalar decoder; selecting one does not enable decoder SIMD acceleration.
+///
+/// # Examples
+///
+/// ```
+/// use mbrotli::{Backend, DecoderConfig, Decompressor, RetentionPolicy};
+/// let mut decoder = Decompressor::builder(DecoderConfig::default())
+///     .with_backend(Backend::default())
+///     .with_retention(RetentionPolicy::ReleaseAll)
+///     .build()?;
+/// assert!(decoder.decompress(&[0x3b])?.is_empty());
+/// assert_eq!(decoder.retention(), RetentionPolicy::ReleaseAll);
+/// assert_eq!(decoder.retained_bytes(), 0);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct DecompressorBuilder {
     config: DecoderConfig,
@@ -53,6 +85,8 @@ impl DecompressorBuilder {
 
 impl Decompressor {
     /// Constructs a reusable decoder with default retention and host backend.
+    /// See [`Decompressor`] for a decoding example, or [`DecompressorBuilder`]
+    /// to select a retention policy.
     ///
     /// # Errors
     /// Returns invalid configuration errors, as [`DecompressorBuilder::build`].
@@ -77,8 +111,22 @@ impl Decompressor {
     }
     /// Changes policy and clears abandoned or previous stream state.
     ///
+    /// Retains compatible workspace according to the configured retention
+    /// policy. Current typed configurations have no cross-field restrictions.
+    ///
     /// # Errors
-    /// Returns invalid configuration errors without changing the decoder.
+    /// Currently always succeeds, as [`DecompressorBuilder::build`] does.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{DecoderConfig, Decompressor, MemberMode};
+    /// let mut decoder = Decompressor::new(DecoderConfig::default())?;
+    /// decoder.reconfigure(DecoderConfig::default().with_member_mode(MemberMode::Concatenated))?;
+    /// assert_eq!(decoder.config().member_mode(), MemberMode::Concatenated);
+    /// assert!(decoder.decompress(&[0x3b, 0x3b])?.is_empty());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn reconfigure(&mut self, config: DecoderConfig) -> Result<(), DecodeConfigError> {
         if self.active
             || self.retention == RetentionPolicy::ReleaseAll
@@ -96,6 +144,23 @@ impl Decompressor {
         self.workspace.retained_bytes()
     }
     /// Applies a retention policy once, preserving abandoned-session protection.
+    ///
+    /// This does not change [`Self::retention`]. `Bounded` releases all workspace
+    /// when its limit is exceeded; `ReleaseAll` always releases it. `Aggressive`
+    /// and `CurrentConfig` keep current storage.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{DecoderConfig, Decompressor, RetentionPolicy};
+    /// let mut decoder = Decompressor::new(DecoderConfig::default())?;
+    /// let compressed = [0x0b, 0x02, 0x80, b'h', b'e', b'l', b'l', b'o', 0x03];
+    /// decoder.decompress(&compressed)?;
+    /// decoder.trim(RetentionPolicy::ReleaseAll);
+    /// assert_eq!(decoder.retained_bytes(), 0);
+    /// assert_eq!(decoder.retention(), RetentionPolicy::Aggressive);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn trim(&mut self, policy: RetentionPolicy) {
         if policy == RetentionPolicy::ReleaseAll
             || matches!(policy, RetentionPolicy::Bounded { max_bytes } if self.retained_bytes() > max_bytes)
@@ -104,11 +169,42 @@ impl Decompressor {
         }
     }
     /// Clears abandoned sessions and releases all owned workspace.
+    ///
+    /// Configuration and retention policy are preserved. Ordinary session drop
+    /// already permits reuse; recovery is needed after a forgotten session.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{DecodeError, DecoderConfig, Decompressor};
+    /// let mut decoder = Decompressor::new(DecoderConfig::default())?;
+    /// core::mem::forget(decoder.start(Default::default())?);
+    /// assert!(matches!(decoder.decompress(&[0x3b]), Err(DecodeError::AbandonedSession)));
+    /// decoder.recover();
+    /// assert_eq!(decoder.retained_bytes(), 0);
+    /// assert!(decoder.decompress(&[0x3b])?.is_empty());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn recover(&mut self) {
         self.workspace = Stream::default();
         self.active = false;
     }
     /// Copies configuration into an independent object without copying storage.
+    ///
+    /// Copies the backend and retention policy too, but no stream progress.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{DecoderConfig, Decompressor};
+    /// let decoder = Decompressor::new(DecoderConfig::default())?;
+    /// let mut other = decoder.fork_empty();
+    /// assert_eq!(other.config(), decoder.config());
+    /// assert_eq!(other.retention(), decoder.retention());
+    /// assert_eq!(other.retained_bytes(), 0);
+    /// assert!(other.decompress(&[0x3b])?.is_empty());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn fork_empty(&self) -> Self {
         Self {
             config: self.config,
@@ -119,6 +215,7 @@ impl Decompressor {
         }
     }
     /// Borrows this decoder for an incremental operation.
+    /// See [`DecoderSession::process`] for a complete incremental example.
     ///
     /// # Errors
     /// Rejects abandoned sessions and exact sizes exceeding the output budget.
@@ -130,6 +227,9 @@ impl Decompressor {
     }
     /// Decodes all input into a new vector. Single mode rejects trailing data.
     ///
+    /// Empty input is truncated, not an empty Brotli member. See [`Decompressor`]
+    /// for a successful decode and [`super::MemberMode`] for concatenated input.
+    ///
     /// # Errors
     /// Returns codec, resource, lifecycle, or trailing-data errors.
     pub fn decompress(&mut self, src: &[u8]) -> Result<Vec<u8>, DecodeError> {
@@ -139,8 +239,26 @@ impl Decompressor {
     }
     /// Appends a decoded operation, rolling back its entire append on error.
     ///
+    /// Returns the range of newly appended bytes, preserving the original
+    /// prefix. Rollback restores the length and contents, but may retain an
+    /// allocation grown during the failed operation.
+    ///
     /// # Errors
     /// Returns codec, resource, lifecycle, allocation, or trailing-data errors.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{DecoderConfig, Decompressor};
+    /// let compressed = [0x0b, 0x02, 0x80, b'h', b'e', b'l', b'l', b'o', 0x03];
+    /// let mut decoder = Decompressor::new(DecoderConfig::default())?;
+    /// let mut output = b"prefix: ".to_vec();
+    /// let range = decoder.decompress_into(&compressed, &mut output)?;
+    /// assert_eq!(&output[range], b"hello");
+    /// assert!(decoder.decompress_into(&compressed[..4], &mut output).is_err());
+    /// assert_eq!(output, b"prefix: hello");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn decompress_into(
         &mut self,
         src: &[u8],
@@ -199,6 +317,23 @@ impl Decompressor {
     /// # Errors
     /// Returns codec/resource errors, trailing data, or `OutputTooSmall`.
     /// Bytes written before an error are not rolled back.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{DecodeError, DecoderConfig, Decompressor};
+    /// let compressed = [0x0b, 0x02, 0x80, b'h', b'e', b'l', b'l', b'o', 0x03];
+    /// let mut decoder = Decompressor::new(DecoderConfig::default())?;
+    /// let mut output = [0xaa; 8];
+    /// let written = decoder.decompress_to_slice(&compressed, &mut output)?;
+    /// assert_eq!(&output[..written], b"hello");
+    /// assert_eq!(&output[written..], &[0xaa; 3]);
+    /// let mut small = [0; 2];
+    /// assert!(matches!(decoder.decompress_to_slice(&compressed, &mut small),
+    ///     Err(DecodeError::OutputTooSmall { written: 2 })));
+    /// assert_eq!(&small, b"he");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn decompress_to_slice(
         &mut self,
         src: &[u8],
@@ -234,6 +369,11 @@ impl Decompressor {
 impl Decompressor {
     /// Starts a session borrowing its dictionary independently of the decoder.
     ///
+    /// The dictionary must match the encoder's effective attachments and remain
+    /// alive until the session is dropped. See [`crate::dictionary::DictionaryRef`]
+    /// for constructing the borrowed view and [`DecoderSession::process`] for
+    /// driving the session.
+    ///
     /// # Errors
     /// Rejects an abandoned session or an exact size exceeding the output budget.
     pub fn start_with_dictionary<'d, 'dict>(
@@ -245,6 +385,11 @@ impl Decompressor {
     }
 
     /// Decodes a stream using the supplied effective external dictionary.
+    ///
+    /// Accepts a borrowed [`crate::dictionary::DecodeDictionary`] or, with
+    /// `compression`, a borrowed `PreparedDictionary`. No dictionary payload
+    /// is copied by this operation. See [`crate::dictionary::DecodeDictionary`]
+    /// for a round-trip example using an external prefix.
     ///
     /// # Errors
     /// Returns codec, resource, allocation, lifecycle or trailing-data errors.

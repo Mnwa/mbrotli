@@ -8,6 +8,10 @@ use std::{
 };
 
 /// Caller-defined metadata token. Equality is checked before output mutation.
+///
+/// Construct with `SourceIdentity::from(Vec<u8>)`. A custom source can encode an
+/// immutable object version here; use the same token whenever its content is
+/// unchanged. The library compares bytes and does not compute a content hash.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct SourceIdentity(Vec<u8>);
 impl From<Vec<u8>> for SourceIdentity {
@@ -20,6 +24,38 @@ impl From<Vec<u8>> for SourceIdentity {
 /// Implementations must fill each requested range or return an error, and keep
 /// bytes immutable for the batch lifetime. A blocking implementation can block
 /// its executor thread; the library cannot forcibly interrupt that call.
+///
+/// Offsets are absolute byte positions, independent of any cursor. Concurrent
+/// calls may overlap. On error, `dst` may contain a partial read; the batch fails
+/// and does not assemble that segment. [`ArcBytesSource`], [`SeekSource`], and
+/// [`FileSource`] implement this trait for common input types.
+///
+/// # Examples
+///
+/// A custom source can delegate immutable storage while supplying a version:
+///
+/// ```
+/// use mbrotli::compressor::parallel::{ArcBytesSource, RandomAccessSource, SourceIdentity};
+/// use std::{io, sync::Arc};
+/// struct Snapshot { bytes: ArcBytesSource, version: SourceIdentity }
+/// impl RandomAccessSource for Snapshot {
+///     fn len(&self) -> io::Result<u64> { self.bytes.len() }
+///     fn read_exact_at(&self, offset: u64, dst: &mut [u8]) -> io::Result<()> {
+///         self.bytes.read_exact_at(offset, dst)
+///     }
+///     fn identity(&self) -> Option<SourceIdentity> { Some(self.version.clone()) }
+/// }
+/// let source = Snapshot {
+///     bytes: ArcBytesSource::from(Arc::<[u8]>::from(&b"payload"[..])),
+///     version: SourceIdentity::from(b"version-1".to_vec()),
+/// };
+/// assert!(!source.is_empty()?);
+/// let mut bytes = [0; 4];
+/// source.read_exact_at(3, &mut bytes)?;
+/// assert_eq!(&bytes, b"load");
+/// assert!(source.identity().is_some());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub trait RandomAccessSource: Send + Sync + 'static {
     /// Current byte length.
     /// # Errors
@@ -42,6 +78,10 @@ pub trait RandomAccessSource: Send + Sync + 'static {
     }
 }
 /// Immutable reference-counted bytes for detached tasks.
+///
+/// Construction and cloning share the allocation without copying payload bytes.
+/// See [`RandomAccessSource`] for a read example and
+/// [`super::ParallelCompressor::prepare_source`] for task scheduling.
 #[derive(Clone, Debug)]
 pub struct ArcBytesSource(Arc<[u8]>);
 impl From<Arc<[u8]>> for ArcBytesSource {
@@ -80,6 +120,20 @@ impl RandomAccessSource for ArcBytesSource {
 /// must remain immutable; this adapter provides length checks, but no identity
 /// token. A panic while accessing the reader poisons it and later I/O fails.
 /// Use [`FileSource`] for concurrent positional reads of regular files.
+///
+/// # Examples
+///
+/// ```
+/// use mbrotli::compressor::parallel::{RandomAccessSource, SeekSource};
+/// use std::io::Cursor;
+/// let source = SeekSource::from(Cursor::new(b"abcdef".to_vec()));
+/// assert_eq!(source.len()?, 6);
+/// let mut bytes = [0; 3];
+/// source.read_exact_at(2, &mut bytes)?;
+/// assert_eq!(&bytes, b"cde");
+/// assert!(source.read_exact_at(5, &mut bytes).is_err());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug)]
 pub struct SeekSource<R> {
     inner: super::core::source::SeekReader<R>,
@@ -102,6 +156,11 @@ impl<R: io::Read + io::Seek + Send + 'static> RandomAccessSource for SeekSource<
 }
 
 /// Stable open regular-file handle; positional reads never modify its cursor.
+///
+/// The handle does not freeze file contents. Keep the file unchanged for the
+/// entire batch; metadata verification cannot detect every concurrent write.
+/// On platforms other than Unix and Windows, positional reads return
+/// [`io::ErrorKind::Unsupported`].
 #[derive(Debug)]
 pub struct FileSource {
     file: File,
@@ -110,6 +169,17 @@ impl FileSource {
     /// Opens a regular file for concurrent read-only positional access.
     /// # Errors
     /// Propagates open/metadata errors and rejects non-regular files.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use mbrotli::compressor::parallel::{FileSource, RandomAccessSource};
+    /// let source = FileSource::open("input.bin")?;
+    /// let mut header = [0; 4];
+    /// source.read_exact_at(0, &mut header)?;
+    /// assert!(source.len()? >= 4);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         Self::try_from(File::open(path)?)
     }

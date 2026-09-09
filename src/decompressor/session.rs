@@ -5,6 +5,10 @@ use super::{
 use crate::{Window, dictionary::DictionaryRef};
 
 /// Whether more input may follow this call.
+///
+/// Start with [`Self::Process`] while more chunks may arrive. Once EOF is known,
+/// use [`Self::Finish`] on every remaining call, advancing input by the reported
+/// consumed count. See [`DecoderSession::process`] for a complete loop.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DecodeOperation {
     /// More input may follow; an empty slice is not EOF.
@@ -14,6 +18,10 @@ pub enum DecodeOperation {
     Finish,
 }
 /// Reason an incremental decoding call stopped.
+///
+/// Always handle the counts in [`DecodeProgress`] before acting on the status.
+/// `NeedsInput` requires more input or an EOF declaration; `NeedsOutput`
+/// requires fresh output space, even if all offered input was consumed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DecoderStatus {
     /// All offered input was consumed and additional input is required.
@@ -24,6 +32,9 @@ pub enum DecoderStatus {
     Finished,
 }
 /// Bytes accepted and delivered during one successful call.
+///
+/// Advance input by `consumed` and use only `output[..produced]`. These counts
+/// are per call, not cumulative. See [`DecoderSession::process`] for an example.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DecodeProgress {
     /// Accepted prefix length of this call's input.
@@ -34,6 +45,23 @@ pub struct DecodeProgress {
     pub status: DecoderStatus,
 }
 /// Terminal codec failure with exact progress for the failing call.
+///
+/// Output reported by `produced` has already been written and is not rolled
+/// back. It is only a partial result; the operation has failed validation.
+/// Drop the session before starting another operation on the same decoder.
+///
+/// # Examples
+///
+/// ```
+/// use mbrotli::{DecodeError, DecodeOperation, DecoderConfig, Decompressor};
+/// let mut decoder = Decompressor::new(DecoderConfig::default())?;
+/// let mut session = decoder.start(Default::default())?;
+/// // Physical EOF without even one member is truncated input.
+/// let failure = session.process(&[], &mut [], DecodeOperation::Finish).unwrap_err();
+/// assert_eq!((failure.consumed, failure.produced), (0, 0));
+/// assert!(matches!(failure.into_error(), DecodeError::UnexpectedEndOfInput));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, thiserror::Error)]
 #[error("{error}")]
 pub struct DecodeFailure {
@@ -53,6 +81,12 @@ impl DecodeFailure {
 }
 
 /// Exclusive incremental decoding operation. Drop clears per-stream state.
+///
+/// The decoder and any external dictionary remain borrowed for the session's
+/// lifetime. Dropping the session permits decoder reuse and applies its
+/// retention policy, even after failure or incomplete input. Forgetting it with
+/// [`core::mem::forget`] requires [`Decompressor::recover`] before reuse.
+/// See [`Self::process`] for a loop with a small output buffer.
 #[derive(Debug)]
 pub struct DecoderSession<'d, 'dict> {
     decoder: &'d mut Decompressor,
@@ -115,9 +149,52 @@ impl<'d, 'dict> DecoderSession<'d, 'dict> {
 impl DecoderSession<'_, '_> {
     /// Decodes available bytes without retaining caller slices.
     ///
+    /// Deliver `output[..progress.produced]` and advance `input` by
+    /// `progress.consumed` after each call. An empty input with `Process` does
+    /// not declare EOF. After the first `Finish`, keep using `Finish` with
+    /// exactly the unconsumed suffix, including an empty suffix when only output
+    /// remains. Input bytes themselves must remain unchanged between retries.
+    ///
+    /// In single-member mode, `Finished` can leave a protocol suffix unconsumed.
+    /// Concatenated mode needs `Finish` to confirm the final member boundary.
+    /// A completed session returns zero counts and `Finished` on further calls.
+    ///
     /// # Errors
-    /// Returns terminal format/resource errors and exact call progress.
-    /// After `Finish`, changing operation or final suffix length is invalid.
+    /// Returns terminal format/resource errors and exact call progress in
+    /// [`DecodeFailure`]. Truncated final input yields
+    /// [`DecodeError::UnexpectedEndOfInput`]. Changing the operation or final
+    /// suffix length after `Finish`, or using a failed session, yields
+    /// [`DecodeError::InvalidState`]. A failure cannot be retried in this session.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{DecodeOperation, DecoderConfig, DecoderStatus, Decompressor, OutputSize};
+    /// let compressed = [0x0b, 0x02, 0x80, b'h', b'e', b'l', b'l', b'o', 0x03];
+    /// let mut decoder = Decompressor::new(DecoderConfig::default())?;
+    /// let mut session = decoder.start(OutputSize::Exact(5).into())?;
+    /// assert_eq!(session.window(), None); // No header accepted yet.
+    /// let mut remaining = compressed.as_slice();
+    /// let mut decoded = Vec::new();
+    /// loop {
+    ///     let mut buffer = [0; 2];
+    ///     let progress = session.process(remaining, &mut buffer, DecodeOperation::Finish)?;
+    ///     remaining = &remaining[progress.consumed..];
+    ///     decoded.extend_from_slice(&buffer[..progress.produced]);
+    ///     if progress.status == DecoderStatus::Finished {
+    ///         break;
+    ///     }
+    ///     assert_eq!(progress.status, DecoderStatus::NeedsOutput);
+    /// }
+    /// assert_eq!(decoded, b"hello");
+    /// assert!(remaining.is_empty());
+    /// assert!(session.is_finished());
+    /// assert_eq!(session.total_in(), compressed.len() as u64);
+    /// assert_eq!(session.total_out(), 5);
+    /// assert_eq!(session.members_decoded(), 1);
+    /// assert!(session.window().is_some());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn process(
         &mut self,
         input: &[u8],
@@ -244,6 +321,9 @@ impl DecoderSession<'_, '_> {
         self.members
     }
     /// Most recently accepted window header.
+    ///
+    /// Returns `None` before the first header is accepted. Between concatenated
+    /// members, retains the preceding member's window until a new one is accepted.
     pub const fn window(&self) -> Option<Window> {
         self.window
     }

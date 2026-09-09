@@ -1,6 +1,22 @@
 use super::DecodeConfigError;
 
 /// Number of complete raw streams accepted by an operation.
+///
+/// [`Self::Single`] sessions leave bytes after the first member unconsumed;
+/// one-shot decoding rejects those bytes. [`Self::Concatenated`] treats them
+/// as another member and needs final input to confirm the last boundary.
+/// At least one complete member is required in either mode.
+///
+/// # Examples
+///
+/// ```
+/// use mbrotli::{DecoderConfig, Decompressor, MemberMode};
+/// let config = DecoderConfig::default().with_member_mode(MemberMode::Concatenated);
+/// let mut decoder = Decompressor::new(config)?;
+/// // Two complete empty members.
+/// assert!(decoder.decompress(&[0x3b, 0x3b])?.is_empty());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum MemberMode {
     /// Stop at the first complete stream.
@@ -11,6 +27,23 @@ pub enum MemberMode {
 }
 
 /// Accepted window headers and their maximum bit count.
+///
+/// This limits headers, not total output or allocated workspace. Use
+/// [`DecodeLimits`] to set those budgets. An extended header may declare a
+/// small window too; [`Self::standard`] rejects every extended header.
+///
+/// # Examples
+///
+/// ```
+/// use mbrotli::WindowLimit;
+/// let standard = WindowLimit::standard(24)?;
+/// assert_eq!(standard.max_bits(), 24);
+/// assert!(!standard.allows_large());
+/// let extended = WindowLimit::large(24)?;
+/// assert!(extended.allows_large());
+/// assert!(WindowLimit::standard(25).is_err());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WindowLimit {
     bits: u8,
@@ -59,7 +92,24 @@ impl WindowLimit {
 /// Optional cumulative input/output and live workspace budgets.
 ///
 /// Defaults impose no numeric budgets. Dictionary storage and caller-owned
-/// output do not count towards the workspace budget.
+/// output do not count towards the workspace budget, nor do I/O adapter buffers.
+/// `None` disables a budget; `Some(0)` permits none of that resource. Input and
+/// output budgets count accepted bytes across all members of one operation and
+/// reset when a new session starts. These are not total process-memory limits.
+///
+/// # Examples
+///
+/// ```
+/// use mbrotli::DecodeLimits;
+/// let limits = DecodeLimits::default()
+///     .with_max_input_bytes(Some(1 << 20))
+///     .with_max_output_bytes(Some(8 << 20))
+///     .with_max_workspace_bytes(Some(32 << 20));
+/// assert_eq!(limits.max_input_bytes(), Some(1 << 20));
+/// assert_eq!(limits.max_output_bytes(), Some(8 << 20));
+/// assert_eq!(limits.max_workspace_bytes(), Some(32 << 20));
+/// assert_eq!(limits.with_max_input_bytes(None).max_input_bytes(), None);
+/// ```
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct DecodeLimits {
     input: Option<u64>,
@@ -98,6 +148,24 @@ impl DecodeLimits {
 }
 
 /// Reusable decoder policy. Defaults accept extended windows and one member.
+///
+/// The default window limit is 62 bits and numeric resource budgets are
+/// unlimited. Builder methods return an updated copy; they do not change a
+/// decoder already constructed from this value.
+///
+/// # Examples
+///
+/// ```
+/// use mbrotli::{DecodeLimits, DecoderConfig, MemberMode, WindowLimit};
+/// let config = DecoderConfig::default()
+///     .with_window_limit(WindowLimit::standard(22)?)
+///     .with_member_mode(MemberMode::Single)
+///     .with_limits(DecodeLimits::default().with_max_output_bytes(Some(4096)));
+/// assert_eq!(config.window_limit().max_bits(), 22);
+/// assert_eq!(config.member_mode(), MemberMode::Single);
+/// assert_eq!(config.limits().max_output_bytes(), Some(4096));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DecoderConfig {
     window: WindowLimit,
@@ -149,6 +217,11 @@ impl DecoderConfig {
 }
 
 /// Expected total output, validated without trusting it as an allocation size.
+///
+/// Convert this to [`DecodeStreamConfig`] for use with sessions and adapters.
+/// An exact size applies to all members combined; it neither reserves output
+/// storage nor replaces a workspace budget. See [`DecodeStreamConfig`] for an
+/// executable example.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum OutputSize {
     /// No externally declared size.
@@ -159,6 +232,23 @@ pub enum OutputSize {
 }
 
 /// Per-operation output validation.
+///
+/// Defaults to [`OutputSize::Unknown`]. A mismatch fails the operation even
+/// when the compressed input is otherwise valid.
+///
+/// # Examples
+///
+/// ```
+/// use mbrotli::{DecodeOperation, DecodeStreamConfig, DecoderConfig, Decompressor, OutputSize};
+/// let stream = DecodeStreamConfig::default().with_output_size(OutputSize::Exact(0));
+/// assert_eq!(stream.output_size(), OutputSize::Exact(0));
+/// assert_eq!(stream, DecodeStreamConfig::from(OutputSize::Exact(0)));
+/// let mut decoder = Decompressor::new(DecoderConfig::default())?;
+/// let mut session = decoder.start(stream)?;
+/// session.process(&[0x3b], &mut [], DecodeOperation::Finish)?;
+/// assert!(session.is_finished());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct DecodeStreamConfig {
     size: OutputSize,

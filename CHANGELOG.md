@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Expand public API documentation with runnable decoder, dictionary, parallel
+  source, and framing examples. Clarify partial output, final-input retries,
+  resource limits, reader read-ahead, writer finalization, and dictionary
+  transform boundary behavior; codec behavior and public signatures are unchanged.
+
 - Optimize the decoder. Replace the per-bit `u128` reservoir with a whole-word
   refill, canonical per-bit Huffman lookup with two-level lookup tables stored in
   flat per-kind groups, and per-byte regeneration with a power-of-two history

@@ -34,6 +34,12 @@ queue chunks. `flush` drains them. Container `try_finish` is retryable; consumin
 writer. `into_inner` aborts without I/O and intentionally discards pending data.
 No destructor writes or implicitly finishes a resource.
 
+The public module example exercises resource metadata, an uncompressed resource,
+explicit resource finalization, padding, and container finalization. The
+`framed_writer` example covers compressed resources. These containers need a
+framing parser before their compressed resources can be fed to a raw decoder;
+this repository currently supplies no such parser.
+
 `metadata_with_options` accepts independent `MetadataEncoding` values for the
 original chunk and its repeated copy: uncompressed, Brotli, or Shared Brotli
 with a borrowed prepared dictionary and explicit references. `metadata` remains

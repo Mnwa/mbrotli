@@ -11,21 +11,21 @@ and known gaps. For usage examples, start with the [user guide](../docs/README.m
 | [Implementation comparison](benchmark-comparison.md) | Isolated five-encoder Criterion suite, validated exports, equal-weight dataset medians, ranked vertical-bar reports, and current-run provenance. |
 | [Codec features](codec-features.md) | Independent default-enabled codecs, shared public types, private primitive gates, crate documentation and isolated consumer checks. |
 | [No standard library](no-std.md) | Opt-in alloc-backed compression, feature precedence, excluded std APIs, compile-time SIMD, and no_std-only libm dependencies. |
-| [Native decompressor](decompressor.md) | Incremental raw decoding, whole-word reservoir, table Huffman, ring history and command fast path, dictionaries, resource budgets, retained lifecycle and I/O. |
+| [Native decompressor](decompressor.md) | Incremental raw decoding, whole-word reservoir, table Huffman, ring history and command fast path, dictionaries, resource budgets, retained lifecycle, I/O, and executable API contracts. |
 | [Decoder compatibility](decompressor-compatibility.md) | Pinned C/RFC evidence, four build profiles, fuzzing, heavy checks and measured baseline. |
 | [Shared primitives](shared-primitives.md) | Private crate-root common data and transform ownership used by both codecs. |
 | [Compressor](compressor.md) | Configuration, serial APIs, sessions, I/O adapters, and errors. |
 | [Encoder workspace](encoder-workspace.md) | Retained allocations and profiling-aware accounting tests, incremental ring storage, copy-extension SIMD kernels, production versus test backend selection, reset, and writer backpressure. |
 | [Bit output](bit-output.md) | Fixed and growing initialized storage, direct fast appends, bit operations, and overflow propagation. |
 | [Serial output identity](universal-encoding.md) | Equivalent stream settings, shared scheduling, allocation-free empty finalization, and C compatibility. |
-| [Parallel compression](parallel-compression.md) | Independent segments, caller-run tasks and runnable crate-level and API scheduling examples, sources, automatic memory staging, complete staging bounds, and assembly. |
+| [Parallel compression](parallel-compression.md) | Independent segments, caller-run tasks, scheduling and source examples, automatic memory staging, complete staging bounds, and assembly. |
 | [Fast encoder](fast-encoder.md) | Quality 0–1 fragment encoding, proven tiny-final raw shortcut, entropy codes, and specialized SIMD scans. |
 | [Greedy encoder](greedy-encoder.md) | Quality 2–9 matchers, specialized SIMD feature contexts, command generation, and meta-block construction. |
 | [High-quality encoder](hq-encoder.md) | Quality 10–11 binary-tree search with a vector short scan, SIMD block assignment with exact ties, the dynamic program and its distance-cache loop, and clustering. |
 | [Shared Brotli](shared-brotli.md) | Large Window headers, retained history, and prepared prefix dictionaries. |
-| [Serialized dictionaries](serialized-dictionary.md) | Experimental parsing, serialization, transforms, and resource limits. |
+| [Serialized dictionaries](serialized-dictionary.md) | Experimental parsing, append serialization, public versus private transform behavior, and resource limits. |
 | [Custom encoding and continuations](rfc9841-encoding.md) | Experimental static indexes, context combinations, and stream offsets. |
-| [Framing](framing.md) | Experimental resources, metadata, references, directory, and footer. |
+| [Framing](framing.md) | Experimental resources, metadata, references, directory, footer, and explicit finalization examples. |
 | [Fuzzing](fuzzing.md) | Isolated AFL package, stable and experimental target selection, input models, bidirectional C/Rust round-trip oracles, shared encoder seeds, campaign structure, and regression replay. |
 | [Continuous integration](ci.md) | Automatic checks, tag-triggered fuzz/Miri/ASan, API compatibility, feature-isolated AFL replay, cache boundaries, archived findings and function-coverage gating. |
 

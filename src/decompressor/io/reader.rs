@@ -2,6 +2,15 @@ use super::super::{DecodeError, DecodeOperation, DecoderSession, DecoderStatus};
 use std::io::{self, ErrorKind, Read};
 
 /// Decompressed view of a compressed reader, with bounded read-ahead.
+///
+/// Construct with [`super::super::Decompressor::reader`]. In single-member mode,
+/// reading to EOF stops at the first member, even if the source has more bytes.
+/// Recover that suffix with [`Self::into_parts`]. If a codec failure occurs after
+/// producing bytes, `read` returns those bytes first and reports the error on
+/// the next nonempty read. Continue reading until EOF to validate the operation.
+///
+/// Source I/O errors preserve state; retry after handling a transient error.
+/// Codec failures are terminal. Dropping the reader performs no I/O.
 #[derive(Debug)]
 pub struct DecoderReader<'d, 'dict, R> {
     session: DecoderSession<'d, 'dict>,
@@ -15,6 +24,10 @@ pub struct DecoderReader<'d, 'dict, R> {
 }
 
 /// Source ownership and unconsumed read-ahead after dismantling a reader.
+///
+/// Read `unread_input` before resuming `reader` to preserve byte order. These
+/// fields do not retain decoder state, so they cannot resume a partial decode.
+/// See [`DecoderReader::into_parts`] for recovering a protocol suffix.
 #[derive(Debug)]
 pub struct DecoderReaderParts<R> {
     /// Original compressed source at its current position.
@@ -53,6 +66,30 @@ impl<'d, 'dict, R: Read> DecoderReader<'d, 'dict, R> {
         self.session.is_finished() && !self.failed
     }
     /// Returns the source and unread read-ahead without performing I/O.
+    ///
+    /// Ends the decoder session even when it is incomplete. Inspect `finished`
+    /// and `pending_error` before treating decoded bytes as a validated result.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{DecoderConfig, Decompressor};
+    /// use std::io::{Cursor, Read};
+    /// let input = [0x3b, b'O', b'K']; // Empty member followed by protocol data.
+    /// let mut decoder = Decompressor::new(DecoderConfig::default())?;
+    /// let mut reader = decoder.reader(&input[..], Default::default())?;
+    /// let mut payload = Vec::new();
+    /// reader.read_to_end(&mut payload)?;
+    /// assert!(payload.is_empty());
+    /// let parts = reader.into_parts();
+    /// assert!(parts.finished);
+    /// assert!(parts.pending_error.is_none());
+    /// let mut rest = Cursor::new(parts.unread_input).chain(parts.reader);
+    /// let mut suffix = Vec::new();
+    /// rest.read_to_end(&mut suffix)?;
+    /// assert_eq!(suffix, b"OK");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn into_parts(mut self) -> DecoderReaderParts<R> {
         let finished = self.is_finished();
         self.buffer.truncate(self.filled);
