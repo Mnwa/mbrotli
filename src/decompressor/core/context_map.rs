@@ -15,7 +15,7 @@ enum Stage {
     Tree,
     Entries,
     Repeat {
-        width: u8,
+        width: u32,
     },
     Transform,
     Complete,
@@ -77,14 +77,11 @@ impl ContextMap {
                     self.stage = Stage::Tree;
                 }
                 Stage::Tree => {
-                    if !builder.read(
-                        self.trees + usize::from(self.run),
-                        bits,
-                        input,
-                        &mut self.tree,
-                    )? {
+                    let alphabet = self.trees + usize::from(self.run);
+                    if !builder.read(alphabet, bits, input, memory)? {
                         return Ok(false);
                     }
+                    builder.build(alphabet, memory, &mut self.tree)?;
                     self.stage = Stage::Entries;
                 }
                 Stage::Entries => {
@@ -92,12 +89,12 @@ impl ContextMap {
                         self.stage = Stage::Transform;
                         continue;
                     }
-                    let Some(symbol) = self.tree.read(bits, input)? else {
+                    let Some(symbol) = self.tree.decode(bits, input)? else {
                         return Ok(false);
                     };
                     if symbol != 0 && symbol <= usize::from(self.run) {
                         self.stage = Stage::Repeat {
-                            width: symbol as u8,
+                            width: symbol as u32,
                         };
                         continue;
                     }

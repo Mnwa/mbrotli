@@ -106,17 +106,17 @@ impl DictionaryRef<'_> {
             Self::DecodeOnly(value) => value.prefixes.total(),
         }
     }
-    pub(crate) fn prefix_byte(self, offset: u64) -> Option<u8> {
+}
+
+impl<'a> DictionaryRef<'a> {
+    /// Contiguous prefix bytes from `offset` to the end of the segment holding
+    /// it, empty past the prefix end. Lets a copy emit whole runs instead of
+    /// byte by byte.
+    pub(crate) fn prefix_run(self, offset: u64) -> &'a [u8] {
         match self {
             #[cfg(feature = "compression")]
-            Self::Prepared(value) => value
-                .inner()
-                .dictionaries()
-                .prefix()
-                .run_from(offset)
-                .first()
-                .copied(),
-            Self::DecodeOnly(value) => value.prefixes.byte(offset),
+            Self::Prepared(value) => value.inner().dictionaries().prefix().run_from(offset),
+            Self::DecodeOnly(value) => value.prefixes.run_from(offset),
         }
     }
 }

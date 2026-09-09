@@ -4,6 +4,9 @@ use super::super::{DecodeError, InvalidDataKind};
 
 const SHORT_CODES: usize = 16;
 const MAX_DISTANCE: u128 = (1u128 << 63) - 4;
+/// Same bound as [`MAX_DISTANCE`], but the cache path resolves in `u64` and
+/// never needs the wider type.
+const MAX_DISTANCE_U64: u64 = (1u64 << 63) - 4;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct DistanceLayout {
@@ -26,11 +29,11 @@ impl DistanceLayout {
         SHORT_CODES + self.direct + ((if self.large { 124 } else { 48 }) << self.postfix)
     }
 
-    pub(super) const fn extra_bits(self, symbol: usize) -> u8 {
+    pub(super) const fn extra_bits(self, symbol: usize) -> u32 {
         if symbol < SHORT_CODES + self.direct {
             0
         } else {
-            (1 + ((symbol - SHORT_CODES - self.direct) >> (self.postfix + 1))) as u8
+            (1 + ((symbol - SHORT_CODES - self.direct) >> (self.postfix + 1))) as u32
         }
     }
 
@@ -59,6 +62,31 @@ impl DistanceLayout {
         ((offset + extra as u128) << self.postfix) + low as u128 + self.direct as u128 + 1
     }
 
+    /// Standard-window distance in native `u64`. Every intermediate fits: the
+    /// largest standard alphabet keeps `extra_bits <= 25` and the final value
+    /// well below `2^32`, so no `u128` widening is needed on the hot path.
+    #[inline]
+    fn short_window_distance(self, symbol: usize, extra: u64) -> u64 {
+        if symbol < SHORT_CODES + self.direct {
+            return (symbol - SHORT_CODES + 1) as u64;
+        }
+        let code = symbol - SHORT_CODES - self.direct;
+        let high = code >> self.postfix;
+        let low = code & ((1 << self.postfix) - 1);
+        let offset = (((2 + (high & 1)) as u64) << self.extra_bits(symbol)) - 4;
+        ((offset + extra) << self.postfix) + (low + self.direct + 1) as u64
+    }
+
+    /// Large-window distance through the widening path, kept out of line so the
+    /// common standard-window resolve stays small enough to inline.
+    #[cold]
+    #[inline(never)]
+    fn resolve_large(self, symbol: usize, extra: u64) -> Result<u64, DecodeError> {
+        u64::try_from(self.long_distance(symbol, extra))
+            .map_err(|_| InvalidDataKind::Distance.into())
+    }
+
+    #[inline]
     pub(super) fn resolve(
         self,
         symbol: usize,
@@ -66,14 +94,18 @@ impl DistanceLayout {
         cache: &[u64; 4],
     ) -> Result<u64, DecodeError> {
         if symbol >= SHORT_CODES {
-            return u64::try_from(self.long_distance(symbol, extra))
-                .map_err(|_| InvalidDataKind::Distance.into());
+            if self.large {
+                return self.resolve_large(symbol, extra);
+            }
+            // The header validated every reachable symbol, so a standard-window
+            // distance is always in range and needs no further check.
+            return Ok(self.short_window_distance(symbol, extra));
         }
         const INDEX: [usize; 16] = [0, 1, 2, 3, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1];
         const OFFSET: [i8; 16] = [0, 0, 0, 0, -1, 1, -2, 2, -3, 3, -1, 1, -2, 2, -3, 3];
         cache[INDEX[symbol]]
             .checked_add_signed(i64::from(OFFSET[symbol]))
-            .filter(|&v| v != 0 && u128::from(v) <= MAX_DISTANCE)
+            .filter(|&v| v != 0 && v <= MAX_DISTANCE_U64)
             .ok_or_else(|| InvalidDataKind::Distance.into())
     }
 }

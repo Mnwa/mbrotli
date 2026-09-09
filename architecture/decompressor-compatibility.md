@@ -262,39 +262,62 @@ The short local measurements ran on a shared machine and include outliers; no
 optimization speedup or regression conclusion is inferred from comparisons
 between these runs.
 
+The table below is a later optimized-decoder measurement (i7-13700KF, WSL2,
+Criterion, warm-up 0.3 s, measurement 1 s, sample size 10) after the whole-word
+reservoir, two-level table Huffman, ring history and command fast path landed.
+It ran on a shared machine and includes outliers; it is evidence, not a
+statistical certification.
+
 | Corpus | Payload / compressed bytes | Warm Rust slice | C slice create/destroy |
 | --- | ---: | ---: | ---: |
-| Tiny | 15 / 19 | 366.58 ns | 253.19 ns |
-| Text | 66,560 / 67 | 296.22 µs | 55.342 µs |
-| Binary | 65,536 / 247 | 293.51 µs | 34.843 µs |
-| Noise | 65,536 / 65,540 | 371.36 µs | 2.0064 µs |
-| Repeated | 65,536 / 13 | 276.56 µs | 35.493 µs |
-| Large | 1,060,000 / 100 | 4.7587 ms | 572.83 µs |
+| Tiny | 15 / 19 | 46.7 ns | 163.5 ns |
+| Text | 66,560 / 67 | 4.355 µs | 29.363 µs |
+| Binary | 65,536 / 247 | 5.787 µs | 29.571 µs |
+| Noise | 65,536 / 65,540 | 1.945 µs | 2.079 µs |
+| Repeated | 65,536 / 13 | 2.498 µs | 66.463 µs |
+| Large | 1,060,000 / 100 | 41.19 µs | 440.49 µs |
 
-The large Rust slice result is 212.43 MiB/s; C is 1.7234 GiB/s. The earlier
-baseline was 4.4167 ms versus 392.30 µs on the same corpus. Both measurements
-show a scalar throughput gap; this change makes no decoder SIMD speed claim.
-Dictionary Vec decoding measures 30.791 µs Rust versus 1.4404 µs C, including
-per-call destination allocation and C dictionary attachment. Compression ratios
-are identical within every comparison because both decode the same bytes.
+Warm reused Rust matches or beats the C create/destroy shape on every corpus
+here: incompressible noise is at parity (bulk raw-block copy), and highly
+compressible and mixed corpora are several times faster because a whole
+overlapping copy regenerates as a bulk ring `copy_ring` rather than byte by byte.
+These figures compare a warm decoder that retains its workspace with a C decoder
+created and destroyed each call, so they are not a like-for-like kernel
+comparison; no decoder SIMD kernel exists.
+
+These synthetic corpora are copy-, run- or metadata-dominated. High-entropy
+text compressed at high quality is instead literal- and Huffman-bound, and there
+the safe decoder trails C: the vendored Canterbury/Calgary files
+(`alice29.txt`, `lcet10.txt`, `plrabn12.txt`) decode at roughly 0.6x of C, while
+the whole vendored `.compressed` test corpus averages about 0.97x. The remaining
+per-symbol gap is the cost of `forbid(unsafe_code)`: every table lookup, context
+map read and ring store is bounds-checked, where the C reference uses unchecked
+pointer arithmetic and a register-resident bit window. Closing it further would
+require either relaxing the unsafe prohibition on the hot lookups or a decoder
+SIMD kernel. Dictionary Vec decoding measures
+0.921 µs Rust versus 1.444 µs C, including per-call destination allocation and C
+dictionary attachment; the prefix reference regenerates as a bulk run.
+Compression ratios are identical within every comparison because both decode the
+same bytes.
 
 For metadata-only input, throughput is **encoded** bytes: 65,541 bytes take
-184.12 µs in Rust (339.49 MiB/s) and 104.28 ns in C, which can skip the contiguous
-metadata directly. Empty-output framing is measured separately as well. These
-figures must not be described as regenerated-output throughput.
+45.3 ns in Rust and 183.1 ns in C. Rust now skips a metadata region in bulk
+rather than one byte at a time. Empty-output framing is measured separately as
+well. These figures must not be described as regenerated-output throughput.
 
-The instrumented allocator test uses 132,000 payload bytes / 69 compressed bytes:
-24 cold decoder allocation requests, 269,088 retained bytes and 400,160 peak
-requested live bytes; the next equal-shape slice operation makes **zero** new
-allocations. Caller output and dictionary storage are excluded. Budget checks
-include the old allocation plus the requested replacement during growth, and
-injected failures preserve Vec rollback and subsequent decoder reuse.
+The instrumented allocator test decodes a repeated-text payload and asserts that
+the decoder's reported retained bytes equal the observed live allocator delta,
+that peak live bytes stay within the configured budget, and that the next
+equal-shape slice operation makes **zero** new allocations. The ring, context
+maps and flat Huffman groups are the retained workspace; caller output and
+dictionary storage are excluded. Budget checks include the old allocation plus
+the requested replacement during growth, and injected failures preserve Vec
+rollback and subsequent decoder reuse.
 
-Hotpath function timing attributes 421.37 ms of 430 ms (97.86%) to `Stream::run`
-on the 100-iteration representative workload. CPU sampling was unavailable because
-`samply` was not installed; these are instrumentation timings, not CPU samples.
-The correct scalar baseline remains in place. Future optimization should target
-measured copying/metadata/entropy costs and preserve these compatibility tests.
+`Stream::run` remains the single hot function; the correct byte-exact scalar
+stages back the fast path and are exercised directly by chunked and limited
+tests. Remaining byte-wise work is the prefix-crossing history path and short
+static-dictionary words, neither of which dominates the primary corpora.
 
 The existing encoder custom-dictionary Criterion group also completed after
 sharing transform application:
@@ -316,5 +339,7 @@ No before/after encoder performance claim is made from this shared-host sample.
 - The two non-reproducing persistent AFL timeouts remain recorded with an unknown
   cause. Completed bounded campaigns are not a universal absence-of-bugs proof.
 - No full framing decoder was added; it is outside the raw decoder specification.
-- Decoder backends currently share scalar execution. Performance is substantially
-  below C on large/high-ratio and especially raw/metadata inputs.
+- Decoder backends currently share scalar execution; no SIMD kernel exists. The
+  optimized scalar path matches or beats the measured C create/destroy shape on
+  the corpora above, but these are warm-versus-cold comparisons on a shared host,
+  not a certified kernel-for-kernel result.

@@ -30,7 +30,7 @@ pub(super) fn window(
             return Ok(None);
         };
         if short >> 1 != 0 {
-            (17 + (short >> 1) as u8, 4, false)
+            (17 + (short >> 1) as u8, 4u32, false)
         } else {
             let Some(long) = bits.peek(7, input)? else {
                 return Ok(None);
@@ -105,8 +105,8 @@ pub(super) fn metablock(
     if nibbles == 7 {
         return metadata(bits, input, prefix + 2, last);
     }
-    let width = prefix + 2 + nibbles * 4;
-    let Some(header) = bits.peek(width + u8::from(!last), input)? else {
+    let width = prefix + 2 + u32::from(nibbles) * 4;
+    let Some(header) = bits.peek(width + u32::from(!last), input)? else {
         return Ok(None);
     };
     let encoded_length = (header >> (prefix + 2)) & ((1 << (nibbles * 4)) - 1);
@@ -115,7 +115,7 @@ pub(super) fn metablock(
     }
     let length = encoded_length + 1;
     let raw = !last && header >> width != 0;
-    bits.drop(width + u8::from(!last));
+    bits.drop(width + u32::from(!last));
     if raw {
         bits.align()?;
         Ok(Some(MetaBlock::Uncompressed { length }))
@@ -127,7 +127,7 @@ pub(super) fn metablock(
 fn metadata(
     bits: &mut Bits,
     input: &mut Input<'_>,
-    prefix: u8,
+    prefix: u32,
     last: bool,
 ) -> Result<Option<MetaBlock>, DecodeError> {
     let Some(header) = bits.peek(prefix + 3, input)? else {
@@ -137,7 +137,7 @@ fn metadata(
         return Err(InvalidDataKind::MetaBlock.into());
     }
     let bytes = (header >> (prefix + 1)) as u8;
-    let width = prefix + 3 + bytes * 8;
+    let width = prefix + 3 + u32::from(bytes) * 8;
     let Some(header) = bits.peek(width, input)? else {
         return Ok(None);
     };

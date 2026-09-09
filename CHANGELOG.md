@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+- Optimize the decoder. Replace the per-bit `u128` reservoir with a whole-word
+  refill, canonical per-bit Huffman lookup with two-level lookup tables stored in
+  flat per-kind groups, and per-byte regeneration with a power-of-two history
+  ring and bulk copies. A command fast path decodes whole commands while a
+  whole-word refill and output room allow, and raw blocks, copies, prefix runs
+  and metadata skip regenerate in bulk while the byte-exact resumable stages back
+  every chunking and limit case. Standard-window distances resolve in `u64`, the
+  built-in dictionary stringlet lookup is `O(1)`, and Huffman roots index a
+  fixed-size array. Behavior and byte identity are unchanged; no public API or
+  `unsafe` was added. Warm decoding is faster than the reference C
+  create/destroy shape on copy-heavy, tiny and metadata inputs and reaches
+  roughly parity across the vendored test corpus overall; high-entropy text
+  decodes at roughly 0.6x of C, where safe bounds-checked table lookups cannot
+  match an unchecked-pointer decoder.
+
 - Add an AFL C-encoder-to-Rust-decoder round-trip target with one-shot and
   streaming checks, shared encoder seeds, Q0–Q11 regression coverage, and
   base/experimental campaigns. Extend small parameter seed headers to Q5–Q11

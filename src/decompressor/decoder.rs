@@ -160,15 +160,24 @@ impl Decompressor {
             let mut session =
                 DecoderSession::start(self, DecodeStreamConfig::default(), dictionary)?;
             let mut consumed = 0;
-            let mut buffer = [0u8; 8192];
+            let mut written = 0;
+            // Decode straight into the destination, growing it geometrically;
+            // the unused tail is trimmed once the stream ends.
+            let mut chunk = src.len().saturating_mul(4).clamp(256, 1 << 16);
             loop {
+                dst.try_reserve(written + chunk)
+                    .map_err(|_| DecodeError::AllocationFailed)?;
+                dst.resize(start + written + chunk, 0);
                 let progress = session
-                    .process(&src[consumed..], &mut buffer, DecodeOperation::Finish)
+                    .process(
+                        &src[consumed..],
+                        &mut dst[start + written..],
+                        DecodeOperation::Finish,
+                    )
                     .map_err(super::DecodeFailure::into_error)?;
                 consumed += progress.consumed;
-                dst.try_reserve(progress.produced)
-                    .map_err(|_| DecodeError::AllocationFailed)?;
-                dst.extend_from_slice(&buffer[..progress.produced]);
+                written += progress.produced;
+                dst.truncate(start + written);
                 if progress.status == DecoderStatus::Finished {
                     if consumed != src.len() {
                         return Err(DecodeError::TrailingData {
@@ -177,6 +186,7 @@ impl Decompressor {
                     }
                     return Ok(start..dst.len());
                 }
+                chunk = chunk.saturating_mul(2).min(1 << 24);
             }
         })();
         if result.is_err() {

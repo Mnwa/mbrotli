@@ -30,12 +30,24 @@ impl Transform<'static> {
     }
 }
 
+/// Byte offset of each length-prefixed stringlet in [`STRINGS`], precomputed so
+/// a lookup is O(1) rather than a linear scan from the start on every transform.
+#[cfg(feature = "decompression")]
+const STRINGLET_OFFSETS: [u16; 64] = {
+    let mut offsets = [0u16; 64];
+    let mut start = 0usize;
+    let mut index = 0usize;
+    while index < offsets.len() && start < STRINGS.len() {
+        offsets[index] = start as u16;
+        start += STRINGS[start] as usize + 1;
+        index += 1;
+    }
+    offsets
+};
+
 #[cfg(feature = "decompression")]
 fn stringlet(id: u8) -> &'static [u8] {
-    let mut start = 0;
-    for _ in 0..id {
-        start += usize::from(STRINGS[start]) + 1;
-    }
+    let start = usize::from(STRINGLET_OFFSETS[usize::from(id)]);
     &STRINGS[start + 1..start + 1 + usize::from(STRINGS[start])]
 }
 

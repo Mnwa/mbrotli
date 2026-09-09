@@ -119,13 +119,16 @@ impl Prefixes {
         self.total
     }
 
-    pub(crate) fn byte(&self, mut offset: u64) -> Option<u8> {
+    /// Contiguous bytes from `offset` to the end of the segment holding it.
+    /// Empty past the end of the prefix, so a caller advances segment by
+    /// segment without a separate bounds test.
+    pub(crate) fn run_from(&self, mut offset: u64) -> &[u8] {
         for segment in &self.segments[..self.count] {
             if offset < segment.len() as u64 {
-                return Some(segment[offset as usize]);
+                return &segment[offset as usize..];
             }
             offset -= segment.len() as u64;
         }
-        None
+        &[]
     }
 }
