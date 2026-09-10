@@ -29,12 +29,36 @@ pub(super) struct ContextMap {
     run: u8,
     index: usize,
     tree: Huffman,
+    /// One bit per literal block type whose 64 contexts share a tree.
+    trivial: [u64; 4],
 }
 
 impl ContextMap {
     pub(super) fn reset(&mut self) {
         self.stage = Stage::TreeCount;
         self.values.clear();
+        self.trivial = [0; 4];
+    }
+
+    /// Marks each literal block type whose 64 contexts select one tree, so
+    /// literal decoding can skip the context computation for it.
+    pub(super) fn detect_trivial(&mut self) {
+        self.trivial = [0; 4];
+        for (block, contexts) in self.values.as_chunks::<64>().0.iter().enumerate() {
+            let sample = contexts[0];
+            let error = contexts
+                .iter()
+                .fold(0u8, |error, &value| error | (value ^ sample));
+            if error == 0 && block < 256 {
+                self.trivial[block >> 6] |= 1 << (block & 63);
+            }
+        }
+    }
+
+    /// Whether literal block type `block` decodes every context with one tree.
+    #[inline(always)]
+    pub(super) const fn trivial(&self, block: usize) -> bool {
+        (self.trivial[(block >> 6) & 3] >> (block & 63)) & 1 != 0
     }
 
     pub(super) fn read(
@@ -89,7 +113,7 @@ impl ContextMap {
                         self.stage = Stage::Transform;
                         continue;
                     }
-                    let Some(symbol) = self.tree.decode(bits, input)? else {
+                    let Some(symbol) = self.tree.codes().decode_refilling(bits, input)? else {
                         return Ok(false);
                     };
                     if symbol != 0 && symbol <= usize::from(self.run) {
@@ -195,5 +219,23 @@ mod tests {
             assert_eq!(map.trees, 2);
             assert_eq!(map.values, expected);
         }
+    }
+
+    #[test]
+    fn trivial_literal_blocks_are_those_whose_contexts_share_one_tree() {
+        let mut map = ContextMap {
+            values: alloc::vec![0; 64 * 3],
+            trees: 6,
+            ..ContextMap::default()
+        };
+        map.values[64] = 1;
+        map.values[128..].fill(5);
+        map.detect_trivial();
+        assert!(map.trivial(0));
+        assert!(!map.trivial(1));
+        assert!(map.trivial(2));
+        assert!(!map.trivial(3));
+        map.reset();
+        assert!(!map.trivial(0));
     }
 }

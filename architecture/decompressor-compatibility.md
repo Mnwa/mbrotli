@@ -342,16 +342,63 @@ These figures compare a warm decoder that retains its workspace with a C decoder
 created and destroyed each call, so they are not a like-for-like kernel
 comparison; no decoder SIMD kernel exists.
 
-These synthetic corpora are copy-, run- or metadata-dominated. High-entropy
-text compressed at high quality is instead literal- and Huffman-bound, and there
-the safe decoder trails C: the vendored Canterbury/Calgary files
-(`alice29.txt`, `lcet10.txt`, `plrabn12.txt`) decode at roughly 0.6x of C, while
-the whole vendored `.compressed` test corpus averages about 0.97x. The remaining
-per-symbol gap is the cost of `forbid(unsafe_code)`: every table lookup, context
-map read and ring store is bounds-checked, where the C reference uses unchecked
-pointer arithmetic and a register-resident bit window. Closing it further would
-require either relaxing the unsafe prohibition on the hot lookups or a decoder
-SIMD kernel. Dictionary Vec decoding measures
+These synthetic corpora are copy-, run- or metadata-dominated, so the table
+above says little about literal- and Huffman-bound decoding. The per-quality
+comparison that the optimization work is gated on runs every benchmark corpus
+(the deterministic `text-1KiB`, `text-1MiB`, `binary-256KiB`,
+`compressible-256KiB` and `incompressible-256KiB` inputs, the four `tiny-*`
+payloads and the six vendored files) encoded by the C one-shot encoder at all
+twelve qualities with the default 22-bit window: 180 streams. Each stream is
+decoded into an exactly sized slice by a warm `Decompressor` and by
+`BrotliDecoderDecompress`, interleaved on the same pinned core, taking the best
+per-call time of three rounds of 0.3 s batches; eight such workers run in
+parallel on distinct performance cores (i7-13700KF, WSL2, 2026-09-10). The
+gate is 95% of C on every stream. After this pass one stream sits just under
+it and every other is at or above it:
+
+| Quality | Geometric mean, % of C | Minimum, % of C | Slowest stream |
+| --- | ---: | ---: | --- |
+| 0 | 179 | 95.7 | `vendor-plrabn12.txt` |
+| 1 | 201 | 96.5 | `vendor-plrabn12.txt` |
+| 2 | 188 | 96.0 | `tiny-1024` |
+| 3 | 193 | 101.3 | `incompressible-256KiB` |
+| 4 | 180 | 99.2 | `vendor-alice29.txt` |
+| 5 | 176 | 99.2 | `vendor-alice29.txt` |
+| 6 | 177 | 99.6 | `vendor-alice29.txt` |
+| 7 | 175 | 99.3 | `vendor-alice29.txt` |
+| 8 | 177 | 98.5 | `vendor-alice29.txt` |
+| 9 | 175 | 98.6 | `vendor-alice29.txt` |
+| 10 | 175 | 99.9 | `vendor-alice29.txt` |
+| 11 | 169 | 94.3 | `binary-256KiB` |
+
+The geometric means are dominated by the copy-, run- and metadata-heavy
+corpora, where the Rust decoder is several times faster; the minima are the
+high-entropy Canterbury/Calgary texts at low qualities and the context-modelled
+binary stream at quality 11, which were 0.55x to 0.7x of C before this pass.
+Run-to-run spread on the minima is about two points, so the quality 11 binary
+stream (94.3% here, 95 to 98% in other runs of the same build) is at the gate
+rather than clearly under it. What closed the gap was instruction and branch
+count per command rather than any single kernel: callgrind showed the loop
+executing about 1.5x C's instructions and 1.75x its conditional branches with
+fewer mispredictions, and each removed per-command branch (state stores,
+`Option` and overflow checks in the refill, bounds checks on table selection,
+the distance-cache rotate, per-command ring delivery) moved the minima by one
+to three points. The remaining structural difference is that C reads and
+writes through unchecked pointers; the safe decoder still pays one bounds check
+per table selection and per ring write.
+
+The Criterion `cold` and `tiny` groups measure a different shape: a fresh
+`Decompressor` and a `Vec` destination per call, against C's create/destroy
+one-shot entry point that is handed an exactly sized buffer. There the large
+streams decode at 91 to 96% of C, the raw 256 KiB stream at 77% (the `Vec`
+path must zero-fill what it reserves, where C's exact-size buffer is
+calloc'd), and payloads of 1 KiB and below at 57 to 80%: a first decode costs
+about a dozen workspace allocations plus the zero fill of the Huffman group
+storage, which is about 0.7 µs on this machine and dominates a 1 to 2 µs
+decode. Warm decoding of the same tiny streams is at parity (the harness
+above), so this is construction cost, not decoding cost; folding the
+per-meta-block tables into one arena is the remaining lever and is not done.
+Dictionary Vec decoding measures
 0.921 µs Rust versus 1.444 µs C, including per-call destination allocation and C
 dictionary attachment; the prefix reference regenerates as a bulk run.
 Compression ratios are identical within every comparison because both decode the
@@ -371,10 +418,13 @@ dictionary storage are excluded. Budget checks include the old allocation plus
 the requested replacement during growth, and injected failures preserve Vec
 rollback and subsequent decoder reuse.
 
-`Stream::run` remains the single hot function; the correct byte-exact scalar
-stages back the fast path and are exercised directly by chunked and limited
-tests. Remaining byte-wise work is the prefix-crossing history path and short
-static-dictionary words, neither of which dominates the primary corpora.
+`Stream::run` remains the single hot entry; `Stream::fast` is its out-of-line
+command loop, and the correct byte-exact scalar stages back it and are
+exercised directly by chunked and limited tests. The vendored `zerosukkanooa`
+fixture, decoded through 16-byte output windows, guards the hand-off from a
+paused copy to `Stage::Copy`. Remaining byte-wise work is the prefix-crossing
+history path and short static-dictionary words, neither of which dominates the
+primary corpora.
 
 The existing encoder custom-dictionary Criterion group also completed after
 sharing transform application:

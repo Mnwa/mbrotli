@@ -151,6 +151,52 @@ fn historical_official_c_fixtures_remain_decodable() {
     }
 }
 
+/// A copy that pauses on a full output window resumes in the byte-exact
+/// `Stage::Copy`, which must not lose the distance-cache push the fast path
+/// made for it: `zerosukkanooa` follows a long explicit-distance copy with
+/// short-code distances, so a stale cache silently produces wrong bytes.
+#[test]
+fn output_pauses_inside_copies_keep_the_distance_cache() {
+    use mbrotli::{DecodeOperation, DecodeStreamConfig, DecoderStatus};
+    let compressed = support::vendor_file("zerosukkanooa.compressed");
+    let payload = support::vendor_file("zerosukkanooa");
+    let mut decoder = Decompressor::new(DecoderConfig::default()).unwrap();
+    for (input_chunk, output_chunk) in [(4096, 16), (compressed.len(), 1), (64, 7)] {
+        let mut output = vec![0u8; payload.len()];
+        let mut session = decoder.start(DecodeStreamConfig::default()).unwrap();
+        let (mut read, mut written) = (0, 0);
+        loop {
+            let end = (read + input_chunk).min(compressed.len());
+            let output_end = (written + output_chunk).min(output.len());
+            let operation = if end == compressed.len() {
+                DecodeOperation::Finish
+            } else {
+                DecodeOperation::Process
+            };
+            let progress = session
+                .process(
+                    &compressed[read..end],
+                    &mut output[written..output_end],
+                    operation,
+                )
+                .unwrap();
+            read += progress.consumed;
+            written += progress.produced;
+            if progress.status == DecoderStatus::Finished {
+                break;
+            }
+            assert!(progress.consumed != 0 || progress.produced != 0, "stalled");
+        }
+        assert_eq!(
+            written,
+            payload.len(),
+            "chunks {input_chunk}/{output_chunk}"
+        );
+        let first = output.iter().zip(&payload).position(|(a, b)| a != b);
+        assert_eq!(first, None, "chunks {input_chunk}/{output_chunk} differ");
+    }
+}
+
 #[test]
 fn byte_corpora_cover_small_lengths_and_storage_boundaries() {
     let mut decoder = Decompressor::new(DecoderConfig::default()).unwrap();

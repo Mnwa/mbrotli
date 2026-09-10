@@ -104,6 +104,11 @@ pub struct DecoderSession<'d, 'dict> {
 }
 
 impl<'d, 'dict> DecoderSession<'d, 'dict> {
+    /// Output the current meta-block still declares, for growing a destination.
+    pub(super) fn declared_remaining(&self) -> usize {
+        usize::try_from(self.decoder.workspace.declared_remaining()).unwrap_or(usize::MAX)
+    }
+
     pub(super) fn start(
         decoder: &'d mut Decompressor,
         stream: DecodeStreamConfig,
@@ -231,12 +236,7 @@ impl DecoderSession<'_, '_> {
         }
         let config = self.decoder.config;
         let limits = config.limits();
-        let mut input = Input {
-            bytes: input,
-            consumed: 0,
-            total_before: self.total_in,
-            limit: limits.max_input_bytes(),
-        };
+        let mut input = Input::new(input, self.total_in, limits.max_input_bytes());
         let mut output = Output {
             bytes: output,
             produced: 0,

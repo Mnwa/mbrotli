@@ -34,12 +34,7 @@ mod fixtures {
         }
         bytes
     }
-    pub(super) const fn input(bytes: &[u8]) -> Input<'_> {
-        Input {
-            bytes,
-            consumed: 0,
-            total_before: 0,
-            limit: None,
-        }
+    pub(super) fn input(bytes: &[u8]) -> Input<'_> {
+        Input::new(bytes, 0, None)
     }
 }

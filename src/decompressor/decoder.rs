@@ -279,9 +279,22 @@ impl Decompressor {
                 DecoderSession::start(self, DecodeStreamConfig::default(), dictionary)?;
             let mut consumed = 0;
             let mut written = 0;
-            // Decode straight into the destination, growing it geometrically;
-            // the unused tail is trimmed once the stream ends.
-            let mut chunk = src.len().saturating_mul(4).clamp(256, 1 << 16);
+            // Parse up to the first byte of output with no destination at all,
+            // so the first reservation can use the size the meta-block
+            // declares instead of guessing; the tail is trimmed at the end.
+            let probe = session
+                .process(src, &mut [], DecodeOperation::Finish)
+                .map_err(super::DecodeFailure::into_error)?;
+            consumed += probe.consumed;
+            let mut chunk = src
+                .len()
+                .saturating_mul(4)
+                .clamp(256, 1 << 16)
+                .max(session.declared_remaining())
+                .min(1 << 24);
+            if probe.status == DecoderStatus::Finished {
+                chunk = 0;
+            }
             loop {
                 dst.try_reserve(written + chunk)
                     .map_err(|_| DecodeError::AllocationFailed)?;
@@ -304,7 +317,13 @@ impl Decompressor {
                     }
                     return Ok(start..dst.len());
                 }
-                chunk = chunk.saturating_mul(2).min(1 << 24);
+                // Grow to what the meta-block declares when that is known,
+                // otherwise geometrically, so one reservation usually covers
+                // the rest of a block instead of a chain of copies.
+                chunk = chunk
+                    .saturating_mul(2)
+                    .max(session.declared_remaining())
+                    .min(1 << 24);
             }
         })();
         if result.is_err() {

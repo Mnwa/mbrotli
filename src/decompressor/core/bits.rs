@@ -22,26 +22,39 @@ pub(crate) struct Input<'a> {
     pub(crate) consumed: usize,
     pub(crate) total_before: u64,
     pub(crate) limit: Option<u64>,
+    /// End of the prefix this call may accept without per-byte limit checks,
+    /// fixed at construction because the other fields never change mid-call.
+    fast_end: usize,
 }
 
-impl Input<'_> {
+impl<'a> Input<'a> {
+    pub(crate) fn new(bytes: &'a [u8], total_before: u64, limit: Option<u64>) -> Self {
+        let budget = limit
+            .map_or(u64::MAX, |limit| limit.saturating_sub(total_before))
+            .min(u64::MAX - total_before);
+        let fast_end =
+            usize::try_from(budget).map_or(bytes.len(), |budget| budget.min(bytes.len()));
+        Self {
+            bytes,
+            consumed: 0,
+            total_before,
+            limit,
+            fast_end,
+        }
+    }
+
     /// End of the prefix this call may accept without per-byte limit checks.
-    pub(super) fn fast_end(&self) -> usize {
-        let budget = self
-            .limit
-            .map_or(u64::MAX, |limit| limit.saturating_sub(self.total_before))
-            .min(u64::MAX - self.total_before);
-        usize::try_from(budget).map_or(self.bytes.len(), |budget| budget.min(self.bytes.len()))
+    #[inline(always)]
+    pub(super) const fn fast_end(&self) -> usize {
+        self.fast_end
     }
 }
 
+/// Low `count` bits set, for `count` below 64.
 #[inline(always)]
 pub(super) const fn mask(count: u32) -> u64 {
-    if count == 0 {
-        0
-    } else {
-        u64::MAX >> (64 - count)
-    }
+    debug_assert!(count < 64);
+    (1u64 << count) - 1
 }
 
 impl Bits {
@@ -78,6 +91,7 @@ impl Bits {
         Ok(true)
     }
 
+    #[inline]
     pub(super) fn peek(
         &mut self,
         count: u32,
@@ -94,29 +108,38 @@ impl Bits {
 
     /// Loads whole bytes until at least 57 bits are buffered. Returns false,
     /// leaving the reservoir unchanged, when fewer than eight acceptable bytes
-    /// remain before `fast_end`.
+    /// remain before the input's fast end.
     #[inline(always)]
-    pub(super) fn refill(&mut self, input: &mut Input<'_>, fast_end: usize) -> bool {
+    pub(super) fn refill(&mut self, input: &mut Input<'_>) -> bool {
+        let Input {
+            bytes,
+            consumed,
+            fast_end,
+            ..
+        } = input;
+        self.refill_from(&bytes[..*fast_end], consumed)
+    }
+
+    /// [`Self::refill`] over the acceptable prefix of the input, with the
+    /// cursor held by the caller so a hot loop keeps it in a register.
+    #[inline(always)]
+    pub(super) fn refill_from(&mut self, fast: &[u8], consumed: &mut usize) -> bool {
         if self.count > MAX_PEEK {
             return true;
         }
-        let end = input.consumed + 8;
-        if end > fast_end {
-            return false;
-        }
-        let Some(chunk) = input
-            .bytes
-            .get(input.consumed..end)
-            .and_then(|chunk| chunk.first_chunk::<8>())
+        let Some(chunk) = fast
+            .get(*consumed..)
+            .and_then(|rest| rest.first_chunk::<8>())
         else {
             return false;
         };
         let bytes = (64 - self.count) >> 3;
         let keep = bytes * 8;
-        let word = u64::from_le_bytes(*chunk) & (u64::MAX >> (64 - keep));
+        // `keep` is at most 64: shift in two steps so a full word needs no mask.
+        let word = (u64::from_le_bytes(*chunk) << (64 - keep)) >> (64 - keep);
         self.value |= word << self.count;
         self.count += keep;
-        input.consumed += bytes as usize;
+        *consumed += bytes as usize;
         true
     }
 
@@ -144,6 +167,7 @@ impl Bits {
         value
     }
 
+    #[inline]
     pub(super) fn read(
         &mut self,
         count: u32,
@@ -193,21 +217,11 @@ impl Bits {
 mod tests {
     use super::*;
     fn probe(bytes: &[u8]) -> Input<'_> {
-        Input {
-            bytes,
-            consumed: 0,
-            total_before: 0,
-            limit: None,
-        }
+        Input::new(bytes, 0, None)
     }
     #[test]
     fn cumulative_input_overflow_is_reported_before_accepting_a_byte() {
-        let mut input = Input {
-            bytes: &[0],
-            consumed: 0,
-            total_before: u64::MAX,
-            limit: None,
-        };
+        let mut input = Input::new(&[0], u64::MAX, None);
         assert!(matches!(
             Bits::default().read(1, &mut input),
             Err(DecodeError::SizeOverflow)
@@ -220,12 +234,7 @@ mod tests {
         let mut bits = Bits::default();
         let mut first = probe(&[0x01]);
         assert_eq!(bits.read(12, &mut first).unwrap(), None);
-        let mut second = Input {
-            bytes: &[0x02, 0xaa],
-            consumed: 0,
-            total_before: 1,
-            limit: None,
-        };
+        let mut second = Input::new(&[0x02, 0xaa], 1, None);
         assert_eq!(bits.read(12, &mut second).unwrap(), Some(0x201));
         assert_eq!(second.consumed, 1);
         bits.align().unwrap();
@@ -237,9 +246,9 @@ mod tests {
         let mut bits = Bits::default();
         let mut input = probe(&bytes);
         assert!(bits.read(3, &mut input).unwrap().is_some());
-        assert!(bits.refill(&mut input, bytes.len()));
+        assert!(bits.refill(&mut input));
         assert_eq!((bits.count(), input.consumed), (61, 8));
-        assert!(bits.refill(&mut input, bytes.len()));
+        assert!(bits.refill(&mut input));
         assert_eq!(bits.count(), 61);
         assert_eq!(bits.take(13), (0x03_02_01u64 >> 3) & mask(13));
         bits.unread(&mut input);
@@ -247,35 +256,34 @@ mod tests {
         assert_eq!(input.consumed, 2);
         assert_eq!(bits.read(8, &mut input).unwrap(), Some(3));
         // Fewer than eight acceptable bytes: the reservoir is left alone.
-        assert!(!bits.refill(&mut input, 9));
+        let mut limited = Input::new(&bytes, 0, Some(9));
+        limited.consumed = 2;
+        assert!(!bits.refill(&mut limited));
         assert_eq!(bits.count(), 0);
         // A slice shorter than the fast end cannot supply a whole word either.
         input.consumed = bytes.len() - 3;
-        assert!(!bits.refill(&mut input, bytes.len() + 5));
+        assert!(!bits.refill(&mut input));
         assert_eq!(bits.count(), 0);
     }
     #[test]
     fn fast_end_respects_limits_and_slice_length() {
         let bytes = [0u8; 10];
-        let mut probe = probe(&bytes);
-        assert_eq!(probe.fast_end(), 10);
-        probe.limit = Some(7);
-        assert_eq!(probe.fast_end(), 7);
-        probe.total_before = 9;
-        assert_eq!(probe.fast_end(), 0);
-        probe.limit = None;
-        probe.total_before = u64::MAX - 3;
-        assert_eq!(probe.fast_end(), 3);
+        assert_eq!(probe(&bytes).fast_end(), 10);
+        assert_eq!(Input::new(&bytes, 0, Some(7)).fast_end(), 7);
+        assert_eq!(Input::new(&bytes, 9, Some(7)).fast_end(), 0);
+        assert_eq!(Input::new(&bytes, u64::MAX - 3, None).fast_end(), 3);
+        assert_eq!(mask(0), 0);
+        assert_eq!(mask(56), (1 << 56) - 1);
     }
     #[test]
     fn full_reservoir_refill_and_uint8_decode() {
         let bytes = [0xff; 16];
         let mut bits = Bits::default();
         let mut input = probe(&bytes);
-        assert!(bits.refill(&mut input, 16));
+        assert!(bits.refill(&mut input));
         assert_eq!((bits.count(), input.consumed), (64, 8));
         bits.drop(64 - 7);
-        assert!(bits.refill(&mut input, 16));
+        assert!(bits.refill(&mut input));
         assert_eq!((bits.count(), input.consumed), (63, 15));
         assert_eq!(
             Bits::default().uint8(&mut probe(&[0b0001_0011])).unwrap(),

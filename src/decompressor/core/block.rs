@@ -1,7 +1,7 @@
 use super::super::DecodeError;
 use super::{
     bits::{Bits, Input},
-    huffman::{self, Builder, Huffman},
+    huffman::{Builder, Huffman},
     memory::Memory,
 };
 use crate::shared::format::PREFIX_CODE_RANGES;
@@ -96,7 +96,7 @@ impl Block {
 
     fn length(&mut self, bits: &mut Bits, input: &mut Input<'_>) -> Result<bool, DecodeError> {
         if self.stage == Stage::LengthSymbol {
-            let Some(symbol) = self.lengths.decode(bits, input)? else {
+            let Some(symbol) = self.lengths.codes().decode_refilling(bits, input)? else {
                 return Ok(false);
             };
             self.stage = Stage::LengthExtra { symbol };
@@ -132,7 +132,7 @@ impl Block {
             return Ok(true);
         }
         if self.stage == Stage::Ready {
-            let Some(symbol) = self.types.decode(bits, input)? else {
+            let Some(symbol) = self.types.codes().decode_refilling(bits, input)? else {
                 return Ok(false);
             };
             self.switch_to(symbol);
@@ -146,9 +146,9 @@ impl Block {
     #[inline(always)]
     pub(super) fn switch_fast(&mut self, bits: &mut Bits) {
         debug_assert!(self.remaining == 0 && self.stage == Stage::Ready);
-        let symbol = huffman::decode_fast(self.types.codes(), bits);
+        let symbol = self.types.codes().decode_fast(bits);
         self.switch_to(symbol);
-        let symbol = huffman::decode_fast(self.lengths.codes(), bits);
+        let symbol = self.lengths.codes().decode_fast(bits);
         let (base, width) = PREFIX_CODE_RANGES[symbol];
         self.remaining = u64::from(base) + bits.take(width);
     }
@@ -226,7 +226,7 @@ mod tests {
                 );
                 block.advance();
                 bits.unread(&mut input);
-                assert!(bits.refill(&mut input, bytes.len()));
+                assert!(bits.refill(&mut input));
                 if use_fast {
                     assert!(block.switch_ready());
                     block.switch_fast(&mut bits);

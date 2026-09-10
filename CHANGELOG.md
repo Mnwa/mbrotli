@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+- Bring decoder throughput to at least 95% of the reference C decoder for
+  every quality and benchmark corpus, measured warm against C's create/destroy
+  slice shape (see the compatibility specification for the table). The command
+  fast path now keeps every hot quantity in a local and writes state back only
+  when it pauses: the bit reservoir, an input cursor over the precomputed
+  acceptable prefix, the ring position, the remaining meta-block length, the
+  recent-distance cache and the resumable command fields. Decoded bytes are
+  delivered when the ring wraps or the loop pauses rather than after every
+  command, the output space is a running count, and the ring grows once per
+  call to what the call can still produce. A padded 1024-entry command table
+  yields both length bases, extra widths, the implicit flag and the distance
+  context in one masked lookup; a per-meta-block distance symbol table (reused
+  when the layout repeats) resolves a distance with one lookup and no `u128`;
+  the recent-distance cache is a push-indexed ring so an implicit or code-0
+  distance costs one slot write and no branch; and literal, command and
+  distance tables plus the literal context slice and its trivial-context flag
+  are refreshed at block switches instead of per command. Literal runs are
+  bounded once by every loop-invariant limit so the run checks only the
+  reservoir, a run that paused on output resumes in the same loop, and short
+  copies are 16- or 32-byte word moves. Huffman table entries are padding-free
+  words holding absolute second-level offsets; each group keeps its roots and
+  its second-level tables in one vector whose length is a grow-only high-water
+  mark, so warm meta-blocks write no fill and a cold decode zero-fills once as
+  a memory set. The description reader keeps an intrusive linked list per code
+  length, so building a table walks only coded symbols, counts canonical codes
+  upward and reverses them through a byte table, and reads code lengths,
+  context maps and block switches with whole-word refills. Accounted workspace
+  buffers grow geometrically, and the `Vec` decoding shapes parse up to the
+  first output byte before reserving what the meta-block declares, so large
+  outputs get one reservation instead of a chain of copies. No `unsafe` was
+  added. The cold shape on payloads of a kilobyte and below remains
+  allocation-bound (see the compatibility specification). Fixes a latent
+  fast-path bug found by the vendored `zerosukkanooa` fixture during this
+  work: a copy paused on a full output window resumed without the
+  distance-cache push, and a regression test now covers it.
+
 - Expand public API documentation with runnable decoder, dictionary, parallel
   source, and framing examples. Clarify partial output, final-input retries,
   resource limits, reader read-ahead, writer finalization, and dictionary
@@ -39,8 +75,7 @@
   `unsafe` was added. Warm decoding is faster than the reference C
   create/destroy shape on copy-heavy, tiny and metadata inputs and reaches
   roughly parity across the vendored test corpus overall; high-entropy text
-  decodes at roughly 0.6x of C, where safe bounds-checked table lookups cannot
-  match an unchecked-pointer decoder.
+  decoded at roughly 0.6x of C at that point, a gap the entry above closes.
 
 - Add an AFL C-encoder-to-Rust-decoder round-trip target with one-shot and
   streaming checks, shared encoder seeds, Q0–Q11 regression coverage, and

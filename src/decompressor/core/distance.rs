@@ -1,6 +1,8 @@
 //! Wire distance arithmetic, independent of host address size and history.
 
 use super::super::{DecodeError, InvalidDataKind};
+use super::memory::Memory;
+use alloc::vec::Vec;
 
 const SHORT_CODES: usize = 16;
 const MAX_DISTANCE: u128 = (1u128 << 63) - 4;
@@ -8,11 +10,63 @@ const MAX_DISTANCE: u128 = (1u128 << 63) - 4;
 /// never needs the wider type.
 const MAX_DISTANCE_U64: u64 = (1u64 << 63) - 4;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct DistanceLayout {
     postfix: u8,
     direct: usize,
     large: bool,
+}
+
+/// A distance symbol split into the extra-bit width and the distance it
+/// yields once the extra field is known, so the field can be read between.
+/// Both fields are `u64` so the table has no padding and its zero fill is a
+/// plain memory set.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct Partial {
+    pub(super) width: u64,
+    /// Distance before the extra field; add `extra << postfix`.
+    pub(super) base: u64,
+}
+
+/// The four most recent distances as a ring, in the shape of C's `dist_rb`:
+/// `index` counts pushes, so slot `(index - 1) & 3` is the most recent one.
+/// Reading the most recent distance and pushing it back is then the same
+/// slot write as pushing a new one, which keeps the implicit-distance
+/// command free of a branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Cache {
+    slots: [u64; 4],
+    index: usize,
+}
+
+impl Default for Cache {
+    fn default() -> Self {
+        Self {
+            slots: [16, 15, 11, 4],
+            index: 4,
+        }
+    }
+}
+
+impl Cache {
+    /// The `back`-th most recent distance, zero being the most recent.
+    #[inline(always)]
+    pub(super) const fn recent(&self, back: usize) -> u64 {
+        self.slots[self.index.wrapping_sub(1 + back) & 3]
+    }
+
+    /// Takes the most recent distance out so that [`Self::push`] returns it.
+    #[inline(always)]
+    pub(super) const fn pop(&mut self) -> u64 {
+        self.index = self.index.wrapping_sub(1);
+        self.slots[self.index & 3]
+    }
+
+    #[inline(always)]
+    pub(super) const fn push(&mut self, distance: u64) {
+        self.slots[self.index & 3] = distance;
+        self.index = self.index.wrapping_add(1);
+    }
 }
 
 impl DistanceLayout {
@@ -23,6 +77,16 @@ impl DistanceLayout {
             direct: ((header >> 2) as usize) << postfix,
             large,
         }
+    }
+
+    pub(super) const fn postfix(self) -> u32 {
+        self.postfix as u32
+    }
+
+    /// Whether the layout belongs to a large-window stream, whose extra
+    /// fields may exceed 32 bits.
+    pub(super) const fn is_large(self) -> bool {
+        self.large
     }
 
     pub(super) const fn alphabet(self) -> usize {
@@ -91,7 +155,7 @@ impl DistanceLayout {
         self,
         symbol: usize,
         extra: u64,
-        cache: &[u64; 4],
+        cache: &Cache,
     ) -> Result<u64, DecodeError> {
         if symbol >= SHORT_CODES {
             if self.large {
@@ -101,12 +165,56 @@ impl DistanceLayout {
             // distance is always in range and needs no further check.
             return Ok(self.short_window_distance(symbol, extra));
         }
+        Self::short(symbol, cache)
+    }
+
+    /// Resolves one of the sixteen short codes against the recent distances.
+    #[inline(always)]
+    pub(super) fn short(symbol: usize, cache: &Cache) -> Result<u64, DecodeError> {
         const INDEX: [usize; 16] = [0, 1, 2, 3, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1];
         const OFFSET: [i8; 16] = [0, 0, 0, 0, -1, 1, -2, 2, -3, 3, -1, 1, -2, 2, -3, 3];
-        cache[INDEX[symbol]]
-            .checked_add_signed(i64::from(OFFSET[symbol]))
+        cache
+            .recent(INDEX[symbol & 15])
+            .checked_add_signed(i64::from(OFFSET[symbol & 15]))
             .filter(|&v| v != 0 && v <= MAX_DISTANCE_U64)
             .ok_or_else(|| InvalidDataKind::Distance.into())
+    }
+
+    /// Fills `table` with the split of every symbol of the alphabet, so the
+    /// command loop resolves a distance with one lookup. Short codes get an
+    /// empty entry; they resolve through the cache. A large-window symbol
+    /// whose maximum distance the header rejects is never decoded, so its
+    /// entry may wrap.
+    pub(super) fn fill_table(
+        self,
+        table: &mut Vec<Partial>,
+        memory: &mut Memory,
+    ) -> Result<(), DecodeError> {
+        let alphabet = self.alphabet();
+        if table.len() < alphabet {
+            memory.resize(table, alphabet)?;
+        }
+        for (symbol, entry) in table.iter_mut().enumerate().take(alphabet) {
+            *entry = if symbol < SHORT_CODES {
+                Partial::default()
+            } else if symbol < SHORT_CODES + self.direct {
+                Partial {
+                    width: 0,
+                    base: (symbol - SHORT_CODES + 1) as u64,
+                }
+            } else {
+                let code = symbol - SHORT_CODES - self.direct;
+                let width = 1 + (code >> (self.postfix + 1)) as u32;
+                let high = code >> self.postfix;
+                let low = code & ((1 << self.postfix) - 1);
+                let offset = (((2 + (high & 1)) as u64) << width).wrapping_sub(4);
+                Partial {
+                    width: u64::from(width),
+                    base: (offset << self.postfix).wrapping_add((low + self.direct + 1) as u64),
+                }
+            };
+        }
+        Ok(())
     }
 }
 
@@ -117,6 +225,8 @@ mod tests {
     fn every_layout_agrees_with_an_independent_wide_integer_model() {
         for header in 0..64 {
             let layout = DistanceLayout::from_header(header, true);
+            assert!(layout.is_large());
+            assert!(!DistanceLayout::from_header(header, false).is_large());
             let postfix = u32::from(header & 3);
             let direct = u128::from(header >> 2) << postfix;
             for symbol in 16..layout.alphabet() {
@@ -148,15 +258,102 @@ mod tests {
     #[test]
     fn cache_offsets_cannot_make_zero_or_overflowed_distances() {
         let layout = DistanceLayout::default();
-        for symbol in [4, 6, 8, 10, 12, 14] {
-            assert!(layout.resolve(symbol, 0, &[1; 4]).is_err());
+        let mut ones = Cache::default();
+        for _ in 0..4 {
+            ones.push(1);
         }
-        assert!(layout.resolve(5, 0, &[u64::MAX; 4]).is_err());
-        assert_eq!(layout.resolve(3, 0, &[4, 11, 15, 16]).unwrap(), 16);
+        for symbol in [4, 6, 8, 10, 12, 14] {
+            assert!(layout.resolve(symbol, 0, &ones).is_err());
+        }
+        let mut huge = Cache::default();
+        for _ in 0..4 {
+            huge.push(u64::MAX);
+        }
+        assert!(layout.resolve(5, 0, &huge).is_err());
+        assert_eq!(layout.resolve(3, 0, &Cache::default()).unwrap(), 16);
         assert!(
             DistanceLayout::from_header(63, true)
-                .resolve(1127, u64::MAX, &[4; 4])
+                .resolve(1127, u64::MAX, &Cache::default())
                 .is_err()
         );
+    }
+
+    #[test]
+    fn cache_orders_recent_distances_and_pop_push_keeps_the_most_recent() {
+        let mut cache = Cache::default();
+        assert_eq!(
+            [
+                cache.recent(0),
+                cache.recent(1),
+                cache.recent(2),
+                cache.recent(3)
+            ],
+            [4, 11, 15, 16]
+        );
+        cache.push(100);
+        assert_eq!(
+            [
+                cache.recent(0),
+                cache.recent(1),
+                cache.recent(2),
+                cache.recent(3)
+            ],
+            [100, 4, 11, 15]
+        );
+        let last = cache.pop();
+        assert_eq!(last, 100);
+        cache.push(last);
+        assert_eq!(
+            [
+                cache.recent(0),
+                cache.recent(1),
+                cache.recent(2),
+                cache.recent(3)
+            ],
+            [100, 4, 11, 15]
+        );
+        for extra in 0..20 {
+            cache.push(1000 + extra);
+        }
+        assert_eq!(cache.recent(0), 1019);
+        assert_eq!(cache.recent(3), 1016);
+    }
+
+    #[test]
+    fn symbol_table_matches_full_resolution_for_every_layout() {
+        for large in [false, true] {
+            for header in 0..64 {
+                let layout = DistanceLayout::from_header(header, large);
+                let mut table = Vec::new();
+                layout
+                    .fill_table(&mut table, &mut Memory::default())
+                    .unwrap();
+                assert_eq!(table.len(), layout.alphabet());
+                assert_eq!(table[3], Partial::default());
+                for (symbol, &entry) in table.iter().enumerate().skip(16) {
+                    if layout.validate_symbol(symbol).is_err() {
+                        continue;
+                    }
+                    assert_eq!(entry.width, u64::from(layout.extra_bits(symbol)));
+                    for extra in [0, (1u64 << entry.width) - 1] {
+                        assert_eq!(
+                            entry.base + (extra << layout.postfix()),
+                            layout.resolve(symbol, extra, &Cache::default()).unwrap(),
+                            "header {header} large {large} symbol {symbol}"
+                        );
+                    }
+                }
+            }
+        }
+        // A smaller alphabet reuses the table without shrinking it.
+        let mut table = Vec::new();
+        DistanceLayout::from_header(63, true)
+            .fill_table(&mut table, &mut Memory::default())
+            .unwrap();
+        let len = table.len();
+        DistanceLayout::default()
+            .fill_table(&mut table, &mut Memory::default())
+            .unwrap();
+        assert_eq!(table.len(), len);
     }
 }

@@ -1,4 +1,5 @@
 //! Independent, deliberately small RFC fixture assembler (no encoder/core APIs).
+#![allow(dead_code, reason = "each integration test uses a different subset")]
 #[derive(Default)]
 pub struct Wire {
     bytes: Vec<u8>,
@@ -124,6 +125,23 @@ impl Wire {
         self.single(if self.large { 140 } else { 64 }, symbol);
         self.bits(widths[code], (length - bases[code]) as u64);
         self.bits(extra_width as u8, extra);
+    }
+    /// One insert-zero command whose distance is implicitly the most recent
+    /// one; only copy codes below 16 (lengths up to 17) have such symbols.
+    pub fn copy_implicit(&mut self, length: usize, decoded: usize) {
+        self.length(decoded, false);
+        self.bits(3, 0);
+        self.bits(6, 0);
+        self.bits(2, 0);
+        self.bits(2, 0);
+        self.single(256, 0);
+        let bases = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 18];
+        let widths = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 2];
+        let code = bases.iter().rposition(|&base| base <= length).unwrap();
+        let command = if code < 8 { code } else { 64 + code - 8 };
+        self.single(704, command as u64);
+        self.single(if self.large { 140 } else { 64 }, 0);
+        self.bits(widths[code], (length - bases[code]) as u64);
     }
     pub fn finish(mut self) -> Vec<u8> {
         self.bits(2, 3);

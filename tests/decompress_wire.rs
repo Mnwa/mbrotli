@@ -62,6 +62,42 @@ fn raw_prefix_reference_crosses_attachments_then_overlaps_history() {
     );
 }
 
+/// An implicit distance repeats a prefix reference. The fast path pops the
+/// cache for the implicit distance and must push it back before handing the
+/// reference to the byte-exact `Stage::Resolve`, whatever follows it.
+#[test]
+fn implicit_distance_can_repeat_a_prefix_reference() {
+    use mbrotli::dictionary::{DecodeDictionary, DecodeDictionaryLimits, DictionaryAttachment};
+    let dictionary = DecodeDictionary::new(
+        &[DictionaryAttachment::Raw(b"wxyz")],
+        DecodeDictionaryLimits::default(),
+    )
+    .unwrap();
+    let mut wire = Wire::window(10, false);
+    wire.raw(b"abcd");
+    // Distance 8 from position 4 starts the prefix; repeated implicitly from
+    // position 6 it selects the prefix tail, and from position 8 the history.
+    wire.copy(2, 8, 2);
+    wire.copy_implicit(2, 2);
+    wire.copy_implicit(9, 9);
+    // Trailing metadata keeps whole-word refills possible through the last
+    // command, so the fast path, not only the byte-exact stages, sees it.
+    wire.metadata(&[7; 64]);
+    let compressed = wire.finish();
+    let expected = b"abcdwxyzabcdwxyza";
+    let mut decoder = Decompressor::new(DecoderConfig::default()).unwrap();
+    assert_eq!(
+        decoder
+            .decompress_with_dictionary(&dictionary, &compressed)
+            .unwrap(),
+        expected
+    );
+    assert_eq!(
+        support::c_decompress_with_prefixes(&[b"wxyz"], &compressed, expected.len()).as_deref(),
+        Some(&expected[..])
+    );
+}
+
 #[test]
 fn metadata_does_not_count_as_output_and_padding_remains_required() {
     let mut wire = Wire::window(16, false);
