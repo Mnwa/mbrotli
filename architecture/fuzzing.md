@@ -18,16 +18,17 @@ the fuzz package has no direct dependency on the SIMD implementation crate.
 The fuzz package has no default features. Its opt-in `experimental` feature
 forwards to both `mbrotli/experimental` and `google-brotli-ffi/experimental`,
 enabling the serialized dictionary parser and its C oracle together. Only
-`serialized_dictionary` and `framing` require it: their Cargo binary entries,
-target bodies, private helpers, C helpers, and `TARGETS` entries share the gate.
-The default build contains 21 targets; enabling the feature contains all 23.
+`serialized_dictionary`, `framing` and `decode_serialized` require it: their
+Cargo binary entries, target bodies, private helpers, C helpers, and `TARGETS`
+entries share the gate. The default build contains 27 targets; enabling the
+feature contains all 30.
 
 ```mermaid
 flowchart TD
-    Build[Fuzz package feature selection] --> Stable[21 stable targets and regression corpora]
+    Build[Fuzz package feature selection] --> Stable[27 stable targets and regression corpora]
     Build --> Enabled{experimental enabled?}
     Enabled -->|yes| Dependencies[Rust experimental APIs and C experimental oracle]
-    Dependencies --> Extra[Serialized dictionary and framing binaries and bodies]
+    Dependencies --> Extra[Serialized dictionary, framing and decode_serialized binaries and bodies]
     Extra --> Registry[TARGETS includes both experimental corpora]
     Enabled -->|no| Omit[Experimental binaries and registry entries omitted]
 ```
@@ -37,11 +38,11 @@ The package is split so that the AFL dependency stops at the binary layer:
 ```mermaid
 graph TD
     subgraph engine["Engine layer (depends on afl)"]
-        bins["src/bin/ — 21 stable and 2 experimental afl::fuzz! adapters"]
+        bins["src/bin/ — 27 stable and 3 experimental afl::fuzz! adapters"]
     end
 
     subgraph neutral["Engine-neutral layer (no afl dependency)"]
-        targets["src/targets.rs<br/>TARGETS registry, one fn per target"]
+        targets["src/targets.rs and src/decode_targets.rs<br/>TARGETS registry, one fn per target"]
         lib["src/lib.rs<br/>Context, decode_case, cap,<br/>host_levels, C oracles"]
     end
 
@@ -303,6 +304,9 @@ milliseconds, about four times the slowest observed instrumented execution of a
 
 - Decoder targets and their independent C oracle are described below. Encoder
   round-trip targets continue to use Google's C decoder.
+- **The two campaign scripts do not overlap.** `campaign.sh` fuzzes the encoder
+  surface and `decode_roundtrip`; `decoder-campaign.sh` fuzzes the decoder
+  surface. Running only one leaves the other unfuzzed.
 - **Framing fault injection is deterministic, not fuzz-driven.**
   `tests/framing.rs` injects short writes and retryable failures at each tested
   offset; the fuzz target varies valid resource/metadata sequences and chunking.
@@ -375,6 +379,42 @@ C-unsupported wide windows. Resource refusal is not treated as a format verdict.
 against prebuilt binaries and fails on saved crashes/hangs. Build the matching
 profile first. Decoder fixtures and upstream seeds are described in
 `fuzz/afl/regressions/decoder-provenance.md` and the decoder compatibility report.
+
+### Decoder campaigns
+
+`campaign.sh` covers the encoder surface and `decode_roundtrip`.
+`decoder-campaign.sh` covers this one: the six base targets and, in the
+experimental build, `decode_serialized`, thirteen workers in all. Both phases
+run at once, because thirteen workers fit an ordinary host without
+oversubscription, and the two builds again occupy separate target directories.
+
+The three targets that read a compressed member directly — `decompress`,
+`decode_streaming` and `decode_io_limits` — take `seeds/decoder`, which
+`prepare-decoder-seeds.sh` materialises from the committed regression inputs and
+from Google Brotli's own `*.compressed*` fixtures below 50 KiB. Those targets
+accept arbitrary bytes and need no seeds to run, but bytes that already decode
+reach the grammar sooner than mutations toward a valid header. `decode_roundtrip`
+reads the encoder's parameter header and uses `seeds/params`; the rest carry
+their own input models and use their committed corpora. `SEED_ROOT` overrides a
+worker's corpus with `$SEED_ROOT/<config>-<target>` when that directory exists,
+which is how a `cmin`-reduced queue from an earlier campaign is carried forward.
+
+```mermaid
+flowchart TD
+    Prepare["prepare-decoder-seeds.sh<br/>regressions + vendored *.compressed*"] --> Corpus
+    Corpus["seeds/decoder"] --> Choice
+    Params["seeds/params, regressions/&lt;target&gt;"] --> Choice
+    Carry["SEED_ROOT/&lt;config&gt;-&lt;target&gt;<br/>cmin of an earlier queue"] -->|when present| Choice
+    Choice{"seeds_for config target"} --> Both
+    Both["stable 6 workers + experimental 7 workers,<br/>run together, fixed -t"] --> Findings
+    Findings["findings/&lt;root&gt;/&lt;build&gt;/&lt;target&gt;"] --> Triage["tmin → regressions/ → cargo afl test"]
+```
+
+The execution timeout is fixed at five seconds rather than calibrated, for the
+reason the encoder campaign uses a fixed thirty: a trailing `+` would let AFL++
+derive its own ceiling from the seeds and discard slower decodes as timeouts.
+Five seconds is far above any decode of a 128 KiB member, so anything reaching
+it is a finding rather than a slow input.
 
 ### C encoder to native decoder round-trip
 

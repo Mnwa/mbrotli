@@ -42,10 +42,14 @@ Generate seeds from the vendored Brotli test data, then minimize them:
 ```sh
 ./prepare-seeds.sh
 ./minimise-seeds.sh
+./prepare-decoder-seeds.sh
 ```
 
 The generated corpora are `generic`, `params`, `large_window`, and `dictionary`.
-Other targets use their committed `regressions/<target>/` corpus.
+`prepare-decoder-seeds.sh` adds `seeds/decoder` for the targets that read a
+compressed member directly, from the committed decoder regressions and Google
+Brotli's own `*.compressed*` fixtures below 50 KiB. Other targets use their
+committed `regressions/<target>/` corpus.
 The minimization script preserves the originals in `seeds/*.raw` and disables
 the forkserver for `afl-cmin` folder-mode coverage collection.
 
@@ -64,6 +68,12 @@ the forkserver for `afl-cmin` folder-mode coverage collection.
 | `large_window` | `seeds/large_window` | Header/quality validation, backend identity, and available C decoding |
 | `dictionary` | `seeds/dictionary` | Preparation limits, prefix matching, quality restrictions, and C compatibility |
 | `compressor_lifecycle` | `regressions/compressor_lifecycle` | Reuse, trim, reconfiguration, failures, abandonment, and recovery |
+| `decompress` | `seeds/decoder` | Arbitrary compressed bytes against the C decoder's typed outcome, plus an unbounded replay of every accepted stream |
+| `decode_streaming` | `seeds/decoder` | Chunked sessions against one-shot decoding: exact progress, cumulative counters, and termination |
+| `decode_io_limits` | `seeds/decoder` | Output budgets crossed with one retryable sink failure, which may neither duplicate nor drop payload |
+| `decode_dictionary` | `regressions/decode_dictionary` | A bounded raw prefix, then attached decoding against C with the same attachment, and reuse determinism |
+| `decode_lifecycle` | `regressions/decode_lifecycle` | Forgotten sessions, abandonment, recovery, trim and reconfiguration between decodes |
+| `decode_serialized` (`experimental`) | `regressions/decode_serialized` | Serialized attachment parsing and attached decoding against the experimental C decoder |
 | `serialized_dictionary` (`experimental`) | `regressions/serialized_dictionary` | Parsing, canonical serialization, bounded preparation, and C decoding |
 | `framing` (`experimental`) | `regressions/framing` | Resource/metadata sequences, chunking, directory completeness, and payload decoding |
 | `parallel` | `regressions/parallel` | Scheduling, source adapters, staging, fragments, and C decoding |
@@ -175,6 +185,21 @@ repeat that profile. `../../scripts/fuzz_decoder.sh base 60` includes this targe
 alongside the arbitrary-byte decoder targets. The same crash replay and
 minimization procedure above applies; decoder round-trip regressions share
 `regressions/params_roundtrip` with the encoder.
+
+`decoder-campaign.sh` is the decoder counterpart of `campaign.sh`: one worker
+per decoder target in both feature builds, thirteen in all, both phases at once.
+
+```sh
+./prepare-decoder-seeds.sh
+./decoder-campaign.sh findings/decoder 10800
+```
+
+Its arguments are a findings root, which must not already exist, the seconds
+every worker runs, and an optional execution timeout in milliseconds, 5000 by
+default. Set `SEED_ROOT` to carry an earlier campaign's exploration forward:
+when `$SEED_ROOT/<config>-<target>` exists it replaces that worker's corpus,
+which is where a `cargo afl cmin` reduction of a previous queue belongs.
+Results belong in the [correctness proof](../../docs/correctness.md).
 
 `decompress` and `decode_streaming` additionally consume arbitrary bytes directly.
 Their shared synthetic random-byte fixtures are described in

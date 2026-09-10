@@ -321,13 +321,19 @@ fn copy_ring<S: Simd>(
     }
 }
 
-/// Writes `bytes` at `position` in ring pieces. The ring already holds them.
+/// Writes `bytes` at `position` in ring pieces. The ring already holds them,
+/// which is why the emptiness check comes first: a transformed dictionary word
+/// can decode to no bytes at all, and as a member's first command it reaches
+/// this with nothing written and the ring still unallocated.
 fn write_ring(
     ring: &mut [u8],
     position: &mut u64,
     mut bytes: &[u8],
     mut flushed: Option<(&mut u64, &mut Output<'_>)>,
 ) {
+    if bytes.is_empty() {
+        return;
+    }
     let size = ring.len();
     let mask = size as u64 - 1;
     while !bytes.is_empty() {

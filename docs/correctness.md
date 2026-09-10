@@ -8,8 +8,9 @@ verification: the encoder is compared byte for byte with the pinned C reference,
 its streams are decoded by the reference decoder, its own entry points and SIMD
 backends are compared with each other, its memory behaviour is checked under
 Miri and AddressSanitizer, every function is required to execute under test,
-and a two-hour coverage-guided fuzz campaign over both feature builds drives
-all of those oracles with mutated inputs. Every command below runs from a
+and coverage-guided fuzz campaigns over both feature builds — two hours across
+the encoder surface, three across the decoder — drive all of those oracles with
+mutated inputs. Every command below runs from a
 checkout; nothing in the record depends on a hosted service.
 
 ## What is claimed
@@ -19,6 +20,8 @@ checkout; nothing in the record depends on a hosted service.
 | Default features, qualities 0–11, windows 10–24 | Byte identity with Google Brotli v1.2.0 as of upstream `master` `4508218e` (`brotli-ffi/vendor/brotli`, 2026-09-01) configured with equivalent streaming settings, and decodability by its decoder | C encoder and decoder through `google-brotli-ffi` |
 | Large Window Brotli, qualities 3–11 | Decodable by the C decoder up to its 30-bit limit; above it, identical to the 30-bit stream apart from the header bits | C decoder; header comparison |
 | Prepared prefix dictionaries, qualities 5–11 | Byte identity with C where C supports the same attachment, and C decoding with the dictionary attached | C encoder and decoder |
+| Native decoder, any input bytes | A stream the C decoder accepts decodes to the same bytes and consumes the same prefix, or is refused by a declared resource budget; no input panics | C decoder through `google-brotli-ffi` |
+| Native decoder, streaming | Chunked sessions agree with one-shot decoding on bytes, on cumulative progress, and on termination, at any chunk and output size | Cross-entry-point comparison |
 | All serial entry points | Same bytes from `compress`, `compress_into`, `compress_to_slice`, `writer`, `reader`, and `start` at any chunk size, with any backend, from a fresh or reused compressor | Cross-API and cross-backend comparison |
 | Parallel compression | One valid stream, deterministic across task counts | C decoder; cross-schedule comparison |
 | `experimental`: serialized dictionaries, custom static encoding, continuations, framing | RFC 9841 conformance validated by the C parser and decoder built with `BROTLI_EXPERIMENTAL`, byte identity with C for continuations, and this crate's own fixtures | C decoder; fixtures |
@@ -36,7 +39,8 @@ flowchart TD
     Memory["Memory: Miri and AddressSanitizer"] --> Coverage
     Coverage["100% function coverage gate"] --> Replay
     Replay["AFL regression replay<br/>both flows"] --> Campaign
-    Campaign["Two-hour AFL++ campaign<br/>44 concurrent workers over both builds"]
+    Campaign["Two-hour encoder AFL++ campaign<br/>44 concurrent workers over both builds"] --> Decoder
+    Decoder["Three-hour decoder AFL++ campaign<br/>13 concurrent workers over both builds"]
 ```
 
 Each layer strengthens the one above it. Static checks and tests establish
@@ -71,21 +75,26 @@ retention and preparation budgets with an accounting allocator.
 
 ### Fuzzing
 
-The `fuzz/afl` package holds 23 AFL++ targets whose bodies are engine-neutral
-functions, so the same code runs under the fuzzer and under
-`cargo afl test`, which replays the committed regression corpus. The oracles
-are the ones above: bound, C decoding, byte identity with C, cross-API and
-cross-backend identity, and typed refusals where the API contract requires
-them. The [fuzzing specification](../architecture/fuzzing.md) describes each
-target's input model and oracle.
+The `fuzz/afl` package holds 30 AFL++ targets — 27 in a default build, three
+more behind `experimental` — whose bodies are engine-neutral functions, so the
+same code runs under the fuzzer and under `cargo afl test`, which replays the
+committed regression corpus. The oracles are the ones above: bound, C decoding,
+byte identity with C, cross-API and cross-backend identity, and typed refusals
+where the API contract requires them. Seven of the targets drive the native
+decoder instead, against the C decoder's typed outcome. The
+[fuzzing specification](../architecture/fuzzing.md) describes each target's
+input model and oracle.
 
 Two builds are fuzzed. The `experimental` feature reaches into the encoder
 (match finders, the high-quality search, and parameter resolution carry
-`cfg(feature = "experimental")` branches), so the 21 stable targets are fuzzed
+`cfg(feature = "experimental")` branches), so the stable targets are fuzzed
 once from a `--no-default-features` build and again from a
-`--features experimental` build, alongside the two experimental-only targets.
-`fuzz/afl/campaign.sh` runs both phases, in sequence by default or together
-under `CAMPAIGN_PARALLEL=1`.
+`--features experimental` build, alongside the experimental-only targets.
+Two scripts divide the surface: `fuzz/afl/campaign.sh` runs the encoder targets
+and `decode_roundtrip`, in sequence by default or together under
+`CAMPAIGN_PARALLEL=1`, and `fuzz/afl/decoder-campaign.sh` runs the decoder
+targets, both builds at once. Running one leaves the other's surface unfuzzed,
+so a complete record needs both.
 
 ## Record: 2026-09-07
 
@@ -244,6 +253,171 @@ accepted those. The assertion now keys on the number actually attached, and two
 minimised inputs are committed as `fuzz/afl/regressions/dictionary/crash-*.bin`,
 which this record's regression replay executes in both flows.
 
+## Record: 2026-09-10, decoder campaign
+
+This record covers the native decoder. The encoder record above still stands;
+nothing in this run changed encoder code.
+
+| Item | Value |
+| --- | --- |
+| Revision | `438666b` plus this record's commit |
+| C reference | Google Brotli v1.2.0, upstream `4508218e` (`brotli-ffi/vendor/brotli`) |
+| Host | Intel Core i7-13700KF, 24 hardware threads, 47 GiB, Ubuntu 22.04 under WSL2 |
+| Stable toolchain | rustc 1.98.1 (2026-09-01), cargo 1.98.1 |
+| Fuzzer | cargo-afl 0.18.2, AFL++ 4.40c, CmpLog, persistent mode with shared-memory test cases and a deferred forkserver |
+
+### What ran
+
+```sh
+cd fuzz/afl
+./prepare-decoder-seeds.sh
+cargo afl build --release --no-default-features --target-dir target/stable
+cargo afl build --release --no-default-features --features experimental \
+    --target-dir target/experimental
+SEED_ROOT=seeds/decoder-cmin ./decoder-campaign.sh findings/decoder-3h 10800
+```
+
+Thirteen workers, all at once on 24 hardware threads: six decoder targets from
+the `--no-default-features` build and seven from the `--features experimental`
+build, three hours each, 39 worker-hours. Every worker used CmpLog, a fixed
+five-second execution timeout, and no memory limit. Payloads are capped at
+128 KiB by the targets and decoded output at 64 KiB.
+
+### The defect this campaign found
+
+A first campaign, from the committed corpora, saved its first crash after seven
+minutes and 32 in the hour before it was stopped, spread over `decompress`,
+`decode_dictionary`, `decode_io_limits` and `decode_serialized` in both builds.
+Every one of them was the same defect, and it was in the decoder rather than in
+the harness.
+
+A built-in dictionary word whose transform consumes the whole word decodes to
+no bytes at all — transform 42, `OmitLast4`, over a four-byte word. RFC 7932
+rejects an empty transformed word only for distance codes at or below 120, and
+the C decoder accepts one above that, advancing its position by zero. So did
+this decoder, except that the ring write derived its wrap mask as
+`ring.len() - 1` before testing whether it had anything to store. As a member's
+first command nothing has been written yet, the history ring is still
+unallocated, and `0usize - 1` underflowed.
+
+The fix derives the mask only after an empty write has returned. The other
+eight ring-mask derivations in `core::stream` are each dominated by a guard
+that implies a non-empty ring — a non-zero pending region, a position of at
+least two, a non-zero insert, a growth call for at least one byte, or a
+distance within the bytes already produced — so this was the only site that
+could reach an unallocated ring.
+
+`tests/decompress_wire.rs` reproduces it without AFL: a hand-assembled member
+whose single command is that dictionary reference, padded so the whole-word bit
+reservoir decodes it in the command fast path rather than byte by byte through
+the stage machine. The test fails before the fix and passes after it. Three
+minimised inputs are committed as
+`fuzz/afl/regressions/{decompress,decode_dictionary,decode_io_limits}/crash-zero-length-dictionary-word.bin`,
+which `cargo afl test` replays in both flows.
+
+The campaign below is the rerun against the fixed decoder. Its seeds are the
+`cargo afl cmin` reduction of the first campaign's queues, so the three hours
+extend that exploration instead of re-deriving it.
+
+### Static checks and tests
+
+| Check | Command | Standard | Experimental |
+| --- | --- | --- | --- |
+| Formatting | `cargo fmt --all -- --check` | pass | n/a |
+| Lint | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | n/a | pass |
+| Tests, all features | `cargo test --workspace --all-features --locked` | n/a | pass, 234 tests |
+| Tests, default features | `cargo test --workspace --locked` | pass, 928 tests | n/a |
+| Tests, experimental | `cargo test --workspace --features experimental --locked` | n/a | pass, 1131 tests |
+| Fuzz package lint | `cargo clippy --all-targets --no-default-features [--features experimental] -- -D warnings` | pass | pass |
+| Regression replay | `cargo afl test --no-default-features [--features experimental]` | pass (206 inputs, 27 targets) | pass (227 inputs, 30 targets) |
+| Decoder function coverage | `cargo llvm-cov --lib --test decompress[...] --summary-only` | pass: `decompressor/core/stream.rs` 55/55 functions, 92.10% regions, 93.89% lines | n/a |
+
+`--all-features` runs far fewer tests than the default feature set, because it
+enables `no_std` alongside `std`, and the integration suites that need `std`
+carry `#![cfg(not(feature = "no_std"))]`. The 234 tests it executes are the
+ones that survive that gate, so it is the narrowest of the three test rows
+rather than the widest; the default and `experimental` rows above are what
+cover the decoder's std-facing surface. The function-coverage gate inherits the
+same narrowing, which is why the decoder's coverage above was measured with the
+default feature set instead.
+
+### Fuzz campaign
+
+#### stable build (6 workers)
+
+| Target | Executions | Execs/s | Queue | Edges | Map | Stability | Crashes | Hangs |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `decode_dictionary` | 47,230,961 | 4373 | 518 → 900 | 2,356 | 45.29% | 99.92% | 0 | 0 |
+| `decode_io_limits` | 46,559,148 | 4311 | 436 → 661 | 2,427 | 44.85% | 99.92% | 0 | 0 |
+| `decode_lifecycle` | 76,204,631 | 7056 | 65 → 65 | 419 | 8.24% | 99.52% | 0 | 0 |
+| `decode_roundtrip` | 480,501 | 44 | 287 → 657 | 2,132 | 40.52% | 99.91% | 0 | 0 |
+| `decode_streaming` | 6,421,661 | 595 | 346 → 810 | 2,322 | 44.92% | 99.91% | 0 | 0 |
+| `decompress` | 35,733,688 | 3309 | 401 → 541 | 2,347 | 45.70% | 99.91% | 0 | 0 |
+
+
+#### experimental build (7 workers)
+
+| Target | Executions | Execs/s | Queue | Edges | Map | Stability | Crashes | Hangs |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `decode_dictionary` | 21,557,386 | 1996 | 517 → 961 | 2,434 | 41.44% | 99.92% | 0 | 0 |
+| `decode_io_limits` | 42,441,749 | 3930 | 399 → 664 | 2,431 | 43.16% | 99.92% | 0 | 0 |
+| `decode_lifecycle` | 75,550,197 | 6995 | 68 → 68 | 419 | 7.91% | 99.52% | 0 | 0 |
+| `decode_roundtrip` | 847,615 | 78 | 260 → 732 | 2,149 | 39.24% | 99.91% | 0 | 0 |
+| `decode_serialized` | 73,043,925 | 6763 | 552 → 880 | 2,787 | 48.12% | 99.93% | 0 | 0 |
+| `decode_streaming` | 7,370,520 | 682 | 372 → 780 | 2,343 | 43.54% | 99.91% | 0 | 0 |
+| `decompress` | 35,589,543 | 3295 | 392 → 612 | 2,363 | 44.18% | 99.92% | 0 | 0 |
+
+
+| Build | Workers | Executions | Queue | Crashes | Hangs | Timeouts |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| stable | 6 | 212,630,590 | 2,053 → 3,634 | 0 | 0 | 0 |
+| experimental | 7 | 256,400,935 | 2,560 → 4,697 | 0 | 0 | 0 |
+| both | 13 | 469,031,525 | 4,613 → 8,331 | 0 | 0 | 0 |
+
+**Result.** No worker saved a crash, a hang, or a timeout in 469 million
+executions over 26,350 completed queue cycles. Every decoder oracle held: the
+C decoder's typed outcome for arbitrary bytes, exact member consumption, an
+unlimited replay of every accepted stream, chunked sessions agreeing with
+one-shot decoding on bytes and on cumulative progress, attached raw and
+serialized dictionaries against C with the same attachment, lifecycle recovery
+after abandonment, and a retryable sink failure that may neither duplicate nor
+drop payload. Per-worker stability stayed at or above 99.52%, so the
+instrumentation saw deterministic executions.
+
+Execution rates differ by two orders of magnitude across targets because the
+work per iteration does. `decode_lifecycle` runs up to 256 tiny operations on
+a decoder that never decodes a real member; `decode_roundtrip` compresses a
+payload of up to 64 KiB with the C encoder before decoding it, and at quality
+11 that dominates the iteration. Queue growth, not the rate, is what shows how
+far each target's exploration reached: `decode_lifecycle`'s corpus was already
+saturated at 65 inputs and never grew, while every target reading a compressed
+member kept finding new coverage for the whole three hours.
+
+### Benchmarks
+
+The fix adds one branch to the ring write, which raw meta-blocks, prefix runs
+and dictionary words all pass through, so it was measured rather than assumed.
+Criterion ran `decompress/{reused,dictionary}/q{5,9}` on the fixed tree, then
+again with the guard removed and compared against that baseline, on an idle
+host after the campaign:
+
+```sh
+cargo bench --bench decompress --locked -- --save-baseline fixed \
+    'decompress/(dictionary|reused)/q(5|9)'
+# with the two-line guard removed:
+cargo bench --bench decompress --locked -- --baseline fixed \
+    'decompress/(dictionary|reused)/q(5|9)'
+```
+
+Across the 24 `mbrotli` cases the median difference was -0.20% and the mean
+-0.40%, spread from -5.91% to +2.33%. The sign goes both ways and the two
+largest positive differences say the build *without* the guard was slower,
+which no single predictable branch can cause, so the spread is run-to-run
+variation rather than a cost. The guard is not measurable at this resolution,
+which is what the call sites predict: it is one test per ring write, and the
+writes it can reject are the ones that would have copied nothing.
+
+
 ## What this does not prove
 
 - The C reference is the oracle for bytes and validity. A defect shared with
@@ -258,10 +432,22 @@ which this record's regression replay executes in both flows.
 - The `experimental` API has no stable reference encoder; its evidence is
   RFC conformance through the C parser and decoder plus fixtures, not byte
   identity with a pinned encoder.
-- Fuzzing is bounded evidence. The record shows what 88 worker-hours reached;
-  the queue and edge counts show how far each target's exploration went, and
-  the host was oversubscribed throughout, so a longer or less contended run
-  would execute more.
+- Fuzzing is bounded evidence. The encoder record shows what 88 worker-hours
+  reached and the decoder record what a further 39 reached; the queue and edge
+  counts show how far each target's exploration went, and the encoder run's
+  host was oversubscribed throughout, so a longer or less contended run would
+  execute more.
+- Decoded output is capped at 64 KiB and the decoder workspace at 8 MiB under
+  the fuzzer, so a stream that legitimately expands past either budget reaches
+  a resource refusal instead of the code beyond it. Larger decodes rest on the
+  integration tests and the benchmark corpora.
+- The decoder campaign's seeds were carried forward from an earlier campaign's
+  queue. That deepens the exploration but means the corpus is not reproducible
+  from the repository alone; `prepare-decoder-seeds.sh` regenerates the
+  committed starting point, not that queue.
+- The `--all-features` test and coverage gates enable `no_std`, which compiles
+  out the std-facing integration suites. They are not the widest configuration,
+  and a claim resting on them alone would understate what was run.
 - The run used one x86-64 host. CI executes the test suite on AArch64 and
   macOS as well, but this record's Miri, sanitizer, and fuzz results are
   x86-64 only.
@@ -276,7 +462,13 @@ a smaller duration:
 
 ```sh
 cd fuzz/afl && ./campaign.sh findings/smoke 600
+cd fuzz/afl && ./decoder-campaign.sh findings/decoder-smoke 600
 ```
+
+Both scripts are needed for a complete record: the first covers the encoder
+surface and the C-to-native round trip, the second the decoder surface.
+`scripts/fuzz_decoder.sh base|experimental 60` is the shortest decoder run,
+one target at a time against a `target/release` build.
 
 Record the revision, toolchain, corpus, duration, executions, stability,
 crashes, and hangs alongside any new result; a run shorter than this one is

@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+- Fix a decoder panic on a legal stream: a built-in dictionary word whose
+  transform consumes the whole word decodes to nothing, and RFC 7932 only
+  rejects that below distance code 121. As a member's first command it left the
+  ring buffer unallocated, and the ring write derived its mask as `len() - 1`
+  before noticing it had nothing to store. Found by AFL in `decompress`,
+  `decode_dictionary` and `decode_io_limits`; covered by a hand-built wire
+  fixture and three committed regression inputs.
+
+- Fuzz the decoder surface on its own schedule: `fuzz/afl/decoder-campaign.sh`
+  runs one worker per decoder target in both feature builds, and
+  `fuzz/afl/prepare-decoder-seeds.sh` materialises `seeds/decoder` from the
+  committed regressions and Google Brotli's compressed fixtures.
+
 - Batch context-free decoder literals three at a time and recognize the common
   three-byte stored header directly, retaining bounded scalar tails and full
   parser fallback. Publish direct median ratios to Burli on the original eight

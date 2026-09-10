@@ -368,3 +368,30 @@ fn fifteen_raw_slots_preserve_order_and_static_dictionary_fallback() {
         );
     }
 }
+
+/// A transformed dictionary word may legally decode to nothing: `OmitLast4`
+/// applied to a four-byte word yields no bytes at all, and the format only
+/// rejects an empty word for distance codes at or below 120. Reaching one as a
+/// stream's very first command leaves the ring buffer still unallocated, and
+/// the ring write computed its mask as `len() - 1` before noticing that it had
+/// nothing to write.
+#[test]
+fn zero_length_transformed_dictionary_word_at_position_zero_matches_c() {
+    // Transform 42 is `OmitLast4` with neither prefix nor suffix, and the
+    // length-four word space is ten bits wide, so word zero under that
+    // transform sits at address `42 << 10`, one below the distance the
+    // command carries.
+    const ADDRESS: u64 = 42 << 10;
+    let mut wire = Wire::window(10, false);
+    wire.copy(4, ADDRESS + 1, 1);
+    let mut compressed = wire.finish();
+    // The whole-word bit reservoir only runs its unchecked loop while a full
+    // word of input is still ahead of it, so the command has to sit well away
+    // from the end of the buffer to be decoded there rather than byte by byte.
+    compressed.resize(compressed.len() + 64, 0);
+    // Both decoders accept the empty word, keep the metablock's one declared
+    // byte outstanding, and then reject what follows. Neither panics.
+    assert!(support::c_decompress(&compressed, 1).is_none());
+    let mut decoder = Decompressor::new(DecoderConfig::default()).unwrap();
+    assert!(decoder.decompress(&compressed).is_err());
+}

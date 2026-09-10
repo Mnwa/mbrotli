@@ -351,7 +351,11 @@ rejects references crossing the prefix end, so this path has independent fixture
 and unit-test evidence. Static addresses are
 resolved before emitting, and transformed byte count reduces the meta-block's
 remaining output. Zero-output references with distance <= 120 are invalid, avoiding
-zero-bit command loops. Dictionary references do not enter the history distance
+zero-bit command loops. Above that distance a transform that consumes its whole
+word — `OmitLast4` over a four-byte word, for instance — is legal and emits
+nothing, so the ring write tolerates an empty write: as a member's first command
+it arrives with the ring still unallocated, and the ring mask is only derived
+once there is something to store. Dictionary references do not enter the history distance
 cache; normal/prefix references follow short-code cache update rules.
 
 ## Owned one-shot output

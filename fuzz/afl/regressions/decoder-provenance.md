@@ -42,3 +42,15 @@ pre-compression step. They were generated sequentially with xorshift64 shifts
 These seeds exercise error returns without requiring successful decoding; AFL
 mutates them directly. The focused arbitrary-byte test replays sizes 0 through
 4096 on every available host backend using the same deterministic PRNG.
+
+`crash-zero-length-dictionary-word.bin` in `decompress`, `decode_dictionary`
+and `decode_io_limits` are three saved crashes from the 2026-09-10 decoder
+campaign, one per target that reached the defect. Each drives a transformed
+built-in dictionary word that decodes to no bytes at all — `OmitLast4` over a
+four-byte word, which RFC 7932 permits above distance code 120 — as the first
+command of a member, where the ring buffer is still unallocated and the ring
+write underflowed its `len() - 1` mask. The `decode_io_limits` input is
+`cargo afl tmin` minimised; the other two are the saved inputs, which byte
+deletion cannot shrink because the stream is bit-packed. The same path is
+covered deterministically, without AFL, by
+`tests/decompress_wire.rs::zero_length_transformed_dictionary_word_at_position_zero_matches_c`.
