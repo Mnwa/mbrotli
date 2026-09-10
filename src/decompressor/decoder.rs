@@ -76,6 +76,7 @@ impl DecompressorBuilder {
     /// # Errors
     /// Configuration values are validated at construction; current typed
     /// configurations have no additional cross-field restrictions.
+    #[inline]
     pub fn build(self) -> Result<Decompressor, DecodeConfigError> {
         Ok(Decompressor {
             config: self.config,
@@ -94,6 +95,7 @@ impl Decompressor {
     ///
     /// # Errors
     /// Returns invalid configuration errors, as [`DecompressorBuilder::build`].
+    #[inline]
     pub fn new(config: DecoderConfig) -> Result<Self, DecodeConfigError> {
         Self::builder(config).build()
     }

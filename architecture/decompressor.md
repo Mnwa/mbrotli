@@ -182,9 +182,12 @@ linked list per code length, which is already canonical order, so building a
 table walks only the symbols with a code rather than the alphabet: `fill`
 counts canonical codes upward, turns each into its table key with a byte
 bit-reversal table, and replicates it across the root or the current
-second-level table, having grown the vector once to the alphabet's bound
-(`second_bound`) when needed. `build` or `build_slot` fills an owned table or a
-group slot; `reset` abandons a partial description.
+second-level table, having grown the vector once to the exact number of
+second-level entries the code appends. `second_size` counts those entries by
+replaying the canonical walk over the length counts alone, so a cold build
+zero-fills only slots the fill overwrites rather than a loose worst-case bound.
+`build` or `build_slot` fills an owned table or a group slot; `reset` abandons a
+partial description.
 
 ```mermaid
 classDiagram
@@ -218,13 +221,20 @@ classDiagram
         head, tail, counts: [u16; 16]
         read(alphabet, bits, input, memory)
         build_slot(alphabet, group, tree, memory)
-        fill(codes, start, alphabet, used, memory)
+        fill(codes, start, used, memory)
     }
     Group *-- Code
     Group --> Tables : borrows
     Tables --> Table : selects
     Builder --> Group : fills a slot
 ```
+
+The block-switch state, context maps, prefix-code groups, distance layout and
+dictionary-transform scratch a compressed meta-block needs live in a separate
+workspace the stream creates on its first compressed meta-block and keeps with
+the rest. A decoder that only ever sees stored members, metadata or an empty
+stream never allocates or initializes it, so `Decompressor::new` and every such
+decode stay allocation-free and copy a small state.
 
 The stream keeps a power-of-two history ring. `run` first attempts a fast path
 that decodes whole commands while a whole-word refill and output room allow: it
@@ -265,7 +275,7 @@ flowchart TD
     Dist -->|no| Sym[distance block switch?; distance symbol]
     Sym -->|code 0| Pop
     Sym -->|codes 1..15| Short[cache offset]
-    Sym -->|others| Tab[distance_table entry: base + extra << postfix]
+    Sym -->|others| Tab[layout table entry: base + extra << postfix]
     Pop --> Ref
     Short --> Ref
     Tab --> Ref{distance > available?}
@@ -290,7 +300,10 @@ output are overwritten. The ring's sixteen unreachable history slots make
 those extra writes unobservable. The snapshot is also correct when ring slots
 physically overlap: all actual source bytes precede any stores. Logical LZ77
 expansion still uses fill, sequential bytes, or prefix doubling; it cannot use
-a snapshot of bytes not yet generated. On AVX2 a 32-byte move uses one vector;
+a snapshot of bytes not yet generated. A unit-distance run that must grow the
+ring grows it with the repeated byte in one pass through `repeat_grow`, shared
+with the byte-exact `Stage::Copy`, rather than zeroing the new region and then
+overwriting it. On AVX2 a 32-byte move uses one vector;
 SSE2/SSE4.2 split it into two 128-bit moves. Fallback remains available for
 internal differential tests. Neither SIMD kernel allocates or uses `unsafe`.
 
@@ -312,9 +325,11 @@ The command symbol indexes a 1024-slot `COMMANDS` table (the 704-symbol
 alphabet padded to a power of two, so a mask replaces a bounds check) that
 carries both length bases and extra-bit widths, the implicit-distance flag, the
 copy code for resumption and the distance context. Distances above the short
-codes resolve through a per-meta-block `distance_table` filled from the distance
-parameters, and reused when the layout repeats, so one lookup yields the extra
-width and the base distance. The recent-distance cache is a ring with a push
+codes resolve through a per-symbol table that yields the extra width and the
+base distance in one lookup. The common standard-window layout without postfix
+or direct codes uses a shared constant table, so a fresh decoder neither fills
+nor allocates it; other layouts fill a per-meta-block table, reused when the
+layout repeats. The recent-distance cache is a ring with a push
 index, like the reference's `dist_rb`: an implicit distance or explicit code 0
 pops the most recent slot and the copy pushes it back, so every command ends
 with one slot write and no branch; a command that pauses before its copy, or a

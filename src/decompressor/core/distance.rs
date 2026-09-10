@@ -180,11 +180,50 @@ impl DistanceLayout {
             .ok_or_else(|| InvalidDataKind::Distance.into())
     }
 
+    /// The split of one symbol: short codes get an empty entry and resolve
+    /// through the cache. A large-window symbol whose maximum distance the
+    /// header rejects is never decoded, so its entry may wrap.
+    const fn entry(self, symbol: usize) -> Partial {
+        if symbol < SHORT_CODES {
+            Partial { width: 0, base: 0 }
+        } else if symbol < SHORT_CODES + self.direct {
+            Partial {
+                width: 0,
+                base: (symbol - SHORT_CODES + 1) as u64,
+            }
+        } else {
+            let code = symbol - SHORT_CODES - self.direct;
+            let width = 1 + (code >> (self.postfix + 1)) as u32;
+            let high = code >> self.postfix;
+            let low = code & ((1 << self.postfix) - 1);
+            let offset = (((2 + (high & 1)) as u64) << width).wrapping_sub(4);
+            Partial {
+                width: width as u64,
+                base: (offset << self.postfix).wrapping_add((low + self.direct + 1) as u64),
+            }
+        }
+    }
+
+    /// Whether this is the standard-window layout without postfix or direct
+    /// codes, whose split is the constant [`STANDARD_TABLE`].
+    pub(super) const fn is_standard(self) -> bool {
+        self.postfix == 0 && self.direct == 0 && !self.large
+    }
+
+    /// The per-symbol split of this layout: the constant table for the
+    /// standard layout, otherwise the table [`Self::fill_table`] filled.
+    #[inline(always)]
+    pub(super) fn table(self, filled: &[Partial]) -> &[Partial] {
+        if self.is_standard() {
+            &STANDARD_TABLE
+        } else {
+            filled
+        }
+    }
+
     /// Fills `table` with the split of every symbol of the alphabet, so the
-    /// command loop resolves a distance with one lookup. Short codes get an
-    /// empty entry; they resolve through the cache. A large-window symbol
-    /// whose maximum distance the header rejects is never decoded, so its
-    /// entry may wrap.
+    /// command loop resolves a distance with one lookup. The standard layout
+    /// never needs this: its split is constant.
     pub(super) fn fill_table(
         self,
         table: &mut Vec<Partial>,
@@ -195,28 +234,33 @@ impl DistanceLayout {
             memory.resize(table, alphabet)?;
         }
         for (symbol, entry) in table.iter_mut().enumerate().take(alphabet) {
-            *entry = if symbol < SHORT_CODES {
-                Partial::default()
-            } else if symbol < SHORT_CODES + self.direct {
-                Partial {
-                    width: 0,
-                    base: (symbol - SHORT_CODES + 1) as u64,
-                }
-            } else {
-                let code = symbol - SHORT_CODES - self.direct;
-                let width = 1 + (code >> (self.postfix + 1)) as u32;
-                let high = code >> self.postfix;
-                let low = code & ((1 << self.postfix) - 1);
-                let offset = (((2 + (high & 1)) as u64) << width).wrapping_sub(4);
-                Partial {
-                    width: u64::from(width),
-                    base: (offset << self.postfix).wrapping_add((low + self.direct + 1) as u64),
-                }
-            };
+            *entry = self.entry(symbol);
         }
         Ok(())
     }
 }
+
+/// Number of symbols in the standard layout without postfix or direct codes.
+const STANDARD_ALPHABET: usize = SHORT_CODES + 48;
+
+const fn standard_table() -> [Partial; STANDARD_ALPHABET] {
+    let layout = DistanceLayout {
+        postfix: 0,
+        direct: 0,
+        large: false,
+    };
+    let mut table = [Partial { width: 0, base: 0 }; STANDARD_ALPHABET];
+    let mut symbol = 0;
+    while symbol < STANDARD_ALPHABET {
+        table[symbol] = layout.entry(symbol);
+        symbol += 1;
+    }
+    table
+}
+
+/// The split of every symbol of the most common layout, so a fresh decoder
+/// does not compute or allocate it.
+static STANDARD_TABLE: [Partial; STANDARD_ALPHABET] = standard_table();
 
 #[cfg(test)]
 mod tests {

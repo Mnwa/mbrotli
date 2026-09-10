@@ -15,7 +15,7 @@ is omitted. Burli participates at every source quality.
 ![Median decompression speed relative to C](decoders/charts/overview.svg)
 
 Each bar is the median of eight equally weighted C-time/decoder-time ratios.
-The tables also show direct median Burli-time/mbrotli-time ratios (overall **0.967×**). Higher is
+The tables also show direct median Burli-time/mbrotli-time ratios (overall **1.013×**). Higher is
 faster. Open the [quality pages](decoders/README.md) for all 384 cases, mean
 confidence bounds, restored throughput and shared compressed sizes.
 The current decoder includes three-symbol literal batches and short stored
@@ -25,7 +25,7 @@ in the [paired optimization report](../../architecture/decoder-literal-performan
 These are cold native APIs: C knows output capacity, while Rust brotli includes
 its 4 KiB I/O adapter. See the [run report](decoder-comparison.md),
 [CSV](decoder-comparison.csv) and [environment](decoder-comparison-environment.json).
-The preceding run measured **0.980×** on the same inputs; separate-run
+The preceding run measured **0.967×** on the same inputs; separate-run
 variation is not paired evidence of a code regression or improvement.
 
 ## Compression: median across all datasets

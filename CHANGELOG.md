@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+- Cut cold decoder allocation and memory traffic further. The block-switch
+  state, context maps, prefix-code groups, distance layout and dictionary
+  scratch a compressed meta-block needs now live in a workspace created on the
+  first compressed meta-block, so an empty, stored or metadata-only stream never
+  allocates or initializes it and `Decompressor::new` copies a small state.
+  Huffman table building sizes its second-level storage to the exact number of
+  entries a code appends instead of a worst-case bound, so a cold build
+  zero-fills only slots it overwrites. The common standard-window distance
+  layout uses a shared constant split table, so a fresh decoder neither fills
+  nor allocates it. A unit-distance run that grows the history ring now fills
+  the new region with the repeated byte in one pass rather than zeroing it and
+  overwriting it. Constructors are inlinable so the returned decoder is built in
+  place. Empty and stored-member decodes reach parity with Burli and small
+  compressed and repeated streams narrow the gap; text, binary, dictionary and
+  large inputs stay ahead of Burli and several times faster than Google C.
+
+
 - Fix a decoder panic on a legal stream: a built-in dictionary word whose
   transform consumes the whole word decodes to nothing, and RFC 7932 only
   rejects that below distance code 121. As a member's first command it left the

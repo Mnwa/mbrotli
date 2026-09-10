@@ -26,20 +26,6 @@ const ROOT_SIZE: usize = 1 << ROOT_BITS;
 const NONE: u16 = u16::MAX;
 const ORDER: [usize; 18] = [1, 2, 3, 4, 0, 5, 17, 6, 16, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
-/// Largest two-level table for an alphabet, indexed by `(alphabet + 31) / 32`;
-/// the reference decoder's `kMaxHuffmanTableSize`. Less the root, it bounds
-/// the second-level storage one code can append.
-const MAX_TABLE_SIZE: [u16; 37] = [
-    256, 402, 436, 468, 500, 534, 566, 598, 630, 662, 694, 726, 758, 790, 822, 854, 886, 920, 952,
-    984, 1016, 1048, 1080, 1112, 1144, 1176, 1208, 1240, 1272, 1304, 1336, 1368, 1400, 1432, 1464,
-    1496, 1528,
-];
-
-/// Upper bound on the second-level entries a code over `alphabet` appends.
-const fn second_bound(alphabet: usize) -> usize {
-    MAX_TABLE_SIZE[alphabet.div_ceil(32)] as usize - ROOT_SIZE
-}
-
 /// One table entry packed in a word without padding, so table storage can
 /// be zeroed as plain memory: the low byte is the code width (or, for a root
 /// entry pointing at a second-level table, the combined width), the high
@@ -329,6 +315,47 @@ const fn next_table_bits(remaining: &[u16; MAX_LENGTH + 1], mut length: usize) -
     (length - ROOT_BITS as usize) as u32
 }
 
+/// Exact number of second-level entries a complete code with these length
+/// counts appends. Replays the canonical code walk of [`Builder::fill`] over
+/// the counts alone: it advances the same `code` through the root lengths,
+/// then creates a sub-table at each low-eight-bit key change with the same
+/// [`next_table_bits`] width. `fill` therefore allocates exactly what it
+/// writes, so a cold build zero-fills only entries it overwrites.
+fn second_size(counts: &[u16; MAX_LENGTH + 1]) -> usize {
+    let mut max_length = 0;
+    for (length, &count) in counts.iter().enumerate() {
+        if count != 0 {
+            max_length = length;
+        }
+    }
+    if max_length <= ROOT_BITS as usize {
+        return 0;
+    }
+    // Advance `code` through the root lengths exactly as the root loop does.
+    let mut code = 0usize;
+    for &count in &counts[1..=ROOT_BITS as usize] {
+        code = (code + usize::from(count)) << 1;
+    }
+    let mut remaining = *counts;
+    let mut appended = 0usize;
+    let mut low = usize::MAX;
+    for length in ROOT_BITS as usize + 1..=MAX_LENGTH {
+        let mut placed = 0u16;
+        while placed < counts[length] {
+            let key = key_of(code, length);
+            if key & (ROOT_SIZE - 1) != low {
+                remaining[length] = counts[length] - placed;
+                appended += 1 << next_table_bits(&remaining, length);
+                low = key & (ROOT_SIZE - 1);
+            }
+            placed += 1;
+            code += 1;
+        }
+        code <<= 1;
+    }
+    appended
+}
+
 fn replicate(table: &mut [Code], start: usize, step: usize, code: Code) {
     let mut index = start;
     while index < table.len() {
@@ -449,7 +476,6 @@ impl Builder {
         &self,
         codes: &mut Vec<Code>,
         start: usize,
-        alphabet: usize,
         used: &mut usize,
         memory: &mut Memory,
     ) -> Result<usize, DecodeError> {
@@ -460,17 +486,13 @@ impl Builder {
         if start + ROOT_SIZE > second_base {
             return Err(DecodeError::InternalInvariant);
         }
-        let bound = second_base
-            .checked_add(second_bound(alphabet))
-            .ok_or(DecodeError::SizeOverflow)?;
-        if codes.len() < bound {
-            memory.resize(codes, bound)?;
-        }
-        let (front, second) = codes.split_at_mut(second_base);
-        let root = front
-            .get_mut(start..start + ROOT_SIZE)
-            .ok_or(DecodeError::InternalInvariant)?;
         if self.total == 1 {
+            if codes.len() < second_base {
+                memory.resize(codes, second_base)?;
+            }
+            let root = codes
+                .get_mut(start..start + ROOT_SIZE)
+                .ok_or(DecodeError::InternalInvariant)?;
             root.fill(Code::new(0, self.last));
             return Ok(self.last);
         }
@@ -488,6 +510,18 @@ impl Builder {
         if space != 0 {
             return Err(InvalidDataKind::Huffman.into());
         }
+        // Allocate exactly the second-level entries this code appends, so the
+        // zero-fill covers only slots the fill below overwrites.
+        let bound = second_base
+            .checked_add(second_size(&self.counts))
+            .ok_or(DecodeError::SizeOverflow)?;
+        if codes.len() < bound {
+            memory.resize(codes, bound)?;
+        }
+        let (front, second) = codes.split_at_mut(second_base);
+        let root = front
+            .get_mut(start..start + ROOT_SIZE)
+            .ok_or(DecodeError::InternalInvariant)?;
         let table_bits = max_length.min(ROOT_BITS as usize);
         let mut current = 1usize << table_bits;
         // Canonical codes count up within a length and double between lengths.
@@ -574,13 +608,7 @@ impl Builder {
         if self.last >= alphabet || tree >= group.count {
             return Err(DecodeError::InternalInvariant);
         }
-        self.fill(
-            &mut group.codes,
-            tree * ROOT_SIZE,
-            alphabet,
-            &mut group.used,
-            memory,
-        )
+        self.fill(&mut group.codes, tree * ROOT_SIZE, &mut group.used, memory)
     }
 
     #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
@@ -982,9 +1010,7 @@ mod tests {
         let mut codes = alloc::vec![Code::default(); ROOT_SIZE + 3];
         let mut used = ROOT_SIZE + 3;
         assert_eq!(
-            builder
-                .fill(&mut codes, 0, 16, &mut used, &mut memory)
-                .unwrap(),
+            builder.fill(&mut codes, 0, &mut used, &mut memory).unwrap(),
             8
         );
         assert_eq!(used, ROOT_SIZE + 3);
@@ -992,9 +1018,7 @@ mod tests {
         lengths[9] = 9;
         builder.assign(&lengths).unwrap();
         assert_eq!(
-            builder
-                .fill(&mut codes, 0, 16, &mut used, &mut memory)
-                .unwrap(),
+            builder.fill(&mut codes, 0, &mut used, &mut memory).unwrap(),
             9
         );
         assert_eq!(used, ROOT_SIZE + 5);
@@ -1006,7 +1030,7 @@ mod tests {
         // second-level growth like any storage.
         let mut short = ROOT_SIZE;
         assert!(matches!(
-            builder.fill(&mut codes, ROOT_SIZE, 16, &mut short, &mut memory),
+            builder.fill(&mut codes, ROOT_SIZE, &mut short, &mut memory),
             Err(DecodeError::InternalInvariant)
         ));
         let mut tight = Memory {
@@ -1016,11 +1040,24 @@ mod tests {
         let mut small = alloc::vec![Code::default(); ROOT_SIZE];
         let mut small_used = ROOT_SIZE;
         assert!(matches!(
-            builder.fill(&mut small, 0, 16, &mut small_used, &mut tight),
+            builder.fill(&mut small, 0, &mut small_used, &mut tight),
             Err(DecodeError::MemoryLimitExceeded { .. })
         ));
-        assert_eq!(second_bound(256), 630 - 256);
-        assert_eq!(second_bound(1128), 1528 - 256);
+        // Exact second-level sizing matches the loose reference bound's shape:
+        // a two-nine-bit split needs one sub-table of two entries.
+        let mut split = alloc::vec![0u8; 16];
+        split[0] = 1;
+        for (i, length) in (2..=8).zip(&mut split[1..]) {
+            *length = i;
+        }
+        split[7] = 8;
+        let mut builder = Builder::default();
+        builder.assign(&split).unwrap();
+        assert_eq!(second_size(&builder.counts), 0);
+        split[7] = 9;
+        split[8] = 9;
+        builder.assign(&split).unwrap();
+        assert_eq!(second_size(&builder.counts), 2);
     }
 
     #[test]

@@ -379,6 +379,27 @@ fn ring_size(len: u64, window_size: u64, end: u64) -> Result<usize, DecodeError>
     usize::try_from(desired).map_err(|_| DecodeError::SizeOverflow)
 }
 
+/// Grows the ring for a unit-distance run, initializing the new allocation and
+/// the space up to `end` with the repeated `byte`. A distance-one copy is a
+/// fill, so producing the bytes as the growth's initial value avoids a zero
+/// fill followed by an overwrite. Callers ensure `end` needs growth and stays
+/// within the window (`ring.len() < end <= window_size`). Returns the new length.
+fn repeat_grow(
+    memory: &mut Memory,
+    ring: &mut Vec<u8>,
+    window_size: u64,
+    position: u64,
+    byte: u8,
+    end: u64,
+) -> Result<usize, DecodeError> {
+    let old_len = ring.len();
+    let desired = ring_size(old_len as u64, window_size, end)?;
+    memory.reserve(ring, desired)?;
+    ring[position as usize..].fill(byte);
+    ring.resize(desired, byte);
+    Ok(desired)
+}
+
 /// The two most recent bytes before `position`, zero before any output.
 #[inline(always)]
 fn previous_bytes(ring: &[u8], position: u64) -> (u8, u8) {
@@ -398,7 +419,55 @@ fn first_bytes(ring: &[u8], position: u64) -> (u8, u8) {
     if position == 0 { (0, 0) } else { (ring[0], 0) }
 }
 
+/// Everything only a compressed meta-block needs: the code reader, block
+/// switch state, context maps, prefix-code groups, the distance layout and
+/// the dictionary transform scratch. Kept on the heap and created by the
+/// first compressed meta-block, so a decoder that only ever sees stored
+/// members, metadata or an empty stream never initializes or copies it.
 #[derive(Debug)]
+struct Tables {
+    builder: Builder,
+    blocks: [Block; 3],
+    modes: [u8; 256],
+    maps: [ContextMap; 2],
+    trees: [Group; 3],
+    distances: DistanceLayout,
+    /// Per-symbol split of the current distance alphabet, and the layout it
+    /// was filled for so an unchanged layout reuses it.
+    distance_table: Vec<Partial>,
+    distance_table_layout: Option<DistanceLayout>,
+    scratch: [u8; SCRATCH_BYTES],
+    scratch_pos: usize,
+    scratch_len: usize,
+}
+
+impl Default for Tables {
+    fn default() -> Self {
+        Self {
+            builder: Builder::default(),
+            blocks: Default::default(),
+            modes: [0; 256],
+            maps: Default::default(),
+            trees: Default::default(),
+            distances: DistanceLayout::default(),
+            distance_table: Vec::new(),
+            distance_table_layout: None,
+            scratch: [0; SCRATCH_BYTES],
+            scratch_pos: 0,
+            scratch_len: 0,
+        }
+    }
+}
+
+/// Literal context of the next byte: the block's context mode applied to
+/// the two most recent output bytes.
+fn context(tables: &Tables, ring: &[u8], position: u64) -> usize {
+    let (p1, p2) = previous_bytes(ring, position);
+    let lut = context_lut(tables.modes[tables.blocks[0].current]);
+    usize::from(lut[usize::from(p1)] | lut[256 + usize::from(p2)])
+}
+
+#[derive(Debug, Default)]
 pub(crate) struct Stream {
     bits: Bits,
     stage: Stage,
@@ -417,25 +486,15 @@ pub(crate) struct Stream {
     large: bool,
     last: bool,
     remaining: u64,
-    blocks: [Block; 3],
-    builder: Builder,
-    modes: [u8; 256],
-    maps: [ContextMap; 2],
-    trees: [Group; 3],
-    distances: DistanceLayout,
-    /// Per-symbol split of the current distance alphabet, and the layout it
-    /// was filled for so an unchanged layout reuses it.
-    distance_table: Vec<Partial>,
-    distance_table_layout: Option<DistanceLayout>,
+    /// At most one element: the compressed meta-block workspace, created by
+    /// the first compressed meta-block and retained with the rest.
+    tables: Vec<Tables>,
     literals: u64,
     copy: u64,
     implicit: bool,
     distance: u64,
     distance_code: usize,
     cache: Cache,
-    scratch: [u8; SCRATCH_BYTES],
-    scratch_pos: usize,
-    scratch_len: usize,
 }
 
 impl Stream {
@@ -469,7 +528,9 @@ impl Stream {
     pub(crate) fn reset(&mut self, config: DecoderConfig) {
         self.bits = Bits::default();
         self.stage = Stage::Window;
-        self.builder.reset();
+        if let Some(tables) = self.tables.first_mut() {
+            tables.builder.reset();
+        }
         self.prefix_history.clear();
         self.position = 0;
         self.window = None;
@@ -508,15 +569,18 @@ impl Stream {
     /// A unit-distance copy can initialize the new allocation with its final
     /// byte. Returns false when ordinary ring copying is needed (including wrap).
     fn repeat_growing(&mut self, end: u64) -> Result<bool, DecodeError> {
-        let old_len = self.ring.len();
-        if self.distance != 1 || end <= old_len as u64 || end > self.window_size {
+        if self.distance != 1 || end <= self.ring.len() as u64 || end > self.window_size {
             return Ok(false);
         }
         let byte = self.ring[self.position as usize - 1];
-        let desired = ring_size(old_len as u64, self.window_size, end)?;
-        self.memory.reserve(&mut self.ring, desired)?;
-        self.ring[self.position as usize..].fill(byte);
-        self.ring.resize(desired, byte);
+        repeat_grow(
+            &mut self.memory,
+            &mut self.ring,
+            self.window_size,
+            self.position,
+            byte,
+            end,
+        )?;
         self.position = end;
         Ok(true)
     }
@@ -542,15 +606,16 @@ impl Stream {
         Ok(())
     }
 
-    /// The two most recent output bytes, zero before any output.
-    fn previous_bytes(&self) -> (u8, u8) {
-        previous_bytes(&self.ring, self.position)
-    }
-
-    fn context(&self) -> usize {
-        let (p1, p2) = self.previous_bytes();
-        let lut = context_lut(self.modes[self.blocks[0].current]);
-        usize::from(lut[usize::from(p1)] | lut[256 + usize::from(p2)])
+    /// The compressed meta-block workspace, created on first use. Its
+    /// storage counts against the workspace budget like every other buffer.
+    fn ensure_tables(&mut self) -> Result<&mut Tables, DecodeError> {
+        if self.tables.is_empty() {
+            self.memory.reserve(&mut self.tables, 1)?;
+            self.tables.push(Tables::default());
+        }
+        self.tables
+            .first_mut()
+            .ok_or(DecodeError::InternalInvariant)
     }
 
     #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
@@ -608,23 +673,30 @@ impl Stream {
             window_size,
             max_backward,
             remaining: saved_remaining,
-            blocks,
-            modes,
-            maps,
-            trees,
-            distances,
-            distance_table,
+            tables,
             literals: saved_literals,
             copy: saved_copy,
             implicit: saved_implicit,
             distance: saved_distance,
             distance_code: saved_distance_code,
             cache: saved_cache,
+            ..
+        } = self;
+        let Some(Tables {
+            blocks,
+            modes,
+            maps,
+            trees,
+            distances,
+            distance_table,
             scratch,
             scratch_pos,
             scratch_len,
             ..
-        } = self;
+        }) = tables.first_mut()
+        else {
+            return Err(DecodeError::InternalInvariant);
+        };
         let window_size = *window_size;
         let max_backward = *max_backward;
         let postfix = distances.postfix();
@@ -632,7 +704,7 @@ impl Stream {
         // standard-window extra field of at most 25, or the 32-bit low half
         // that a large-window field is split at.
         let distance_need = if distances.is_large() { 47 } else { 40 };
-        let distance_table = distance_table.as_slice();
+        let distance_table = distances.table(distance_table);
         let mut bits = *saved_bits;
         let mut position = *saved_position;
         let mut remaining = *saved_remaining;
@@ -976,6 +1048,31 @@ impl Stream {
                 if copy > space as u64 {
                     pause!(Stage::Copy);
                 }
+                // A unit-distance run that must grow the ring is a fill: grow
+                // with the repeated byte in one pass instead of zeroing the new
+                // region and overwriting it. Runs that fit, or that wrap past
+                // the window, take the general copy below.
+                let end = position + copy;
+                if distance == 1 && end > ring_limit && end <= window_size {
+                    let byte = ring[((position - 1) & (ring_len as u64 - 1)) as usize];
+                    // Bind the result and re-borrow before `check!`, whose
+                    // failure path flushes through `ring`.
+                    let grown = repeat_grow(memory, storage, window_size, position, byte, end);
+                    ring = storage.as_mut_slice();
+                    ring_len = check!(grown);
+                    ring_limit = if ring_len as u64 >= window_size {
+                        u64::MAX
+                    } else {
+                        ring_len as u64
+                    };
+                    position = end;
+                    remaining -= copy;
+                    space -= copy as usize;
+                    if position == ring_len as u64 {
+                        flush_ring(ring, position, &mut flushed, output);
+                    }
+                    continue;
+                }
                 reach!(position + copy);
                 let mask = ring_len as u64 - 1;
                 let len = copy as usize;
@@ -1032,6 +1129,17 @@ impl Stream {
                 }
             };
         }
+        // Every stage inside a compressed meta-block runs after `Stage::Meta`
+        // created the workspace; the stage machine is private, so a missing
+        // one is an internal invariant failure rather than a format error.
+        macro_rules! tables {
+            () => {
+                match self.tables.first_mut() {
+                    Some(tables) => tables,
+                    None => return Err(DecodeError::InternalInvariant),
+                }
+            };
+        }
         loop {
             match self.stage {
                 Stage::Window => {
@@ -1073,10 +1181,11 @@ impl Stream {
                         MetaBlock::Compressed { length, last } => {
                             self.remaining = length;
                             self.last = last;
-                            for block in &mut self.blocks {
+                            let tables = self.ensure_tables()?;
+                            for block in &mut tables.blocks {
                                 block.reset();
                             }
-                            for map in &mut self.maps {
+                            for map in &mut tables.maps {
                                 map.reset();
                             }
                             self.stage = Stage::Blocks(0);
@@ -1136,10 +1245,11 @@ impl Stream {
                     self.remaining -= count as u64;
                 }
                 Stage::Blocks(i) => {
-                    if !self.blocks[i].header(
+                    let tables = tables!();
+                    if !tables.blocks[i].header(
                         &mut self.bits,
                         input,
-                        &mut self.builder,
+                        &mut tables.builder,
                         &mut self.memory,
                     )? {
                         return Ok(Stop::Input);
@@ -1152,45 +1262,56 @@ impl Stream {
                 }
                 Stage::DistanceParams => {
                     let params = read!(6);
-                    self.distances = DistanceLayout::from_header(params as u8, self.large);
-                    if self.distance_table_layout != Some(self.distances)
-                        || self.distance_table.len() < self.distances.alphabet()
+                    let tables = tables!();
+                    tables.distances = DistanceLayout::from_header(params as u8, self.large);
+                    if tables.distance_table_layout != Some(tables.distances)
+                        && !tables.distances.is_standard()
                     {
-                        self.distance_table_layout = None;
-                        self.distances
-                            .fill_table(&mut self.distance_table, &mut self.memory)?;
-                        self.distance_table_layout = Some(self.distances);
+                        tables.distance_table_layout = None;
+                        tables
+                            .distances
+                            .fill_table(&mut tables.distance_table, &mut self.memory)?;
+                        tables.distance_table_layout = Some(tables.distances);
                     }
                     self.stage = Stage::Modes(0);
                 }
                 Stage::Modes(i) => {
-                    self.modes[i] = read!(2) as u8;
-                    self.stage = if i + 1 == self.blocks[0].count {
+                    let value = read!(2) as u8;
+                    let tables = tables!();
+                    tables.modes[i] = value;
+                    self.stage = if i + 1 == tables.blocks[0].count {
                         Stage::Maps(0)
                     } else {
                         Stage::Modes(i + 1)
                     };
                 }
                 Stage::Maps(i) => {
-                    let size =
-                        self.blocks[if i == 0 { 0 } else { 2 }].count << if i == 0 { 6 } else { 2 };
-                    if !self.maps[i].read(
+                    let tables = tables!();
+                    let size = tables.blocks[if i == 0 { 0 } else { 2 }].count
+                        << if i == 0 { 6 } else { 2 };
+                    if !tables.maps[i].read(
                         size,
                         &mut self.bits,
                         input,
-                        &mut self.builder,
+                        &mut tables.builder,
                         &mut self.memory,
                     )? {
                         return Ok(Stop::Input);
                     }
                     if i == 0 {
-                        self.maps[0].detect_trivial();
+                        tables.maps[0].detect_trivial();
                         self.stage = Stage::Maps(1);
                     } else {
-                        let counts = [self.maps[0].trees, self.blocks[1].count, self.maps[1].trees];
-                        let alphabets = [256, 704, self.distances.alphabet()];
-                        for (group, (count, alphabet)) in
-                            self.trees.iter_mut().zip(counts.into_iter().zip(alphabets))
+                        let counts = [
+                            tables.maps[0].trees,
+                            tables.blocks[1].count,
+                            tables.maps[1].trees,
+                        ];
+                        let alphabets = [256, 704, tables.distances.alphabet()];
+                        for (group, (count, alphabet)) in tables
+                            .trees
+                            .iter_mut()
+                            .zip(counts.into_iter().zip(alphabets))
                         {
                             group.prepare(count, alphabet, &mut self.memory)?;
                         }
@@ -1198,27 +1319,28 @@ impl Stream {
                     }
                 }
                 Stage::Trees(group, index) => {
+                    let tables = tables!();
                     let alphabet = match group {
                         0 => 256,
                         1 => 704,
-                        _ => self.distances.alphabet(),
+                        _ => tables.distances.alphabet(),
                     };
-                    if !self
+                    if !tables
                         .builder
                         .read(alphabet, &mut self.bits, input, &mut self.memory)?
                     {
                         return Ok(Stop::Input);
                     }
-                    let max_symbol = self.builder.build_slot(
+                    let max_symbol = tables.builder.build_slot(
                         alphabet,
-                        &mut self.trees[group],
+                        &mut tables.trees[group],
                         index,
                         &mut self.memory,
                     )?;
                     if group == 2 {
-                        self.distances.validate_symbol(max_symbol)?;
+                        tables.distances.validate_symbol(max_symbol)?;
                     }
-                    self.stage = if index + 1 < self.trees[group].count() {
+                    self.stage = if index + 1 < tables.trees[group].count() {
                         Stage::Trees(group, index + 1)
                     } else if group < 2 {
                         Stage::Trees(group + 1, 0)
@@ -1239,16 +1361,17 @@ impl Stream {
                         self.stage = Stage::EndBlock;
                         continue;
                     }
-                    if !self.blocks[1].prepare(&mut self.bits, input)? {
+                    let tables = tables!();
+                    if !tables.blocks[1].prepare(&mut self.bits, input)? {
                         return Ok(Stop::Input);
                     }
-                    let Some(symbol) = self.trees[1]
-                        .table(self.blocks[1].current)
+                    let Some(symbol) = tables.trees[1]
+                        .table(tables.blocks[1].current)
                         .decode(&mut self.bits, input)?
                     else {
                         return Ok(Stop::Input);
                     };
-                    self.blocks[1].advance();
+                    tables.blocks[1].advance();
                     let cell = CELLS[symbol >> 6];
                     let insert = (cell & 24) + ((symbol >> 3) & 7);
                     let copy = ((cell << 3) & 24) + (symbol & 7);
@@ -1291,17 +1414,18 @@ impl Stream {
                     if !output.ready()? {
                         return Ok(Stop::Output);
                     }
-                    if !self.blocks[0].prepare(&mut self.bits, input)? {
+                    let tables = tables!();
+                    if !tables.blocks[0].prepare(&mut self.bits, input)? {
                         return Ok(Stop::Input);
                     }
-                    let tree = usize::from(
-                        self.maps[0].values[self.blocks[0].current * 64 + self.context()],
-                    );
-                    let Some(byte) = self.trees[0].table(tree).decode(&mut self.bits, input)?
+                    let context = context(tables, &self.ring, self.position);
+                    let tree =
+                        usize::from(tables.maps[0].values[tables.blocks[0].current * 64 + context]);
+                    let Some(byte) = tables.trees[0].table(tree).decode(&mut self.bits, input)?
                     else {
                         return Ok(Stop::Input);
                     };
-                    self.blocks[0].advance();
+                    tables.blocks[0].advance();
                     self.emit(byte as u8, output)?;
                     self.literals -= 1;
                 }
@@ -1312,35 +1436,38 @@ impl Stream {
                         self.stage = Stage::Resolve;
                         continue;
                     }
-                    if !self.blocks[2].prepare(&mut self.bits, input)? {
+                    let tables = tables!();
+                    if !tables.blocks[2].prepare(&mut self.bits, input)? {
                         return Ok(Stop::Input);
                     }
                     let context = self.copy.saturating_sub(2).min(3) as usize;
                     let tree =
-                        usize::from(self.maps[1].values[self.blocks[2].current * 4 + context]);
-                    let Some(symbol) = self.trees[2].table(tree).decode(&mut self.bits, input)?
+                        usize::from(tables.maps[1].values[tables.blocks[2].current * 4 + context]);
+                    let Some(symbol) = tables.trees[2].table(tree).decode(&mut self.bits, input)?
                     else {
                         return Ok(Stop::Input);
                     };
-                    self.blocks[2].advance();
+                    tables.blocks[2].advance();
                     self.distance_code = symbol;
                     self.stage = Stage::DistanceExtra(symbol);
                 }
                 Stage::DistanceExtra(symbol) => {
-                    let width = self.distances.extra_bits(symbol);
+                    let distances = tables!().distances;
+                    let width = distances.extra_bits(symbol);
                     if width > 32 {
                         let low = read!(32);
                         self.stage = Stage::DistanceExtraHigh(symbol, low);
                         continue;
                     }
                     let extra = read!(width);
-                    self.distance = self.distances.resolve(symbol, extra, &self.cache)?;
+                    self.distance = distances.resolve(symbol, extra, &self.cache)?;
                     self.stage = Stage::Resolve;
                 }
                 Stage::DistanceExtraHigh(symbol, low) => {
-                    let high = read!(self.distances.extra_bits(symbol) - 32);
+                    let distances = tables!().distances;
+                    let high = read!(distances.extra_bits(symbol) - 32);
                     let extra = low | (high << 32);
-                    self.distance = self.distances.resolve(symbol, extra, &self.cache)?;
+                    self.distance = distances.resolve(symbol, extra, &self.cache)?;
                     self.stage = Stage::Resolve;
                 }
                 Stage::Resolve => {
@@ -1372,23 +1499,24 @@ impl Stream {
                             start: offset,
                         };
                     } else if self.distance > available {
-                        let context = self.context();
-                        self.scratch_len = dictionary::resolve(
+                        let tables = tables!();
+                        let context = context(tables, &self.ring, self.position);
+                        tables.scratch_len = dictionary::resolve(
                             dictionary,
                             self.distance - available - prefix_len - 1,
                             self.copy as usize,
                             context,
-                            &mut self.scratch,
+                            &mut tables.scratch,
                         )?;
-                        if self.scratch_len as u64 > self.remaining {
+                        if tables.scratch_len as u64 > self.remaining {
                             return Err(InvalidDataKind::MetaBlock.into());
                         }
                         // RFC/C reject these zero-output references: they can
                         // otherwise repeat using exclusively zero-bit trees.
-                        if self.scratch_len == 0 && self.distance <= 120 {
+                        if tables.scratch_len == 0 && self.distance <= 120 {
                             return Err(InvalidDataKind::DictionaryReference.into());
                         }
-                        self.scratch_pos = 0;
+                        tables.scratch_pos = 0;
                         self.stage = Stage::Dictionary;
                     } else {
                         if self.copy > self.remaining {
@@ -1509,16 +1637,17 @@ impl Stream {
                     };
                 }
                 Stage::Dictionary => {
-                    if self.scratch_pos == self.scratch_len {
+                    let tables = tables!();
+                    if tables.scratch_pos == tables.scratch_len {
                         self.stage = Stage::Command;
                         continue;
                     }
                     if !output.ready()? {
                         return Ok(Stop::Output);
                     }
-                    let byte = self.scratch[self.scratch_pos];
+                    let byte = tables.scratch[tables.scratch_pos];
+                    tables.scratch_pos += 1;
                     self.emit(byte, output)?;
-                    self.scratch_pos += 1;
                 }
                 Stage::EndBlock => {
                     self.stage = if self.last { Stage::End } else { Stage::Meta };
@@ -1528,42 +1657,6 @@ impl Stream {
                     return Ok(Stop::Member);
                 }
             }
-        }
-    }
-}
-
-impl Default for Stream {
-    fn default() -> Self {
-        Self {
-            bits: Bits::default(),
-            stage: Stage::default(),
-            memory: Memory::default(),
-            ring: Vec::new(),
-            prefix_history: Vec::new(),
-            position: 0,
-            window_size: 0,
-            max_backward: 0,
-            window: None,
-            large: false,
-            last: false,
-            remaining: 0,
-            blocks: Default::default(),
-            builder: Builder::default(),
-            modes: [0; 256],
-            maps: Default::default(),
-            trees: Default::default(),
-            distances: DistanceLayout::default(),
-            distance_table: Vec::new(),
-            distance_table_layout: None,
-            literals: 0,
-            copy: 0,
-            implicit: false,
-            distance: 0,
-            distance_code: 0,
-            cache: Cache::default(),
-            scratch: [0; SCRATCH_BYTES],
-            scratch_pos: 0,
-            scratch_len: 0,
         }
     }
 }
@@ -1864,7 +1957,11 @@ mod tests {
         assert_eq!(context_lut(3) as &[u8], CONTEXT_LUT_SIGNED.as_slice());
         // A stream with no output yet has zero context in every mode.
         let stream = Stream::default();
-        assert_eq!(stream.previous_bytes(), (0, 0));
-        assert_eq!(stream.context(), 0);
+        assert_eq!(previous_bytes(&stream.ring, stream.position), (0, 0));
+        let mut tables = Tables::default();
+        for mode in 0..4 {
+            tables.modes[0] = mode;
+            assert_eq!(context(&tables, &stream.ring, stream.position), 0);
+        }
     }
 }

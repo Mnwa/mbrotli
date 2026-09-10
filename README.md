@@ -60,7 +60,8 @@ source qualities **0–11**. SIMD Brotli shares Rust brotli's decoder and is omi
 Burli decodes every source quality. All **384 cases** restore the original bytes.
 
 Across the eight equally weighted inputs, the median speed / Burli is
-**0.967×** (previously 0.980× in a separate run). Empty and tiny inputs retain
+**1.013×** (previously 0.967× in a separate run), and the median speed / Google
+C ranges from **3.1× to 3.7×** by source quality. Empty and tiny inputs retain
 the same weight as larger datasets. The chart shows per-quality medians of
 C-time/decoder-time ratios; above **1×** is faster than C. Throughput in the
 quality pages counts restored bytes. Construction, allocation, decode and disposal

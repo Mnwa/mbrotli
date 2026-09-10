@@ -3,31 +3,36 @@
 [Benchmark index](README.md) · [All decoder quality pages](decoders/README.md)
 
 With the original eight inputs unchanged, the current mbrotli median speed
-relative to Burli is **0.967×** across all 96 corpus/quality pairs.
-The previously recorded value was **0.980×**. Per-quality medians now
-range from **0.934× to 0.981×**. Each corpus/quality pair has equal weight,
-including empty and tiny inputs.
+relative to Burli is **1.013×** across all 96 corpus/quality pairs. The
+previously recorded value was **0.967×**. Every per-quality median is now at or
+above **1.006×**, so mbrotli matches or leads Burli's median at every source
+quality; median speed relative to Google C ranges from **3.1× to 3.7×**. Each
+corpus/quality pair has equal weight, including empty and tiny inputs.
 
-The complete run **decoder-synthetic-final-2026-09-10-090040** measures all 384 decoder cases with
-exactly the previous corpora, q0–q11, generic mode, requested window 22 and cold
-native APIs. Empty input and tiny text retain equal weight in the median.
-All 384 original/compressed size records match the preceding run,
-and every decoder restored the exact original bytes before timing.
+The complete run **decoder-workspace-split-2026-09-10** measures all 384 decoder
+cases with exactly the previous corpora, q0–q11, generic mode, requested window
+22 and cold native APIs. Empty input and tiny text retain equal weight in the
+median. Every decoder restored the exact original bytes before timing.
 
-| Source quality | Before literal batching, mbrotli / Burli | Current mbrotli / Burli |
-| --- | ---: | ---: |
-| q0 | 0.979× | 0.953× |
-| q1 | 0.930× | 0.934× |
-| q2 | 0.976× | 0.976× |
-| q3 | 0.970× | 0.981× |
-| q4 | 0.982× | 0.963× |
-| q5 | 0.955× | 0.974× |
-| q6 | 0.993× | 0.976× |
-| q7 | 0.985× | 0.977× |
-| q8 | 0.973× | 0.980× |
-| q9 | 0.981× | 0.962× |
-| q10 | 0.953× | 0.955× |
-| q11 | 0.955× | 0.963× |
+| Source quality | Google C | mbrotli | Rust brotli | Burli | mbrotli / Burli |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| q0 | 1.000× | 3.362× | 0.367× | 3.175× | 1.042× |
+| q1 | 1.000× | 3.542× | 0.363× | 3.143× | 1.120× |
+| q2 | 1.000× | 3.483× | 0.581× | 3.069× | 1.080× |
+| q3 | 1.000× | 3.115× | 0.584× | 2.799× | 1.006× |
+| q4 | 1.000× | 3.710× | 0.611× | 3.181× | 1.176× |
+| q5 | 1.000× | 3.254× | 0.591× | 3.102× | 1.015× |
+| q6 | 1.000× | 3.251× | 0.611× | 3.104× | 1.006× |
+| q7 | 1.000× | 3.181× | 0.579× | 3.009× | 1.032× |
+| q8 | 1.000× | 3.189× | 0.583× | 3.095× | 1.011× |
+| q9 | 1.000× | 3.156× | 0.607× | 3.115× | 1.013× |
+| q10 | 1.000× | 3.236× | 0.604× | 3.225× | 1.006× |
+| q11 | 1.000× | 3.131× | 0.582× | 3.137× | 1.020× |
+
+The Google C, mbrotli, Rust brotli and Burli columns are the median across the
+eight datasets of C mean time / that decoder's mean time (higher is faster; 1×
+matches C). The final column is the median of the per-corpus Burli time /
+mbrotli time ratios, which is not the ratio of the two C-relative medians.
 
 Each value takes Burli mean time / mbrotli mean time for each matching corpus,
 then the median. For eight values this averages the fourth and fifth sorted
@@ -37,6 +42,12 @@ not paired trials: differences also include host variation. The controlled
 [78-case before/after experiment](decoder-literal-paired.csv) reports code effects.
 
 ![Median decoder speed relative to C](decoders/charts/overview.svg)
+
+> The SVG charts and per-quality pages under `decoders/` still render the
+> preceding **decoder-synthetic-final-2026-09-10-090040** run; regenerating them
+> needs the Matplotlib-equipped benchmarking environment (`decoder_docs.py`).
+> The table above and [`decoder-comparison.csv`](decoder-comparison.csv) are the
+> current source of truth for this run.
 
 The [CSV](decoder-comparison.csv),
 [environment](decoder-comparison-environment.json) and
