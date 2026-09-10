@@ -25,6 +25,7 @@ use crate::{
     },
 };
 use alloc::vec::Vec;
+use fearless_simd::{Simd, SimdBase, dispatch, u8x16, u8x32};
 
 /// Smallest ring allocation; growth doubles up to the window size.
 const MIN_RING: u64 = 64;
@@ -232,6 +233,7 @@ fn flush_ring(ring: &[u8], position: u64, flushed: &mut u64, output: &mut Output
 /// Copies `len` bytes from `distance` back where the two regions overlap
 /// and neither wraps: `src + len > dst`. A unit distance is a fill; longer
 /// runs double the replicated prefix; short runs go byte by byte.
+#[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
 fn copy_overlapping(ring: &mut [u8], dst: usize, src: usize, len: usize, distance: usize) {
     if distance == 1 {
         let byte = ring[src];
@@ -254,31 +256,40 @@ fn copy_overlapping(ring: &mut [u8], dst: usize, src: usize, len: usize, distanc
 
 /// Copies sixteen bytes when both windows are inside the ring; the slots
 /// past the real copy are the format's unreachable bytes ahead of the
-/// window, or still unwritten ring space. The word travels as an integer,
-/// which keeps it in registers between the two bounds checks.
+/// window, or still unwritten ring space. The vector stays in registers
+/// between the source and destination bounds checks.
 #[inline(always)]
-fn copy16(ring: &mut [u8], src: usize, dst: usize) -> bool {
+fn copy16<S: Simd>(simd: S, ring: &mut [u8], src: usize, dst: usize) -> bool {
     if let Some(word) = ring.get(src..).and_then(|s| s.first_chunk::<16>())
-        && let word = u128::from_le_bytes(*word)
+        && let word = u8x16::load_array_ref(simd, word)
         && let Some(target) = ring.get_mut(dst..).and_then(|t| t.first_chunk_mut::<16>())
     {
-        *target = word.to_le_bytes();
+        word.store_array(target);
         return true;
     }
     false
 }
 
-/// Copies thirty-two bytes as two words for a non-overlapping copy of 17 to
-/// 32 bytes: the source of the second word lies below the first word's
-/// destination end, so it is already final when loaded.
+/// Copies a snapshot of thirty-two bytes for a non-overlapping copy of 17
+/// to 32 bytes. At most fifteen unreachable bytes ahead are overwritten.
+/// Loading the whole source first also permits physically overlapping slots.
 #[inline(always)]
-fn copy32(ring: &mut [u8], src: usize, dst: usize) -> bool {
-    copy16(ring, src, dst) && copy16(ring, src + 16, dst + 16)
+fn copy32<S: Simd>(simd: S, ring: &mut [u8], src: usize, dst: usize) -> bool {
+    if let Some(word) = ring.get(src..).and_then(|s| s.first_chunk::<32>())
+        && let word = u8x32::load_array_ref(simd, word)
+        && let Some(target) = ring.get_mut(dst..).and_then(|t| t.first_chunk_mut::<32>())
+    {
+        word.store_array(target);
+        return true;
+    }
+    false
 }
 
 /// Copies `length` bytes from `distance` back, in ring pieces that neither
 /// wrap nor need per-byte handling. The ring already holds `position + length`.
-fn copy_ring(
+#[inline(always)]
+fn copy_ring<S: Simd>(
+    simd: S,
     ring: &mut [u8],
     position: &mut u64,
     distance: u64,
@@ -294,7 +305,7 @@ fn copy_ring(
         let piece = length.min(size - dst).min(size - src);
         if src < dst && (distance as usize) < piece {
             copy_overlapping(ring, dst, src, piece, distance as usize);
-        } else if !(piece <= 16 && copy16(ring, src, dst)) {
+        } else if !(piece <= 16 && copy16(simd, ring, src, dst)) {
             ring.copy_within(src..src + piece, dst);
         }
         *position += piece as u64;
@@ -478,12 +489,13 @@ impl Stream {
     #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     pub(crate) fn run(
         &mut self,
+        backend: crate::Backend,
         input: &mut Input<'_>,
         output: &mut Output<'_>,
         config: DecoderConfig,
         dictionary: Option<DictionaryRef<'_>>,
     ) -> Result<Stop, DecodeError> {
-        let result = self.run_stages(input, output, config, dictionary);
+        let result = self.run_stages(backend, input, output, config, dictionary);
         // The fast path may pull whole speculative bytes into the reservoir.
         // Across an input/output pause they persist in `self.bits`, so `consumed`
         // legitimately counts them. At a member boundary the session resets the
@@ -507,11 +519,14 @@ impl Stream {
     /// depends only on the current block types is refreshed at block switches
     /// rather than per command.
     ///
-    /// Kept out of line so its many live values get a register allocation of
-    /// their own instead of competing with every other stage's.
-    #[inline(never)]
-    fn fast(
+    /// The outer state machine dispatches a feature-enabled function so these
+    /// locals have their own register allocation. SIMD helpers inline here;
+    /// the command loop never detects features or dispatches a copy.
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
+    #[inline(always)]
+    fn fast<S: Simd>(
         &mut self,
+        simd: S,
         input: &mut Input<'_>,
         output: &mut Output<'_>,
         out_end: usize,
@@ -890,10 +905,10 @@ impl Stream {
                 if dst.max(src) + len <= ring_len {
                     if distance >= copy {
                         if len <= 16 {
-                            if !copy16(ring, src, dst) {
+                            if !copy16(simd, ring, src, dst) {
                                 ring.copy_within(src..src + len, dst);
                             }
-                        } else if len > 32 || !copy32(ring, src, dst) {
+                        } else if len > 32 || !copy32(simd, ring, src, dst) {
                             ring.copy_within(src..src + len, dst);
                         }
                     } else {
@@ -904,7 +919,15 @@ impl Stream {
                         flush_ring(ring, position, &mut flushed, output);
                     }
                 } else {
-                    copy_ring(ring, &mut position, distance, len, &mut flushed, output);
+                    copy_ring(
+                        simd,
+                        ring,
+                        &mut position,
+                        distance,
+                        len,
+                        &mut flushed,
+                        output,
+                    );
                 }
                 remaining -= copy;
                 space -= len;
@@ -914,6 +937,7 @@ impl Stream {
 
     fn run_stages(
         &mut self,
+        backend: crate::Backend,
         input: &mut Input<'_>,
         output: &mut Output<'_>,
         config: DecoderConfig,
@@ -1130,7 +1154,7 @@ impl Stream {
                         self.stage = Stage::EndBlock;
                         continue;
                     }
-                    self.fast(input, output, out_end, dictionary)?;
+                    dispatch!(backend.0, simd => self.fast(simd, input, output, out_end, dictionary))?;
                     if !matches!(self.stage, Stage::Command) {
                         continue;
                     }
@@ -1182,7 +1206,7 @@ impl Stream {
                     // decoded one symbol at a time below. Entering the bulk
                     // loop is worth it only if it can refill at all.
                     if input.consumed + 8 <= fast_end {
-                        self.fast(input, output, out_end, dictionary)?;
+                        dispatch!(backend.0, simd => self.fast(simd, input, output, out_end, dictionary))?;
                         if !matches!(self.stage, Stage::Literals) || self.literals == 0 {
                             continue;
                         }
@@ -1318,14 +1342,15 @@ impl Stream {
                         .ok_or(DecodeError::SizeOverflow)?;
                     self.ensure_ring(end)?;
                     let mut flushed = self.position;
-                    copy_ring(
+                    dispatch!(backend.0, simd => copy_ring(
+                        simd,
                         &mut self.ring,
                         &mut self.position,
                         self.distance,
                         n as usize,
                         &mut flushed,
                         output,
-                    );
+                    ));
                     flush_ring(&self.ring, self.position, &mut flushed, output);
                     self.copy -= n;
                     self.remaining -= n;
@@ -1505,6 +1530,7 @@ mod tests {
                 };
                 let result = stream
                     .run(
+                        crate::Backend::SCALAR,
                         &mut input,
                         &mut output,
                         DecoderConfig::default(),
@@ -1531,53 +1557,133 @@ mod tests {
             rng ^= rng << 17;
             rng
         };
-        for size in [64usize, 256] {
-            for _ in 0..400 {
-                let mut expected = alloc::vec![0u8; size];
-                for byte in &mut expected {
-                    *byte = random() as u8;
+        for backend in crate::Backend::available() {
+            for size in [64usize, 256] {
+                for _ in 0..400 {
+                    let mut expected = alloc::vec![0u8; size];
+                    for byte in &mut expected {
+                        *byte = random() as u8;
+                    }
+                    let mut ring = expected.clone();
+                    let position = 3 * size as u64 + (random() % size as u64);
+                    let distance = 1 + random() % (size as u64 - 16);
+                    let length = 1 + (random() as usize) % 100;
+                    let mut reference_position = position;
+                    let mut produced = alloc::vec![0u8; length];
+                    for byte in &mut produced {
+                        let source = expected
+                            [((reference_position - distance) & (size as u64 - 1)) as usize];
+                        expected[(reference_position & (size as u64 - 1)) as usize] = source;
+                        // The decoder emits each byte before its ring slot is reused.
+                        *byte = source;
+                        reference_position += 1;
+                    }
+                    let mut sink = alloc::vec![0u8; length];
+                    let mut output = Output {
+                        bytes: &mut sink,
+                        produced: 0,
+                        total_before: 0,
+                        limit: None,
+                        exact: OutputSize::Unknown,
+                    };
+                    let mut fast_position = position;
+                    let mut flushed = position;
+                    dispatch!(backend.0, simd => copy_ring(
+                        simd,
+                        &mut ring,
+                        &mut fast_position,
+                        distance,
+                        length,
+                        &mut flushed,
+                        &mut output,
+                    ));
+                    flush_ring(&ring, fast_position, &mut flushed, &mut output);
+                    assert_eq!(fast_position, reference_position);
+                    assert_eq!(output.produced, length);
+                    // Only the copied bytes and the 16 unreachable slots ahead may differ.
+                    for (i, (a, b)) in ring.iter().zip(&expected).enumerate() {
+                        let ahead = (i as u64).wrapping_sub(fast_position) & (size as u64 - 1);
+                        assert!(a == b || ahead < 16, "slot {i} differs");
+                    }
+                    assert_eq!(sink, produced);
                 }
-                let mut ring = expected.clone();
-                let position = 3 * size as u64 + (random() % size as u64);
-                let distance = 1 + random() % (size as u64 - 16);
-                let length = 1 + (random() as usize) % 100;
-                let mut reference_position = position;
-                let mut produced = alloc::vec![0u8; length];
-                for byte in &mut produced {
-                    let source =
-                        expected[((reference_position - distance) & (size as u64 - 1)) as usize];
-                    expected[(reference_position & (size as u64 - 1)) as usize] = source;
-                    // The decoder emits each byte before its ring slot is reused.
-                    *byte = source;
-                    reference_position += 1;
+            }
+        }
+    }
+
+    #[test]
+    fn scalar_and_host_backends_decode_goldens_with_output_backpressure() {
+        use crate::{Backend, DecodeOperation, DecodeStreamConfig, DecoderStatus, Decompressor};
+        let cases: &[(&[u8], &[u8])] = &[
+            (
+                include_bytes!(
+                    "../../../brotli-ffi/vendor/brotli/tests/testdata/alice29.txt.compressed"
+                ),
+                include_bytes!("../../../brotli-ffi/vendor/brotli/tests/testdata/alice29.txt"),
+            ),
+            (
+                include_bytes!(
+                    "../../../brotli-ffi/vendor/brotli/tests/testdata/quickfox_repeated.compressed"
+                ),
+                include_bytes!(
+                    "../../../brotli-ffi/vendor/brotli/tests/testdata/quickfox_repeated"
+                ),
+            ),
+        ];
+        for backend in Backend::available() {
+            let mut decoder = Decompressor::builder(DecoderConfig::default())
+                .with_backend(backend)
+                .build()
+                .unwrap();
+            for &(encoded, expected) in cases {
+                assert_eq!(decoder.decompress(encoded).unwrap(), expected);
+                for capacity in [1, 15, 16, 17, 31, 32, 33, 127, 65536] {
+                    let mut session = decoder.start(DecodeStreamConfig::default()).unwrap();
+                    let mut output = alloc::vec![0; capacity];
+                    let mut result = Vec::new();
+                    let mut cursor = 0;
+                    loop {
+                        let progress = session
+                            .process(&encoded[cursor..], &mut output, DecodeOperation::Finish)
+                            .unwrap();
+                        cursor += progress.consumed;
+                        result.extend_from_slice(&output[..progress.produced]);
+                        if progress.status == DecoderStatus::Finished {
+                            break;
+                        }
+                        assert!(progress.consumed != 0 || progress.produced != 0);
+                    }
+                    assert_eq!(cursor, encoded.len());
+                    assert_eq!(result, expected, "{backend}, capacity {capacity}");
                 }
-                let mut sink = alloc::vec![0u8; length];
-                let mut output = Output {
-                    bytes: &mut sink,
-                    produced: 0,
-                    total_before: 0,
-                    limit: None,
-                    exact: OutputSize::Unknown,
-                };
-                let mut fast_position = position;
-                let mut flushed = position;
-                copy_ring(
-                    &mut ring,
-                    &mut fast_position,
-                    distance,
-                    length,
-                    &mut flushed,
-                    &mut output,
-                );
-                flush_ring(&ring, fast_position, &mut flushed, &mut output);
-                assert_eq!(fast_position, reference_position);
-                assert_eq!(output.produced, length);
-                // Only the copied bytes and the 16 unreachable slots ahead may differ.
-                for (i, (a, b)) in ring.iter().zip(&expected).enumerate() {
-                    let ahead = (i as u64).wrapping_sub(fast_position) & (size as u64 - 1);
-                    assert!(a == b || ahead < 16, "slot {i} differs");
+            }
+        }
+    }
+
+    #[test]
+    fn vector_copies_match_snapshots_for_every_host_backend_and_ring_boundary() {
+        for backend in crate::Backend::available() {
+            for size in [0, 1, 15, 16, 17, 31, 32, 33, 63, 64, 65, 97] {
+                let original: Vec<u8> = (0..size).map(|i| (i * 37) as u8).collect();
+                for src in 0..=size + 1 {
+                    for dst in 0..=size + 1 {
+                        for width in [16, 32] {
+                            let mut actual = original.clone();
+                            let mut expected = original.clone();
+                            let fits = src + width <= size && dst + width <= size;
+                            if fits {
+                                expected[dst..dst + width]
+                                    .copy_from_slice(&original[src..src + width]);
+                            }
+                            let copied = dispatch!(backend.0, simd => {
+                                if width == 16 { copy16(simd, &mut actual, src, dst) }
+                                else { copy32(simd, &mut actual, src, dst) }
+                            });
+                            assert_eq!(copied, fits, "{backend}, {size}, {src}, {dst}, {width}");
+                            assert_eq!(actual, expected);
+                        }
+                    }
                 }
-                assert_eq!(sink, produced);
             }
         }
     }

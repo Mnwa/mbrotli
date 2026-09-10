@@ -21,6 +21,8 @@ graph TD
     Core --> Entropy[huffman / block / context_map]
     Core --> Regen[stream / distance / dictionary]
     Core --> Memory[memory: fallible live workspace accounting]
+    Regen --> Dispatch[validated backend: command loop or ring-copy stage]
+    Dispatch --> Copies[fearless_simd: 16 / 32-byte history copies]
     Regen --> Shared[private crate::shared: wire tables, dictionary bytes, transforms]
     Dict[dictionary: DecodeDictionary / PreparedDictionary] --> View[DictionaryRef borrowed view]
     View --> API
@@ -30,9 +32,12 @@ graph TD
 ## Public ownership and APIs
 
 `Decompressor::new` and `builder` create an allocation-free workspace. A validated
-`Backend` is selected once at construction; currently every backend uses the
-same scalar decoder. There are no inner-loop feature checks or decoder SIMD
-kernels. `fork_empty` copies policy/backend into an independent empty workspace.
+`Backend` is selected once at construction. The scalar state machine dispatches
+the command loop and bulk ring-copy stages through that validated token. The
+command loop passes its concrete `fearless_simd::Simd` token to 16- and 32-byte
+history-copy helpers; there are no feature checks or dynamic calls per command
+or vector. Headers, raw blocks, and dictionary resolution outside the command
+loop remain shared scalar code. `fork_empty` copies policy/backend into an independent empty workspace.
 `config`, `retention`, `retained_bytes`, `trim`, `recover`, and `reconfigure`
 manage reuse without exposing core storage.
 
@@ -259,13 +264,40 @@ flowchart TD
     Ref -->|yes| Dict[prefix: pause Resolve / static word into ring]
     Ref -->|no| Push[cache.push; grow ring once per call]
     Push --> Copy{no wrap?}
-    Copy -->|yes, distance >= length| Word[16/32-byte word copy or copy_within]
+    Copy -->|yes, distance >= length| Word[16/32-byte SIMD snapshot or copy_within]
     Copy -->|yes, overlapping| Overlap[fill, byte loop, or doubling]
     Copy -->|wraps| Ring[copy_ring pieces]
     Word --> Start
     Overlap --> Start
     Ring --> Start
     Dict --> Start
+```
+
+The fixed-width copy helpers load the entire source vector before storing it.
+They accept unaligned, initialized ring slices and check both complete windows;
+if either window is short they leave the ring unchanged and the caller uses
+`copy_within` for the exact length. A 16-byte copy serves lengths 1–16; a
+32-byte copy serves lengths 17–32, so at most fifteen bytes ahead of actual
+output are overwritten. The ring's sixteen unreachable history slots make
+those extra writes unobservable. The snapshot is also correct when ring slots
+physically overlap: all actual source bytes precede any stores. Logical LZ77
+expansion still uses fill, sequential bytes, or prefix doubling; it cannot use
+a snapshot of bytes not yet generated. On AVX2 a 32-byte move uses one vector;
+SSE2/SSE4.2 split it into two 128-bit moves. Fallback remains available for
+internal differential tests. Neither SIMD kernel allocates or uses `unsafe`.
+
+```mermaid
+flowchart TD
+    Stage[Scalar run_stages] --> Kind{stage}
+    Kind -->|Command / resumable Literals| Dispatch[dispatch stored Backend]
+    Dispatch --> Fast[Specialized command loop]
+    Fast --> Copy[copy16 / copy32 with concrete Simd token]
+    Kind -->|Copy with limited input or output| Bulk[dispatch once for copy_ring]
+    Bulk --> Copy
+    Kind -->|headers / raw / other stages| Scalar[Shared scalar implementation]
+    Copy --> Bounds{both full vector windows fit?}
+    Bounds -->|yes| Snapshot[load entire vector, then store]
+    Bounds -->|no| Exact[caller copies exact byte count]
 ```
 
 The command symbol indexes a 1024-slot `COMMANDS` table (the 704-symbol
@@ -405,13 +437,13 @@ source chain; conversion to `std::io::Error` retains the concrete codec error.
 
 ## Known gaps
 
-The decoder uses scalar regeneration with two-level table Huffman lookup, a
-whole-word bit reservoir, and bulk ring copies; every selected backend runs the
-same scalar code and there is no decoder SIMD kernel. The vectorized parts are
-what LLVM lowers from fixed-size word copies (`copy16`/`copy32` become 16-byte
-loads and stores), `fill` and `copy_within` (`memset`/`memcpy`) and the
-trivial-context detection reduction; Huffman symbol decoding is a serial
-dependency chain and gains nothing from explicit SIMD. The prefix-crossing
+The decoder specializes the command loop and its fixed-size history copies,
+while Huffman symbol decoding retains its serial dependency chain. Long logical
+overlap uses fill, byte copies or doubling rather than independent SIMD lanes;
+context-map transforms and table construction remain scalar. The new SIMD
+kernels have x86_64 execution evidence only; Arm/NEON and AVX-512 still need
+native validation. See [decoder SIMD measurements](decoder-simd.md) for the
+profile, benchmark results and code-size tradeoff. The prefix-crossing
 history path and short static-dictionary words still emit byte by byte, which
 does not affect the primary corpora. A first decode on a fresh workspace pays
 about a dozen separate allocations (ring, three Huffman groups, block and

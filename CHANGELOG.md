@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Specialize decoder command loops for the configured CPU backend and use safe
+  `fearless_simd` snapshots for 16- and 32-byte history copies. Dispatch stays
+  outside command loops; headers and raw blocks share scalar code. Add
+  differential fallback/host-SIMD tests at ring boundaries and hotpath anchors
+  for command execution, overlapping copies, and Huffman table construction.
+  See `architecture/decoder-simd.md` for measured results and limitations.
+
 - Bring decoder throughput to at least 95% of the reference C decoder for
   every quality and benchmark corpus, measured warm against C's create/destroy
   slice shape (see the compatibility specification for the table). The command

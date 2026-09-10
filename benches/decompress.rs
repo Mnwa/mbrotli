@@ -19,7 +19,8 @@
 //!   create and destroy their decoder state inside the timed region.
 //! * `reused` — repeated `decompress_into` into a destination that is already
 //!   big enough. Rust retains its workspace; C constructs state for each call.
-//! * `presized` — `decompress_to_slice` into a caller-owned buffer.
+//! * `presized` — `decompress_to_slice` into a caller-owned buffer, with the
+//!   default backend and separate `mbrotli-<backend>` entries for every host level.
 //! * `tiny` — per-call overhead on payloads where it dominates.
 //! * `streaming` — the `Write`, `Read` and session shapes fed 64 KiB chunks of
 //!   compressed input and drained in 64 KiB windows, against the reference's
@@ -353,6 +354,31 @@ fn bench_presized(criterion: &mut Criterion) {
                     });
                 },
             );
+
+            // Keep each supported backend separately measurable. Construction,
+            // warmup, and validation stay outside the timed slice operation.
+            for backend in mbrotli::Backend::available() {
+                let mut decoder = Decompressor::builder(DecoderConfig::default())
+                    .with_backend(backend)
+                    .build()
+                    .expect("a host-validated backend");
+                let mut output = vec![0u8; stream.payload.len()];
+                decoder
+                    .decompress_to_slice(&stream.compressed, &mut output)
+                    .expect("the selected backend decodes the stream");
+                assert_eq!(output, stream.payload, "{backend} differs");
+                group.bench_with_input(
+                    BenchmarkId::new(format!("mbrotli-{backend}"), &stream.name),
+                    &stream.compressed,
+                    |bencher, compressed| {
+                        bencher.iter(|| {
+                            decoder
+                                .decompress_to_slice(black_box(compressed), &mut output)
+                                .expect("the selected backend decodes the stream")
+                        });
+                    },
+                );
+            }
 
             let mut rust_output = vec![0u8; stream.payload.len()];
             group.bench_with_input(

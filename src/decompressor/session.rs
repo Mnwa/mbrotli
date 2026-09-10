@@ -264,10 +264,13 @@ impl DecoderSession<'_, '_> {
                 self.decoder.workspace.reset(config);
                 self.boundary = false;
             }
-            let outcome =
-                self.decoder
-                    .workspace
-                    .run(&mut input, &mut output, config, self.dictionary);
+            let outcome = self.decoder.workspace.run(
+                self.decoder.backend,
+                &mut input,
+                &mut output,
+                config,
+                self.dictionary,
+            );
             if let Some(window) = self.decoder.workspace.window {
                 self.window = Some(window);
             }

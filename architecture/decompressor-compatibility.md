@@ -4,7 +4,7 @@ This report records the implementation and local verification of
 [the external v3 specification](../specifications/mbrotli-decompressor-llm-spec-v3.md).
 Mechanics, ownership, public APIs and invariants are described in
 [decompressor.md](decompressor.md) and [shared-primitives.md](shared-primitives.md).
-The decoder is native scalar Rust. SERIALIZED/custom dictionary extensions require
+The decoder is native Rust with backend-specialized command loops and SIMD history copies. SERIALIZED/custom dictionary extensions require
 `experimental`; RAW dictionaries, large windows and complete base continuations do not.
 
 ## Revision, environment and oracle
@@ -114,8 +114,9 @@ additional std tests concern encoder-only paths.
 | G-20 platforms/features | P* | P* | P* | P* | Scalar and available host backends, AArch64, x86_64, isolated gates, bare-metal checks |
 
 `*` No 32-bit execution environment was available. Both alloc profiles compile
-for `thumbv7em-none-eabi`; this is not a 32-bit runtime test. Backend tests compare
-the same scalar decoder today; they do not claim decoder SIMD acceleration.
+for `thumbv7em-none-eabi`; this is not a 32-bit runtime test. Backend tests now compare scalar fallback and every available host SIMD backend.
+The SIMD update has native x86_64 execution evidence; earlier AArch64 results
+above predate it and do not validate the new kernels on Arm.
 
 C verifies windows through **30 bits**. The 31–62-bit RFC tests and mathematical
 model are separate evidence and do not allocate an enormous physical window.
@@ -269,7 +270,7 @@ ratio of the stream it decoded. The group ids are
 | --- | --- | --- |
 | `cold` | Create decoder, allocate output, decode once, destroy. C is handed the exact size; Rust grows a `Vec`. | all |
 | `reused` | Warm `decompress_into` after `clear`; C one-shot into a caller buffer. | all |
-| `presized` | Warm `decompress_to_slice`; C one-shot into the same slice. | all |
+| `presized` | Warm `decompress_to_slice`, default and each available backend; C one-shot into the same slice. | all |
 | `tiny` | 16, 64, 256 and 1024-byte text payloads, cold and warm. | text prefixes |
 | `streaming` | `DecoderWriter`, `DecoderReader` and a session fed 64 KiB input chunks and drained in 64 KiB windows; C `BrotliDecoderDecompressStream` with the same chunking. | payload ≥ 64 KiB |
 | `small-chunks` | Session and C stream fed 31-byte input and 127-byte output windows. | all |
@@ -340,7 +341,7 @@ compressible and mixed corpora are several times faster because a whole
 overlapping copy regenerates as a bulk ring `copy_ring` rather than byte by byte.
 These figures compare a warm decoder that retains its workspace with a C decoder
 created and destroyed each call, so they are not a like-for-like kernel
-comparison; no decoder SIMD kernel exists.
+comparison. These historical figures predate the SIMD copy update.
 
 These synthetic corpora are copy-, run- or metadata-dominated, so the table
 above says little about literal- and Huffman-bound decoding. The per-quality
@@ -446,7 +447,6 @@ No before/after encoder performance claim is made from this shared-host sample.
 - The two non-reproducing persistent AFL timeouts remain recorded with an unknown
   cause. Completed bounded campaigns are not a universal absence-of-bugs proof.
 - No full framing decoder was added; it is outside the raw decoder specification.
-- Decoder backends currently share scalar execution; no SIMD kernel exists. The
-  optimized scalar path matches or beats the measured C create/destroy shape on
-  the corpora above, but these are warm-versus-cold comparisons on a shared host,
-  not a certified kernel-for-kernel result.
+- The historical tables above predate SIMD specialization. See
+  [decoder SIMD measurements](decoder-simd.md) for the new before/after results.
+  C comparisons retain the warm-Rust versus create/destroy-C distinction.

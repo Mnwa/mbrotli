@@ -11,7 +11,8 @@ and known gaps. For usage examples, start with the [user guide](../docs/README.m
 | [Implementation comparison](benchmark-comparison.md) | Isolated five-encoder Criterion suite, validated exports, equal-weight dataset medians, ranked vertical-bar reports, and current-run provenance. |
 | [Codec features](codec-features.md) | Independent default-enabled codecs, shared public types, private primitive gates, crate documentation and isolated consumer checks. |
 | [No standard library](no-std.md) | Opt-in alloc-backed compression, feature precedence, excluded std APIs, compile-time SIMD, and no_std-only libm dependencies. |
-| [Native decompressor](decompressor.md) | Incremental raw decoding, whole-word reservoir, table Huffman, ring history and command fast path, dictionaries, resource budgets, retained lifecycle, I/O, and executable API contracts. |
+| [Native decompressor](decompressor.md) | Incremental raw decoding, whole-word reservoir, table Huffman, ring history, SIMD copies and command fast path, dictionaries, resource budgets, retained lifecycle, I/O, and executable API contracts. |
+| [Decoder SIMD measurements](decoder-simd.md) | Profile, copy-kernel dispatch, before/after Criterion evidence and validation limits. |
 | [Decoder compatibility](decompressor-compatibility.md) | Pinned C/RFC evidence, four build profiles, fuzzing, heavy checks and measured baseline. |
 | [Shared primitives](shared-primitives.md) | Private crate-root common data and transform ownership used by both codecs. |
 | [Compressor](compressor.md) | Configuration, serial APIs, sessions, I/O adapters, and errors. |
@@ -39,6 +40,7 @@ graph TD
     Root --> DictFacade[dictionary facade: enabled codec types]
     Root --> Finish[io::FinishError: either codec, std only]
     Decode --> DecodeCore[private decompressor::core]
+    DecodeCore --> DecodeSIMD[fearless_simd: specialized command loop and history copies]
     DecodeCore --> Shared
     Root --> Facade[io facade: compressor and decompressor adapters]
     Facade --> Decode

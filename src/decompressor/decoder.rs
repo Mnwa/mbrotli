@@ -25,7 +25,7 @@ use alloc::vec::Vec;
 #[derive(Debug)]
 pub struct Decompressor {
     pub(super) config: DecoderConfig,
-    backend: Backend,
+    pub(super) backend: Backend,
     retention: RetentionPolicy,
     pub(super) workspace: Stream,
     pub(super) active: bool,
@@ -33,8 +33,8 @@ pub struct Decompressor {
 
 /// Decoder construction with an optional backend and retention policy.
 ///
-/// Obtain this from [`Decompressor::builder`]. Every backend currently uses the
-/// same scalar decoder; selecting one does not enable decoder SIMD acceleration.
+/// Obtain this from [`Decompressor::builder`]. The backend specializes the
+/// command loop and its SIMD history copies; parsing and errors stay identical.
 ///
 /// # Examples
 ///

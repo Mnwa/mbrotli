@@ -444,6 +444,7 @@ impl Builder {
     /// advancing it past them. The vector only grows to the most this code
     /// could append, so a warm workspace is never refilled. Returns the
     /// largest symbol.
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     fn fill(
         &self,
         codes: &mut Vec<Code>,
