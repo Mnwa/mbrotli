@@ -5,11 +5,20 @@ import argparse
 import json
 import os
 from pathlib import Path
+from statistics import median
 
 from quality_docs import (CORPORA, ENCODERS, bars, cases, dataset_order, load_rows,
                           medians, quality_order, throughput)
 
 DECODERS = {key: value for key, value in ENCODERS.items() if key != "simd-brotli"}
+
+
+def burli_speed(rows, quality):
+    """Compare matching datasets directly; a ratio of medians is different."""
+    reference = {r["corpus"]: r["mean_ns"] for r in rows
+                 if r["quality"] == quality and r["implementation"] == "burli"}
+    return median(reference[r["corpus"]] / r["mean_ns"] for r in rows
+                  if r["quality"] == quality and r["implementation"] == "mbrotli")
 
 
 def overview_chart(rows, path, subtitle):
@@ -29,8 +38,8 @@ def overview_chart(rows, path, subtitle):
     ax.grid(axis="y", alpha=.18)
     ax.set_axisbelow(True)
     ax.legend(ncol=4, loc="upper center", bbox_to_anchor=(.5, 1.15), frameon=False)
-    fig.suptitle("Decompression · median across all 8 datasets", fontsize=18)
-    fig.text(.5, .02, subtitle + "\nIdentical compressed inputs · equal dataset weight, including empty and tiny input",
+    fig.suptitle(f"Decompression · median across all {len(CORPORA)} datasets", fontsize=18)
+    fig.text(.5, .02, subtitle + "\nIdentical compressed inputs · equal dataset weight",
              ha="center", fontsize=10)
     fig.tight_layout(rect=(0, .09, 1, .91))
     fig.savefig(path, metadata={"Date": None})
@@ -40,7 +49,8 @@ def overview_chart(rows, path, subtitle):
 def quality_chart(rows, quality, path):
     import matplotlib.pyplot as plt
 
-    fig, axes = plt.subplots(4, 2, figsize=(13, 16))
+    count = len(CORPORA)
+    fig, axes = plt.subplots(count // 2, 2, figsize=(13, count * 2))
     for ax, corpus in zip(axes.flat, dataset_order(rows, quality)):
         group = cases(rows, quality, corpus)
         length = group[0]["input_bytes"]
@@ -73,14 +83,14 @@ def quality_page(rows, quality, environment, links):
              "Quality belongs to the C encoder that prepared the input; decoders have no quality setting.",
              "All four decode the same bytes. Burli is included at every source quality; SIMD Brotli",
              "re-exports Rust brotli's decoder and is omitted.", "",
-             "## Median speed across eight datasets", "",
-             "Median of eight per-dataset C mean time / decoder mean time ratios, with equal weight",
-             "including empty and tiny input. Higher is faster; 1× matches C. No confidence interval",
+             f"## Median speed across {len(CORPORA)} datasets", "",
+             "Median of per-dataset C mean time / decoder mean time ratios, with equal weight.",
+             "Higher is faster; 1× matches C. No confidence interval",
              "is inferred for this across-dataset median.", "",
              "| Decoder | Median speed / C |", "| --- | ---: |"]
     for decoder, value in medians(rows, quality).items():
         lines.append(f"| {DECODERS[decoder][0]} | {value['speed']:.3f}× |")
-    lines += ["", f"![Decompression by dataset at source quality {quality}](charts/q{quality}.svg)", "",
+    lines += ["", f"mbrotli median speed / Burli: **{burli_speed(rows, quality):.3f}×** (direct per-dataset ratios).", "", f"![Decompression by dataset at source quality {quality}](charts/q{quality}.svg)", "",
               "Datasets are ranked by mbrotli speed relative to the fastest peer, highest first.",
               "Throughput counts restored bytes; empty input has latency only. Whiskers and intervals",
               "describe sampling uncertainty, not all host variation. Cold APIs include allocation",
@@ -119,17 +129,19 @@ def generate(rows, environment, output, sources):
              f"Recorded run: **{environment['baseline']}** ({environment['date']}).",
              f"[CSV]({links[0]}) · [Environment]({links[1]}) · [Methodology and limits]({links[2]}).", "",
              "![Median decompression speed relative to C](charts/overview.svg)", "",
-             "Each value is the median of C mean time / decoder mean time across all eight datasets,",
-             "equally weighted, including empty and tiny input. Higher is faster; 1× matches C.",
+             f"Each value is the median of C mean time / decoder mean time across all {len(CORPORA)} datasets,",
+             "equally weighted. Higher is faster; 1× matches C.",
              "Qualities are ordered by mbrotli median speed / C. Medians do not imply statistical significance.", "",
              "All four decoders restore identical C-generated streams. Source quality is an encoder setting,",
              "not a decoder setting. Burli decodes q0–q11; SIMD Brotli shares Rust brotli's decoder and is omitted.",
              "Compressed sizes and ratios are properties of those shared inputs, so there is no decoder size ranking.", "",
-             "| Source quality | Google C | mbrotli | Rust brotli | Burli |", "| --- | ---: | ---: | ---: | ---: |"]
+             "| Source quality | Google C | mbrotli | Rust brotli | Burli | mbrotli / Burli |", "| --- | ---: | ---: | ---: | ---: | ---: |"]
     for quality in quality_order(rows):
         values = medians(rows, quality)
-        lines.append(f"| [q{quality}](q{quality}.md) | " + " | ".join(f"{values[d]['speed']:.3f}×" for d in DECODERS) + " |")
-    lines += ["", "Open a source quality for all eight datasets, compressed/restored byte counts,",
+        lines.append(f"| [q{quality}](q{quality}.md) | " + " | ".join(f"{values[d]['speed']:.3f}×" for d in DECODERS) + f" | {burli_speed(rows, quality):.3f}× |")
+    lines += ["", "The last column takes the median of direct Burli time / mbrotli time ratios;",
+              "it does not divide the two medians relative to C.", "",
+              "Open a source quality for all datasets, compressed/restored byte counts,",
               "mean latency, confidence bounds and throughput. Measurements include cold construction,",
               "allocation, decoding and disposal. C receives the known output capacity; Rust brotli",
               "includes its native 4 KiB I/O adapter. See the linked methodology for reproducible commands",
@@ -150,7 +162,7 @@ def main():
     rows = load_rows(args.csv, decoding=True)
     environment = json.loads(args.environment.read_text())
     generate(rows, environment, args.output, [args.csv, args.environment, args.report])
-    print("Generated decoder overview, 12 quality pages and 13 SVGs from 384 measurements.")
+    print(f"Generated decoder overview, 12 quality pages and 13 SVGs from {len(rows)} measurements.")
 
 
 if __name__ == "__main__":

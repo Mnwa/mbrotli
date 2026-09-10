@@ -1,8 +1,8 @@
 {
   "date": "2026-09-10",
-  "baseline": "decoder-comparison-2026-09-10-060318",
-  "decoder_revision": "f4dba7c47c363286291abf948d6b324b783bbb1a",
-  "source_state": "Clean tree before this task; comparison harness and documentation additions only. Production codec sources unchanged.",
+  "baseline": "decoder-synthetic-final-2026-09-10-090040",
+  "decoder_revision": "1260f292b8031b4974c3ade3b36ab398611c963f",
+  "source_state": "Final working tree: owned-output optimization, batches using array chunks, short stored headers.",
   "c_revision": "4508218e7fef90fa4273286f7a415065946f2c43",
   "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8",
   "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
@@ -50,8 +50,8 @@
     "warmup_seconds": 0.2,
     "requested_measurement_seconds": 0.5
   },
-  "corpus_generation": "Shared core::corpora: xorshift64 seed 0x243f6a8885a308d3; structured binary ((i/16)^i) mod 256; repeated a; cyclic Alice; empty and tiny text.",
-  "library_source_tree_sha256": "9d51f4c952e3ae628e4cc674c5553175876d8508efe918600d5da2ab43c14063",
+  "corpus_generation": "Original eight inputs unchanged: empty, tiny-text, alice29, text-1m, binary-64k, random-64k, random-1m, repeated-1m. Same generator and parameters as decoder-refresh-2026-09-10-080955.",
+  "library_source_tree_sha256": "527dc855fa74380910e6d0a00197dbf3c81ae0f44e2212638391c50ca4ebd8b0",
   "library_source_hash_method": "SHA256 of sorted src file paths, NUL, file bytes, NUL, concatenated",
   "sha256": {
     "Cargo.toml": "61534a2f68c50fb17b187d98611889c2e2769037897be237cf2ab6334d012387",
@@ -59,57 +59,149 @@
     "benchmarks/comparison/Cargo.toml": "bcdc50184944b60f7e13ca84b81b07012b743dfa29ded7b5fc1ae4eecf643e4e",
     "benchmarks/comparison/Cargo.lock": "3001c8f2a19f94c8f50c6d9649a20765a7d68936374c2e94742ca1e51cb31be1",
     "benchmarks/comparison/src/core.rs": "4165ffb8a939cb60a150f7f50117f6d0d2303979aeeb782fa220f1e6ebcef7b8",
-    "benchmarks/comparison/src/core/decoder.rs": "588da59f1ccf48afc460085bde988b0b3eeabab73266ab9d286b0366521543d7",
+    "benchmarks/comparison/src/core/decoder.rs": "eb72bf074b69071b9d970e49ef0aaa90a7adc7cfc13de84e70e317e6ccc5fdd5",
     "benchmarks/comparison/src/lib.rs": "fa7ea60a5102ea7708ef45ea31075afb3278ca2cb0967c3bffaf2f7a0862cb08",
     "benchmarks/comparison/benches/decoders.rs": "1eaaa648a7b1f56cd2c2dede47944def165cf14034c833d8b9f46c5e503427e9",
-    "benchmarks/comparison/report.py": "1015ad0fcc279785706056760f737e94992c40cab41070a75cd5a814acfe021b",
-    "benchmarks/comparison/quality_docs.py": "8c5008ac107426e8f8fe2498b6190e3a66f790001f340607a54347845f712387",
-    "benchmarks/comparison/decoder_docs.py": "5aa70675524fabd2515c084b84d0e1cdc5fe0c6d6d5b8d8381a7a1538712edf4",
+    "benchmarks/comparison/report.py": "027604e588aa64100ec1d82e5135f4cce86caf639a55069ca10b45da701a0340",
+    "benchmarks/comparison/quality_docs.py": "bf290aa5254bd70cd5299edda7eef7e1249111371f07bf5afe4a2a91ddb9b624",
+    "benchmarks/comparison/decoder_docs.py": "6442274440b860d4b69f3ab956e5ce6415e80bce5d761e4382bde6067200b886",
     "brotli-ffi/build.rs": "c2c982f3c5fdf878664ac006b850d8be4885c801ebb37e7c9266a6cc62103064",
     "brotli-ffi/vendor/brotli/tests/testdata/alice29.txt": "7467306ee0feed4971260f3c87421154a05be571d944e9cb021a5713700c38f0",
-    "docs/benchmarks/decoder-comparison.csv": "e9b5c03c074b750666559a7d2fd78a9a58a0e69ad0fd79e5b2a98f83af82a2ba",
-    "benchmarks/comparison/target/run-archives/decoder-comparison-2026-09-10-060318/sizes.csv": "3d3d634d65b16a3960daf82777460a100fc96980b9b710af4802b4f29c550dff"
+    "benchmarks/comparison/target/run-archives/decoder-synthetic-final-2026-09-10-090040/sizes.csv": "3d3d634d65b16a3960daf82777460a100fc96980b9b710af4802b4f29c550dff",
+    "docs/benchmarks/decoder-comparison.csv": "0db8bb45e8fe384a9229ecb250fc7cf794f2ec0bc0fe2852c52bda05279b6785"
   },
-  "command": "taskset -c 2 cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench decoders --locked -- --save-baseline decoder-comparison-2026-09-10-060318 --sample-size 30 --warm-up-time 0.2 --measurement-time 0.5 --noplot",
-  "started_at_utc": "2026-09-10T06:03:18.013345+00:00",
   "limitations": [
     "One WSL2 host; frequency, thermals and host scheduling uncontrolled.",
     "Fixed decoder order; confidence intervals capture sampling variation, not all environmental bias.",
     "C receives known output capacity; Rust Vec APIs grow output during decode; Rust brotli includes 4 KiB I/O adaptation.",
-    "Only cold APIs and C-generated standard-window streams; no streaming, reuse, dictionaries or before/after comparison."
+    "Only cold APIs and C-generated standard-window streams; no streaming, reuse or dictionaries. Historical timings are not paired before/after measurements."
   ],
-  "finished_at_utc": "2026-09-10T06:09:17.888713+00:00",
-  "timed_sweep_exit_code": 0,
-  "binary": "benchmarks/comparison/target/release/deps/decoders-0dae350df36c7f45",
-  "binary_sha256": "af57dec4ee251b89532cf83e9805f54cb186cf17b220f10c4ee8ea0d2d09a93b",
-  "measured_cases": 384,
-  "local_archive": "benchmarks/comparison/target/run-archives/decoder-comparison-2026-09-10-060318",
+  "binary": "target/burli-decoder/bench-recovered/release/deps/decoders-0dae350df36c7f45",
+  "binary_sha256": "941ed3b58ff1ea20b831014deb88bb35aea3417e58e5f8466c58d9b0b98b7279",
+  "local_archive": "benchmarks/comparison/target/run-archives/decoder-synthetic-final-2026-09-10-090040",
   "validation": {
-    "root_fmt": true,
-    "root_clippy_all_targets_all_features": true,
-    "root_tests_and_doctests_passed": 921,
-    "standalone_fmt": true,
-    "standalone_clippy_all_targets_all_features": true,
-    "standalone_unit_tests_passed": 5,
     "decoder_preflight_cases": 384,
-    "encoder_test_mode_cases": 432,
-    "python_tests_passed": 13,
-    "decoder_module_function_coverage": {
-      "covered": 8,
-      "count": 8,
+    "previous_size_records_matched": 384,
+    "checks": {
+      "fmt": 0,
+      "clippy": 0,
+      "tests": 0,
+      "comparison-fmt": 0,
+      "comparison-clippy": 0,
+      "comparison-tests": 0,
+      "afl-fmt": 0,
+      "afl-clippy-stable": 0,
+      "afl-test-stable": 0,
+      "afl-clippy-experimental": 0,
+      "afl-test-experimental": 0,
+      "afl-build": 0,
+      "fuzz-decompress": 0,
+      "fuzz-decode_streaming": 0
+    },
+    "workspace_tests_and_doctests_passed": 930,
+    "instrumented_std_tests_passed": 931,
+    "instrumented_no_std_tests_passed": 648,
+    "workspace_functions": {
+      "covered": 2615,
+      "count": 2615,
       "percent": 100
     },
-    "decoder_module_line_coverage_percent": 94.5945945945946,
-    "comparison_public_drivers_function_coverage": {
-      "covered": 2,
-      "count": 2,
+    "comparison_decoder_functions": {
+      "covered": 7,
+      "count": 7,
       "percent": 100
     },
-    "decoder_benchmark_main_executed": true,
-    "source_and_binary_hashes_checked": true,
-    "generated_quality_pages": 12,
+    "python_tests_passed": 15,
     "svg_documents_checked": 13,
-    "local_links_checked": 197
+    "generated_quality_pages": 12,
+    "local_links_checked": 98,
+    "archived_estimate_rows_matched": 384,
+    "source_and_binary_hashes_checked": true,
+    "afl": {
+      "decompress": {
+        "execs_done": "32226",
+        "stability": "99.90%",
+        "saved_crashes": "0",
+        "saved_hangs": "0"
+      },
+      "decode_streaming": {
+        "execs_done": "14764",
+        "stability": "99.90%",
+        "saved_crashes": "0",
+        "saved_hangs": "0"
+      }
+    }
   },
-  "plotting": "Matplotlib 3.10.8"
+  "plotting": "Matplotlib 3.10.8",
+  "build_command": "CARGO_TARGET_DIR=target/burli-decoder/bench-recovered cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench decoders --locked --offline --no-run",
+  "command": "MBROTLI_DECODER_SYNTHETIC=1 taskset -c 2 target/burli-decoder/bench-recovered/release/deps/decoders-0dae350df36c7f45 --bench --save-baseline decoder-synthetic-final-2026-09-10-090040 --sample-size 30 --warm-up-time 0.2 --measurement-time 0.5 --noplot",
+  "preflight_command": "MBROTLI_DECODER_SYNTHETIC=1 target/burli-decoder/bench-recovered/release/deps/decoders-0dae350df36c7f45 --test",
+  "started_at_utc": "2026-09-10T09:00:41.569821+00:00",
+  "finished_at_utc": "2026-09-10T09:06:35.507018+00:00",
+  "timed_sweep_exit_code": 0,
+  "measured_cases": 384,
+  "cohort": "synthetic",
+  "summary": {
+    "corpus_quality_pairs": 96,
+    "mbrotli_over_burli_overall_median": 0.9673053811229504,
+    "previous_overall_median": 0.9797555588539497,
+    "mbrotli_over_burli_quality_medians": [
+      0.9529834035244505,
+      0.9337253640893489,
+      0.9759346906409667,
+      0.9806040878504658,
+      0.9629099288978933,
+      0.974147068581195,
+      0.9761799938300342,
+      0.976790920173918,
+      0.9800735149091995,
+      0.9622479757234716,
+      0.9545335848709773,
+      0.9628114324516515
+    ]
+  },
+  "coverage_notes": "Current 35 executed test objects and 36 current raw profiles selected to avoid obsolete source mappings in the reused target. LLVM reported 11 mismatched-data warnings across configurations; full reports retained locally.",
+  "paired": {
+    "cases": 78,
+    "samples_per_case": 40,
+    "order": "ABBA",
+    "requested_block_ns": 3000000,
+    "bootstrap_resamples": 5000,
+    "bootstrap_seed": 20260910,
+    "minimum_lower_speedup": 0.9526598389827168,
+    "before_source_tree_sha256": "bbec3e22a718007d03d4575f5527ce02e1c3e3262b4720db48aa55b62f544d2a",
+    "candidate_source_tree_sha256": "527dc855fa74380910e6d0a00197dbf3c81ae0f44e2212638391c50ca4ebd8b0",
+    "csv": "docs/benchmarks/decoder-literal-paired.csv",
+    "csv_sha256": "efac3c071397a602405803e57db4c2714a4cf3d714b3d3fee01450acabd8a46b"
+  },
+  "serialization": "LF CSV; trailing whitespace removed from generated SVG path serialization without changing values.",
+  "publication_note": "Recorded run provenance is preserved. The benchmark now uses the same eight inputs unconditionally; timings and decoder implementation are unchanged.",
+  "publication_validation": {
+    "checks": {
+      "fmt": 0,
+      "clippy": 0,
+      "tests": 0,
+      "comparison-fmt": 0,
+      "comparison-clippy": 0,
+      "comparison-tests": 0,
+      "comparison-preflight": 0,
+      "python": 0,
+      "comparison-coverage": 0,
+      "comparison-coverage-report": 0
+    },
+    "workspace_tests_and_doctests_passed": 930,
+    "python_tests_passed": 14,
+    "default_preflight_records_matched": 384,
+    "svg_documents_checked": 13,
+    "local_links_checked": 179,
+    "comparison_decoder_functions": {
+      "count": 5,
+      "covered": 5,
+      "percent": 100
+    },
+    "library_source_hash_matches_recorded_run": true,
+    "coverage_report": "target/decoder-method-restoration/coverage-comparison.json",
+    "current_benchmark_source_sha256": "588da59f1ccf48afc460085bde988b0b3eeabab73266ab9d286b0366521543d7",
+    "note": "Checks after restoring the original benchmark default. Historical validation and timings above describe the recorded run."
+  }
 }

@@ -206,6 +206,18 @@ impl DecoderSession<'_, '_> {
         output: &mut [u8],
         operation: DecodeOperation,
     ) -> Result<DecodeProgress, DecodeFailure> {
+        self.process_inner(input, output, operation, None)
+    }
+
+    // The owned one-shot API may use history as its destination until the first
+    // wrap. The public streaming API always supplies a separate output slice.
+    fn process_inner(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        operation: DecodeOperation,
+        collect: Option<usize>,
+    ) -> Result<DecodeProgress, DecodeFailure> {
         let invalid = |error| DecodeFailure {
             error,
             consumed: 0,
@@ -238,6 +250,7 @@ impl DecoderSession<'_, '_> {
         let limits = config.limits();
         let mut input = Input::new(input, self.total_in, limits.max_input_bytes());
         let mut output = Output {
+            collect,
             bytes: output,
             produced: 0,
             total_before: self.total_out,
@@ -307,6 +320,22 @@ impl DecoderSession<'_, '_> {
             }
         }
     }
+    /// Collects at most one history window without a second output allocation.
+    pub(super) fn collect(&mut self, input: &[u8]) -> Result<DecodeProgress, DecodeFailure> {
+        let capacity = self.window.map_or(0, |window| {
+            usize::try_from(1u64 << window.bits()).unwrap_or(usize::MAX)
+        });
+        self.process_inner(input, &mut [], DecodeOperation::Finish, Some(capacity))
+    }
+
+    pub(super) fn take_collected(&mut self) -> alloc::vec::Vec<u8> {
+        self.decoder.workspace.take_collected()
+    }
+
+    pub(super) fn collected(&self) -> &[u8] {
+        self.decoder.workspace.collected()
+    }
+
     /// Whether all members and the exact-size contract were validated.
     pub const fn is_finished(&self) -> bool {
         self.finished

@@ -8,19 +8,25 @@ Decompression uses the same libraries except SIMD Brotli.
 ## Decompression comparison
 
 The [four-decoder comparison](decoders/README.md) measures Google C Brotli,
-mbrotli, Rust brotli and Burli on identical C-generated streams from the same
-8 corpora at source qualities q0–q11. SIMD Brotli shares Rust brotli's decoder
-and is omitted. Burli's decoder participates at every source quality.
+mbrotli, Rust brotli and Burli on identical C-generated streams from the eight
+datasets listed below at q0–q11. SIMD Brotli shares Rust brotli's decoder project and
+is omitted. Burli participates at every source quality.
 
 ![Median decompression speed relative to C](decoders/charts/overview.svg)
 
-Each bar is the median of eight equally weighted C-time/decoder-time ratios,
-including empty and tiny input. Higher is faster; 1× matches C. Open the
-[quality pages and exact tables](decoders/README.md) for all 384 cases, restored
-throughput, mean confidence bounds and shared compressed sizes. These are cold
-native APIs; C knows the output capacity, while Rust brotli includes its 4 KiB
-I/O adapter. See the [run report](decoder-comparison.md),
-[raw CSV](decoder-comparison.csv) and [environment](decoder-comparison-environment.json).
+Each bar is the median of eight equally weighted C-time/decoder-time ratios.
+The tables also show direct median Burli-time/mbrotli-time ratios (overall **0.967×**). Higher is
+faster. Open the [quality pages](decoders/README.md) for all 384 cases, mean
+confidence bounds, restored throughput and shared compressed sizes.
+The current decoder includes three-symbol literal batches and short stored
+header recognition; their benefit on identical inputs is recorded separately
+in the [paired optimization report](../../architecture/decoder-literal-performance.md).
+
+These are cold native APIs: C knows output capacity, while Rust brotli includes
+its 4 KiB I/O adapter. See the [run report](decoder-comparison.md),
+[CSV](decoder-comparison.csv) and [environment](decoder-comparison-environment.json).
+The preceding run measured **0.980×** on the same inputs; separate-run
+variation is not paired evidence of a code regression or improvement.
 
 ## Compression: median across all datasets
 
@@ -87,11 +93,20 @@ experiment.
 
 | Record | Contents |
 | --- | --- |
+| [Decoder literal optimization](../../architecture/decoder-literal-performance.md) | Literal batching, short stored headers, direct Burli medians and 78 paired cases |
+| [Decoder benchmark refresh](decoder-comparison.md) | Current optimized decoder, complete four-library sweep, measurement settings and limitations |
+| [Latest four-decoder CSV](decoder-comparison.csv) | All 384 measurements used by the decoder quality pages |
+| [Latest decoder environment](decoder-comparison-environment.json) | Source and binary hashes, versions, commands and run provenance |
+| [Before literal batching](decoder-comparison-before-literal-batching.csv) | Preceding 384-case run on the same eight inputs, with median speed / Burli of 0.980× |
+| [Before literal batching environment](decoder-comparison-before-literal-batching-environment.json) | Provenance of the preceding run |
+| [Previous decoder CSV](decoder-comparison-before-owned-output.csv) | Preserved 384-case run before the owned-output optimization |
+| [Previous decoder environment](decoder-comparison-before-owned-output-environment.json) | Original provenance for the historical decoder run |
 | [Library benchmark refresh](library-comparison.md) | Current checkout, complete five-library sweep, measurement settings, and limitations |
 | [Latest five-encoder CSV](library-comparison.csv) | All 432 measurements used by the quality pages |
 | [Latest run environment](library-comparison-environment.json) | Revision, versions, compiler, machine, commands, source hashes, and binary identity |
 | [Optimization follow-up](competitor-paths.md) | Source review, targeted changes, matched before/after results, limitations, and charts across qualities |
 | [Quality 11 review against SIMD Brotli](hq-q11-review.md) | Why the fork led at q11, the short-scan and distance-cache changes, matched q10/q11 Criterion pairs, and the remaining leads with their causes |
+| [Decoder ownership review](../../architecture/decoder-owned-output.md) | Why Burli led on raw/repeated output, ownership and growth changes, paired performance, allocation measurements and validation |
 | [Burli review](burli-review.md) | Which Burli q0–q5 leads are policy and which were mbrotli overhead; the lazy q0 arena, per-build Huffman pool, first-word match length and array-reference tables; the fuzz oracle fix; the after sweep |
 | [Optimization follow-up CSV](competitor-paths-comparison.csv) | Preserved earlier five-encoder measurements |
 | [Optimization follow-up environment](competitor-paths-environment.json) | Provenance for the earlier optimization run |
@@ -116,6 +131,11 @@ python3 benchmarks/comparison/plot.py \
   --csv docs/benchmarks/library-comparison.csv \
   --output docs/benchmarks/library-comparison-charts \
   --subtitle 'i7-13700KF; ce83e10; 30 samples; 2026-09-07'
+python3 benchmarks/comparison/decoder_docs.py \
+  --csv docs/benchmarks/decoder-comparison.csv \
+  --environment docs/benchmarks/decoder-comparison-environment.json \
+  --report docs/benchmarks/decoder-comparison.md \
+  --output docs/benchmarks/decoders
 ```
 
 The generator validates the complete supported matrix, then groups it by

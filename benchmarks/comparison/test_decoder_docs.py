@@ -6,7 +6,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 
-from decoder_docs import DECODERS, generate, quality_page
+from decoder_docs import DECODERS, burli_speed, generate, quality_page
 from quality_docs import CORPORA, load_rows, medians, validate_rows
 from report import collect
 
@@ -20,6 +20,17 @@ def matrix():
 
 
 class DecoderTests(unittest.TestCase):
+    def test_direct_burli_median_is_not_ratio_of_c_medians(self):
+        rows = matrix()
+        for row in rows:
+            i = list(CORPORA).index(row["corpus"])
+            row["mean_ns"] = {"c-brotli": 1, "mbrotli": [1, 2, 3, 4, 5, 6, 7, 8][i],
+                              "burli": [8, 7, 6, 5, 4, 3, 2, 1][i], "rust-brotli": 1}[row["implementation"]]
+        expected = (4 / 5 + 5 / 4) / 2
+        self.assertAlmostEqual(burli_speed(rows, 5), expected)
+        relative = medians(rows, 5)
+        self.assertNotAlmostEqual(burli_speed(rows, 5), relative["mbrotli"]["speed"] / relative["burli"]["speed"])
+
     def test_complete_matrix_includes_burli_high_qualities_and_equal_dataset_medians(self):
         rows = validate_rows(matrix(), decoding=True)
         self.assertEqual(len(rows), 384)
@@ -33,7 +44,7 @@ class DecoderTests(unittest.TestCase):
     def test_rejects_missing_duplicate_wrong_decoder_mismatched_stream_and_invalid_timing(self):
         good = matrix()
         bad_rows = [good[:-1], good + good[:1]]
-        for field, value in [("implementation", "simd-brotli"), ("compressed_bytes", 17),
+        for field, value in [("corpus", "unsupported-corpus"), ("implementation", "simd-brotli"), ("compressed_bytes", 17),
                              ("input_bytes", 1), ("lgwin", 21), ("quality", 12),
                              ("mean_ns", float("nan")), ("mean_lower_ns", 300)]:
             rows = copy.deepcopy(good)

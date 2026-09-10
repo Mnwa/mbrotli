@@ -11,6 +11,10 @@ use alloc::vec::Vec;
 /// Keep this object alive to reuse workspace between payloads. One-shot methods
 /// require complete input; use [`Self::start`] for incremental decoding. The
 /// default retention policy keeps allocations after each operation.
+/// A fresh owned decode can transfer output storage into its returned vector;
+/// that storage then belongs to the caller. Use [`Self::decompress_to_slice`]
+/// or a preallocated [`Self::decompress_into`] destination to retain decoder
+/// storage from the first operation.
 ///
 /// # Examples
 ///
@@ -233,6 +237,20 @@ impl Decompressor {
     /// # Errors
     /// Returns codec, resource, lifecycle, or trailing-data errors.
     pub fn decompress(&mut self, src: &[u8]) -> Result<Vec<u8>, DecodeError> {
+        // A complete stored member needs neither a session nor history. Keep
+        // resource-policy and abandoned-session error ordering in the driver.
+        if !self.active
+            && self.config.member_mode() == super::MemberMode::Single
+            && self.config.limits() == super::DecodeLimits::default()
+            && let Some(payload) = super::core::stored_payload(src, self.config.window_limit())
+        {
+            let mut dst = Vec::new();
+            dst.try_reserve_exact(payload.len())
+                .map_err(|_| DecodeError::AllocationFailed)?;
+            dst.extend_from_slice(payload);
+            self.trim(self.retention);
+            return Ok(dst);
+        }
         let mut dst = Vec::new();
         self.decompress_into(src, &mut dst)?;
         Ok(dst)
@@ -274,6 +292,13 @@ impl Decompressor {
         dst: &mut Vec<u8>,
     ) -> Result<Range<usize>, DecodeError> {
         let start = dst.len();
+        // A fresh owned destination can take the history allocation. Retained
+        // workspaces, appends, dictionaries and concatenation use normal delivery.
+        let collect = start == 0
+            && dst.capacity() == 0
+            && self.retained_bytes() == 0
+            && dictionary.is_none()
+            && self.config.member_mode() == super::MemberMode::Single;
         let result = (|| {
             let mut session =
                 DecoderSession::start(self, DecodeStreamConfig::default(), dictionary)?;
@@ -286,15 +311,41 @@ impl Decompressor {
                 .process(src, &mut [], DecodeOperation::Finish)
                 .map_err(super::DecodeFailure::into_error)?;
             consumed += probe.consumed;
+            if probe.status == DecoderStatus::Finished {
+                if consumed != src.len() {
+                    return Err(DecodeError::TrailingData {
+                        offset: consumed as u64,
+                    });
+                }
+                return Ok(start..start);
+            }
+            if collect {
+                let progress = session
+                    .collect(&src[consumed..])
+                    .map_err(super::DecodeFailure::into_error)?;
+                consumed += progress.consumed;
+                if progress.status == DecoderStatus::Finished {
+                    if consumed != src.len() {
+                        return Err(DecodeError::TrailingData {
+                            offset: consumed as u64,
+                        });
+                    }
+                    *dst = session.take_collected();
+                    return Ok(0..dst.len());
+                }
+                // A member larger than its window needs ordinary streaming
+                // delivery from here; retain history for future references.
+                dst.try_reserve(session.collected().len())
+                    .map_err(|_| DecodeError::AllocationFailed)?;
+                dst.extend_from_slice(session.collected());
+                written = dst.len();
+            }
             let mut chunk = src
                 .len()
                 .saturating_mul(4)
                 .clamp(256, 1 << 16)
                 .max(session.declared_remaining())
                 .min(1 << 24);
-            if probe.status == DecoderStatus::Finished {
-                chunk = 0;
-            }
             loop {
                 dst.try_reserve(written + chunk)
                     .map_err(|_| DecodeError::AllocationFailed)?;

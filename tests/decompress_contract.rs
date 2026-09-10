@@ -79,7 +79,8 @@ fn aggregate_input_and_workspace_limits_check_exact_boundaries() {
     }
     let mut decoder = Decompressor::new(DecoderConfig::default()).unwrap();
     assert_eq!(decoder.decompress(&source).unwrap(), b"abc");
-    assert!(decoder.retained_bytes() > 0);
+    // The fresh owned decode transfers its raw history allocation to the result.
+    assert_eq!(decoder.retained_bytes(), 0);
     decoder
         .reconfigure(
             DecoderConfig::default()

@@ -71,7 +71,7 @@ def main():
     except (OSError, ValueError, KeyError) as error:
         parser.error(str(error))
     with args.csv.open("w", newline="") as output:
-        writer = csv.DictWriter(output, fieldnames=rows[0])
+        writer = csv.DictWriter(output, fieldnames=rows[0], lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
     print(f"Exported {len(rows)} validated size/timing rows to {args.csv}")

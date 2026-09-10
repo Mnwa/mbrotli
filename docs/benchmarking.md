@@ -85,7 +85,9 @@ in the CSV, where their per-call latency is easier to assess.
 
 The [decoder results](benchmarks/decoders/README.md) compare Google C, mbrotli,
 Rust brotli and Burli on **identical compressed streams**, prepared by Google C
-at q0–q11, generic mode and window 22, from the same eight corpora above.
+at q0–q11, generic mode and window 22, from the same eight inputs as the encoder
+comparison: empty, 44-byte tiny text, Alice, cyclic Alice at 1 MiB, structured
+binary at 64 KiB, random bytes at 64 KiB and 1 MiB, and repeated `a` at 1 MiB.
 All **384 cases** must restore the original bytes before timing starts.
 Burli decodes all source qualities. SIMD Brotli is omitted because its decoder
 re-exports the Rust `brotli-decompressor` project. The lockfile resolves 6.0.0
@@ -130,7 +132,9 @@ python3 benchmarks/comparison/decoder_docs.py \
 ```
 
 The overview takes the median of eight per-dataset C-time/decoder-time ratios,
-with equal weight, including empty and tiny input. Per-quality panels retain
+with equal weight. A separate column computes direct Burli-time/mbrotli-time
+ratios before taking their median. Empty and tiny inputs have equal weight
+in the median and use latency panels. Per-quality panels retain
 all individual mean confidence bounds. Shared compressed sizes are listed
 alongside restored lengths instead of ranking decoders by size. See the
 [run report](benchmarks/decoder-comparison.md) for environment and limitations.

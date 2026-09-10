@@ -1,0 +1,40 @@
+{
+  "date": "2026-09-10",
+  "baseline_commit": "1260f292b8031b4974c3ade3b36ab398611c963f",
+  "candidate": "working tree; source hashes below",
+  "source_hashes": {
+    "fuzz/afl/src/decode_targets.rs": "59c23ca55a2f630553de1534f0b992468a166871b255918fe6424abae62ea303",
+    "src/decompressor/core/bits.rs": "fe08fffee4e1fe93ec674f3e566830bb3ad4cea75a9636c517a570936fd75089",
+    "src/decompressor/core/mod.rs": "15cb5af7d62bdb22e56b6d8d1835c93747c6f2c37124053757e145e11e0e3af5",
+    "src/decompressor/core/stream.rs": "a7ce248b4319a42020dd566fa826f9585be1399a0df2b3ca25eccdcfb5f5570d",
+    "src/decompressor/decoder.rs": "b417fe64dc4ce891407615ef116760d9550ff3efded483c8ebb4db6b8a583d80",
+    "src/decompressor/session.rs": "110c4092c2533f91c072a3d104909bce02fed01b6f42c2de110c96d909deea56",
+    "tests/decompress_contract.rs": "d8d49f2b1431b958379152282c9993a3eb179b7368901ab3b1f8aeed929c56bb",
+    "src/decompressor/core/stored.rs": "d9a0198d51816968f2bdd0176089a2ecca76dd8f83f11d66600d413cb29fc63a",
+    "tests/decompress_owned.rs": "2b966fb7d7a6a431e14b5ab4aca5cf494fa4111bbe403604351c43c16ccb893b"
+  },
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "os": "Linux 6.18.33.2-microsoft-standard-WSL2",
+  "cpu": "Intel Core i7-13700KF",
+  "affinity_cpu": 2,
+  "criterion_baseline": "owned-final",
+  "warmup_seconds": 0.3,
+  "measurement_seconds": 0.7,
+  "samples": 15,
+  "source_qualities": [
+    0,
+    5,
+    11
+  ],
+  "timed_cases": 72,
+  "validated_cases": 384,
+  "comparison_binary_sha256": "1b8a8774cb02096007d5adf078499f2b0097f848cf0e690648629fd293a3a788",
+  "corpus_hashes": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  empty  0\nef537f25c895bfa782526529a9b63d97aa631564d5d789c2b765448c8635fb6c  tiny-text  44\n7467306ee0feed4971260f3c87421154a05be571d944e9cb021a5713700c38f0  alice29  152089\n04b18ac774775dc12dd62bc7dc4bccad7f6d3e8a6f0dc860efc91ebc022b24e6  text-1m  1048576\n3305571720e4a95060908f2b721eb26464d06e4f998b4c539db272fbab436605  binary-64k  65536\n2332b236cbd0c1347ea9395c62a63b2eddc4d5b4f8289f20e3aed847bf4e8b4b  random-64k  65536\n5eb4f0272d955738f538099174af25cd6ed6a371633956d3b419a7798781c252  random-1m  1048576\n9bc1b2a288b26af7257a36277ae3816a7d4f16e89c1e7e77d0a5c48bad62b360  repeated-1m  1048576\n",
+  "command": "taskset -c 2 target/burli-decoder/bench-recovered/release/deps/decoders-0dae350df36c7f45 --bench 'decoders/cold/.*/q(0|5|11)/(mbrotli|burli|c-brotli)$' --warm-up-time 0.3 --measurement-time 0.7 --sample-size 15 --save-baseline owned-final",
+  "limitations": [
+    "Shared WSL host; background instrumented correctness checks were active.",
+    "Before means are from the initial unpinned q5/q11 sweep; use the paired CSV for controlled before/after estimates.",
+    "A preliminary all-quality sweep was stopped; its partial timings are excluded.",
+    "Code generation defaults and system allocator; no target-cpu=native."
+  ]
+}

@@ -54,6 +54,16 @@ pub fn decompress(ctx: &Context, data: &[u8]) {
         .build()
         .unwrap();
     let actual = decoder.decompress(data);
+    if let Ok(expected) = &actual {
+        // The bounded decode has proven the output size. Replay successful
+        // streams without limits to exercise the complete-stored-member path
+        // too, without exposing arbitrary input to unbounded expansion.
+        let mut owned = Decompressor::builder(DecoderConfig::default())
+            .with_backend(ctx.level)
+            .build()
+            .unwrap();
+        assert_eq!(owned.decompress(data).unwrap(), *expected);
+    }
     compare(
         actual,
         crate::decode_oracle::decode(data, MAX_OUTPUT, None),

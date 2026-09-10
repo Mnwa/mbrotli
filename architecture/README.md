@@ -8,10 +8,12 @@ and known gaps. For usage examples, start with the [user guide](../docs/README.m
 
 | Specification | Scope |
 | --- | --- |
-| [Implementation comparison](benchmark-comparison.md) | Isolated five-encoder and four-decoder Criterion suites, identical decoder inputs, validated exports, dataset medians, ranked bar reports, and run provenance. |
+| [Implementation comparison](benchmark-comparison.md) | Isolated five-encoder and four-decoder Criterion suites, identical decoder inputs, validated exports, dataset medians, ranked bar reports, and current/historical run provenance. |
 | [Codec features](codec-features.md) | Independent default-enabled codecs, shared public types, private primitive gates, crate documentation and isolated consumer checks. |
 | [No standard library](no-std.md) | Opt-in alloc-backed compression, feature precedence, excluded std APIs, compile-time SIMD, and no_std-only libm dependencies. |
 | [Native decompressor](decompressor.md) | Incremental raw decoding, whole-word reservoir, table Huffman, ring history, SIMD copies and command fast path, dictionaries, resource budgets, retained lifecycle, I/O, and executable API contracts. |
+| [Owned decoder output](decoder-owned-output.md) | Burli comparison, stored-member recognition, history-to-result transfer, initialized growth, and output-pause read-ahead accounting. |
+| [Decoder literal performance](decoder-literal-performance.md) | Three-symbol literal batches, short stored headers, and paired validation without changing benchmark inputs. |
 | [Decoder SIMD measurements](decoder-simd.md) | Profile, copy-kernel dispatch, before/after Criterion evidence and validation limits. |
 | [Decoder compatibility](decompressor-compatibility.md) | Pinned C/RFC evidence, four build profiles, fuzzing, heavy checks and measured baseline. |
 | [Shared primitives](shared-primitives.md) | Private crate-root common data and transform ownership used by both codecs. |
@@ -40,6 +42,7 @@ graph TD
     Root --> DictFacade[dictionary facade: enabled codec types]
     Root --> Finish[io::FinishError: either codec, std only]
     Decode --> DecodeCore[private decompressor::core]
+    DecodeCore --> Stored[complete stored-member recognition]
     DecodeCore --> DecodeSIMD[fearless_simd: specialized command loop and history copies]
     DecodeCore --> Shared
     Root --> Facade[io facade: compressor and decompressor adapters]

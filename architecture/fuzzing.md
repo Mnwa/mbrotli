@@ -348,7 +348,10 @@ absolute offsets and length checks under the same decode/determinism oracle.
 `decode_lifecycle`, and `decode_io_limits` in the base profile, with
 `decode_serialized` gated at binary, body and registry levels by `experimental`.
 The first target compares independent C results and exact member consumption;
-streaming checks one-shot equivalence and cumulative progress. Raw/serialized
+streaming checks one-shot equivalence and cumulative progress. A successful
+bounded arbitrary-input decode is replayed with default limits to exercise
+complete stored-member recognition; the first decode proves that this replay
+can produce at most 64 KiB. Malformed inputs retain the bounded path. Raw/serialized
 attachments feed attached decoding; lifecycle covers forgotten sessions and
 recovery; writer faults combine output budgets with cursor-preserving retries.
 
@@ -357,7 +360,10 @@ graph LR
     Seed[committed regression / AFL mutation] --> Budget[bounded input / output / workspace]
     Budget --> Rust[native decoder or adapter]
     Budget --> Oracle[C decoder: typed outcome]
-    Rust --> Check[bytes / member boundary / progress / lifecycle]
+    Rust --> Accepted{bounded decode succeeded?}
+    Accepted -->|yes| Owned[default-limit owned decode; compare bytes]
+    Owned --> Check[bytes / member boundary / progress / lifecycle]
+    Rust --> Check
     Oracle --> Check
     Check --> Regression[deterministic regression replay]
 ```

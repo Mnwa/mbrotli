@@ -17,7 +17,9 @@ graph TD
     Facade[mbrotli::io] --> IO
     Facade --> Finish[private finish_error: shared FinishError]
     Facade -->|compression enabled| EncoderIO[compressor::io]
-    Core --> Bits[bits / header]
+    Core --> Stored[stored: borrow a validated complete raw member]
+    Stored --> Bits[bits / header]
+    Core --> Bits
     Core --> Entropy[huffman / block / context_map]
     Core --> Regen[stream / distance / dictionary]
     Core --> Memory[memory: fallible live workspace accounting]
@@ -64,7 +66,8 @@ let mut decoder = Decompressor::new(config)?;
 ```
 
 `decompress` returns a Vec, `decompress_into` appends and returns its range, and
-`decompress_to_slice` fills the caller's initialized slice. The Vec shapes first
+`decompress_to_slice` fills the caller's initialized slice. Eligible complete
+stored members use the borrowed-payload shortcut described below. Other Vec shapes first
 run the session with no destination at all, which parses up to the first byte
 of output, then reserve what the meta-block declares (`declared_remaining`, at
 least a small geometric step, at most 16 MiB) so a stream usually gets one
@@ -151,10 +154,11 @@ while at least eight acceptable bytes remain before the input limit, and a
 matching `unread`, which returns every whole speculatively buffered byte. The
 `Input` computes its acceptable prefix (`fast_end`) once at construction, and the
 command loop refills through `refill_from` over that prefix with the cursor in a
-local, so the hot loop keeps it in a register. The reservoir persists in the
-stream across calls, so an input or output pause keeps its buffered bytes; only a
-member boundary, where the session resets the workspace, unreads them so a
-following member reads them again. Every description reader (`Builder`,
+local, so the hot loop keeps it in a register. Input pauses retain the reservoir for incomplete fields. Output pauses and
+member boundaries return whole buffered bytes accepted during that call.
+Older bytes belonging to a partial field remain buffered. Returning read-ahead
+at output pauses prevents a long pending copy from stranding the next member
+in a previous call when it later completes without consuming more input. Every description reader (`Builder`,
 `ContextMap`, `Block`) decodes symbols through `decode_refilling`, which takes a
 whole word when the input allows and otherwise falls back to byte-exact loading.
 
@@ -239,6 +243,10 @@ delivery is needed. State that depends only on a block type (the literal
 context lookup, the block's 64-entry context map slice, whether that slice is
 trivial, its single tree when it is, and the command, distance and distance
 context map tables) is refreshed at block switches rather than per command.
+For a trivial literal context map, the loop decodes three symbols per reservoir
+check when at least 45 bits are available. Each symbol consumes at most 15 bits.
+The scalar loop handles short input and the final one or two symbols; batching
+does not cross the existing block, output-space or ring boundary.
 
 ```mermaid
 flowchart TD
@@ -346,6 +354,49 @@ remaining output. Zero-output references with distance <= 120 are invalid, avoid
 zero-bit command loops. Dictionary references do not enter the history distance
 cache; normal/prefix references follow short-code cache update rules.
 
+## Owned one-shot output
+
+`core::stored` recognizes a complete empty member or one raw meta-block followed
+by an empty final block, using the same window/meta-block parsers and padding
+validation as streaming. `decompress` borrows that payload and copies it into
+one fallibly reserved Vec when resource limits are unset, member mode is single,
+and the decoder is not abandoned. Other shapes use the regular session, which
+also preserves configured resource-error ordering.
+
+A fresh workspace decoding into a zero-capacity Vec without a dictionary, in
+single-member mode, can collect output in history. After the ordinary empty-output
+probe accepts the window, a private session call uses the window size as output
+capacity. The same state machine emits every byte into the ring and counts
+progress without copying it to a second slice. On successful completion and
+exact input consumption, ownership of the ring moves to the result, its length
+is truncated to actual output, and its capacity leaves workspace accounting.
+If the window fills before completion, copy that prefix into the caller Vec and
+resume ordinary delivery while retaining history. Appends, preallocated output,
+retained workspaces, dictionaries and concatenation use ordinary delivery.
+
+```mermaid
+flowchart TD
+    Owned[decompress] --> Stored{complete stored member and eligible policy?}
+    Stored -->|yes| Borrow[borrow payload; fallible reserve and one copy]
+    Stored -->|no| Probe[session with empty output: accept headers]
+    Probe --> Fresh{fresh workspace and zero-capacity Vec; single; no dictionary?}
+    Fresh -->|yes| Collect[same state machine; ring is destination]
+    Collect --> End{member completed before wrap?}
+    End -->|yes| Transfer[validate tail; transfer ring allocation to result]
+    End -->|no| Prefix[copy prefix; retain ring history]
+    Prefix --> Stream[ordinary session output]
+    Fresh -->|no| Stream
+```
+
+Before a ring wraps, raw growth reserves the new power-of-two allocation, writes
+raw bytes into existing initialized slots and appends the remainder, then
+initializes only padding. A unit-distance copy in the resumable copy stage can
+fill new ring storage directly with its final byte; the existing unwritten
+suffix gets the same byte. Both check the workspace reservation before changing
+history or position. Other copies and wrapped history keep the established
+SIMD/baseline kernels. No uninitialized slices or new unsafe code are used.
+See [owned decoder output](decoder-owned-output.md) for evidence and limitations.
+
 ## Allocation and dictionary boundaries
 
 `Memory::resize` checks arithmetic and workspace policy before `try_reserve_exact`,
@@ -450,8 +501,10 @@ about a dozen separate allocations (ring, three Huffman groups, block and
 context-map codes, context maps, the distance table) and the one-time zero fill
 of their storage, which dominates decoding of payloads of a kilobyte and below
 in the cold shape; the per-meta-block tables are not yet folded into one arena.
-The `Vec` destinations must zero-fill what they reserve, where an exact-size
-caller buffer need not be touched twice. Compatibility evidence and remaining acceptance gaps
+Appended and reused `Vec` destinations still zero-fill newly exposed output
+slices; fresh owned results can instead take the history allocation. Completely
+stored members need no history. Small compressed streams still pay entropy-table
+initialization and session setup. Compatibility evidence and remaining acceptance gaps
 are tracked separately in
 [decompressor compatibility](decompressor-compatibility.md). There is no container
 parser, authentication, seek, or async runtime in this raw decoder.

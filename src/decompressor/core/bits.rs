@@ -2,9 +2,9 @@
 //!
 //! The slow path accepts one byte at a time and never accepts a byte beyond
 //! the field that needs it, so limits and progress stay byte-exact. The fast
-//! path loads whole words while at least eight acceptable bytes remain; whole
-//! bytes still buffered when a call returns are handed back with [`Bits::unread`],
-//! which restores the byte-exact accounting the slow path guarantees.
+//! path loads whole words while at least eight acceptable bytes remain. Output
+//! pauses and member boundaries return current-call whole bytes with
+//! [`Bits::unread`]; input pauses retain incomplete fields for the next call.
 
 use super::super::{DecodeError, InvalidDataKind};
 
@@ -143,13 +143,16 @@ impl Bits {
         true
     }
 
-    /// Returns every whole buffered byte to the input, keeping fewer than
-    /// eight bits. Only bytes accepted during the current call can be whole.
+    /// Returns whole buffered bytes accepted during this call to the input.
+    /// A partial field carried over from an input pause can contain older
+    /// whole bytes; those remain buffered because the caller already advanced.
     pub(super) fn unread(&mut self, input: &mut Input<'_>) {
-        let whole = self.count / 8;
+        let whole = (self.count / 8).min(input.consumed.min(8) as u32);
         input.consumed -= whole as usize;
         self.count -= whole * 8;
-        self.value &= mask(self.count);
+        if self.count < 64 {
+            self.value &= mask(self.count);
+        }
     }
 
     #[inline(always)]
@@ -239,6 +242,23 @@ mod tests {
         assert_eq!(second.consumed, 1);
         bits.align().unwrap();
         assert_eq!(bits.read(8, &mut second).unwrap(), Some(0xaa));
+    }
+
+    #[test]
+    fn unread_keeps_bytes_accepted_by_an_earlier_call() {
+        let mut bits = Bits {
+            value: u64::MAX,
+            count: 64,
+        };
+        let mut input = probe(&[]);
+        bits.unread(&mut input);
+        assert_eq!(bits.count(), 64);
+        assert_eq!(bits.value(), u64::MAX);
+        input.consumed = 2;
+        bits.unread(&mut input);
+        assert_eq!(input.consumed, 0);
+        assert_eq!(bits.count(), 48);
+        assert_eq!(bits.value(), mask(48));
     }
     #[test]
     fn refill_loads_whole_words_and_unread_returns_unused_bytes() {

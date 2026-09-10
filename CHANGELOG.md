@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+- Batch context-free decoder literals three at a time and recognize the common
+  three-byte stored header directly, retaining bounded scalar tails and full
+  parser fallback. Publish direct median ratios to Burli on the original eight
+  equally weighted inputs at q0–q11, including empty and tiny data.
+
+- Refresh all 384 decoder comparison measurements after the owned-output
+  optimization, including q0–q11 quality pages, SVG charts, raw CSV and source
+  provenance. Preserve the previous CSV and environment as historical evidence.
+
+- Reduce cold decoder allocation and memory traffic: recognize complete stored
+  members, transfer fresh non-wrapping history into owned results, and initialize
+  raw/repeated growth with final bytes. Window-sized collection falls back to
+  ordinary streaming before wrap; retained workspaces and appends keep reuse.
+  Preserve limits, dictionary and concatenation behavior. Return speculative
+  bytes at output pauses so a pending copy cannot strand a following member.
+  Add differential boundary tests and bounded AFL replay of the default owned
+  path. See `architecture/decoder-owned-output.md` for Burli comparison evidence.
+
 - Add an isolated four-decoder Criterion comparison for mbrotli, Google C,
   Rust brotli and Burli on identical C streams at q0–q11. Validate all 384
   cases before timing, export timings and shared stream sizes separately,

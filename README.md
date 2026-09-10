@@ -59,10 +59,10 @@ Google C, mbrotli, Rust brotli and Burli decode identical C-generated streams at
 source qualities **0–11**. SIMD Brotli shares Rust brotli's decoder and is omitted;
 Burli decodes every source quality. All **384 cases** restore the original bytes.
 
-The mbrotli median speed / C ranges from **1.19× to 1.78×** across source qualities
-on this run; individual workloads include slower cases.
-Each bar is the median of eight equally weighted per-dataset timing ratios,
-including empty and tiny input; above **1×** is faster than C. Throughput in the
+Across the eight equally weighted inputs, the median speed / Burli is
+**0.967×** (previously 0.980× in a separate run). Empty and tiny inputs retain
+the same weight as larger datasets. The chart shows per-quality medians of
+C-time/decoder-time ratios; above **1×** is faster than C. Throughput in the
 quality pages counts restored bytes. Construction, allocation, decode and disposal
 are timed. C receives the known output capacity; Rust brotli includes its native
 4 KiB I/O adapter. These are cold API measurements on the recorded machine,

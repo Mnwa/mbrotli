@@ -117,6 +117,8 @@ enum Pause {
 
 pub(crate) struct Output<'a> {
     pub(crate) bytes: &'a mut [u8],
+    /// Collect a member in history, stopping before any ring byte is overwritten.
+    pub(crate) collect: Option<usize>,
     pub(crate) produced: usize,
     pub(crate) total_before: u64,
     pub(crate) limit: Option<u64>,
@@ -143,7 +145,7 @@ impl Output<'_> {
                 actual: next,
             });
         }
-        Ok(self.produced < self.bytes.len())
+        Ok(self.produced < self.collect.unwrap_or(self.bytes.len()))
     }
 
     /// Largest `produced` this call may reach without per-byte policy checks.
@@ -155,7 +157,8 @@ impl Output<'_> {
         if let OutputSize::Exact(expected) = self.exact {
             budget = budget.min(expected.saturating_sub(self.total_before));
         }
-        usize::try_from(budget).map_or(self.bytes.len(), |budget| budget.min(self.bytes.len()))
+        let capacity = self.collect.unwrap_or(self.bytes.len());
+        usize::try_from(budget).map_or(capacity, |budget| budget.min(capacity))
     }
 }
 
@@ -223,8 +226,10 @@ fn flush_ring(ring: &[u8], position: u64, flushed: &mut u64, output: &mut Output
     let pending = (position - *flushed) as usize;
     if pending != 0 {
         let start = (*flushed & (ring.len() as u64 - 1)) as usize;
-        output.bytes[output.produced..output.produced + pending]
-            .copy_from_slice(&ring[start..start + pending]);
+        if output.collect.is_none() {
+            output.bytes[output.produced..output.produced + pending]
+                .copy_from_slice(&ring[start..start + pending]);
+        }
         output.produced += pending;
         *flushed = position;
     }
@@ -353,14 +358,19 @@ fn grow_ring(
     if end <= len || len >= window_size {
         return Ok(());
     }
+    let desired = ring_size(len, window_size, end)?;
+    memory.resize(ring, desired)
+}
+
+/// Power-of-two allocation length, shared by ordinary and initialized growth.
+fn ring_size(len: u64, window_size: u64, end: u64) -> Result<usize, DecodeError> {
     let desired = end
         .checked_next_power_of_two()
         .unwrap_or(u64::MAX)
         .max(len.saturating_mul(2))
         .max(MIN_RING)
         .min(window_size);
-    let desired = usize::try_from(desired).map_err(|_| DecodeError::SizeOverflow)?;
-    memory.resize(ring, desired)
+    usize::try_from(desired).map_err(|_| DecodeError::SizeOverflow)
 }
 
 /// The two most recent bytes before `position`, zero before any output.
@@ -427,6 +437,20 @@ impl Stream {
         self.memory.live
     }
 
+    /// Transfers a completely collected member; its output has never wrapped.
+    pub(crate) fn take_collected(&mut self) -> Vec<u8> {
+        debug_assert!(self.position <= self.ring.len() as u64);
+        let mut output = core::mem::take(&mut self.ring);
+        self.memory.live -= output.capacity();
+        output.truncate(self.position as usize);
+        output
+    }
+
+    /// Copies the collected prefix before resuming with ordinary caller output.
+    pub(crate) fn collected(&self) -> &[u8] {
+        &self.ring[..self.position as usize]
+    }
+
     /// Bytes the current meta-block still declares, as a reservation hint
     /// for callers growing a destination; zero outside a data meta-block.
     pub(crate) const fn declared_remaining(&self) -> u64 {
@@ -456,6 +480,41 @@ impl Stream {
         grow_ring(&mut self.memory, &mut self.ring, self.window_size, end)
     }
 
+    /// Grow with already known raw bytes instead of zeroing and overwriting.
+    fn write_raw(&mut self, bytes: &[u8]) -> Result<(), DecodeError> {
+        let end = self.position + bytes.len() as u64;
+        let old_len = self.ring.len();
+        if end > old_len as u64 && end <= self.window_size {
+            let desired = ring_size(old_len as u64, self.window_size, end)?;
+            self.memory.reserve(&mut self.ring, desired)?;
+            let existing = old_len - self.position as usize;
+            self.ring[self.position as usize..].copy_from_slice(&bytes[..existing]);
+            self.ring.extend_from_slice(&bytes[existing..]);
+            self.ring.resize(desired, 0);
+            self.position = end;
+        } else {
+            self.ensure_ring(end)?;
+            write_ring(&mut self.ring, &mut self.position, bytes, None);
+        }
+        Ok(())
+    }
+
+    /// A unit-distance copy can initialize the new allocation with its final
+    /// byte. Returns false when ordinary ring copying is needed (including wrap).
+    fn repeat_growing(&mut self, end: u64) -> Result<bool, DecodeError> {
+        let old_len = self.ring.len();
+        if self.distance != 1 || end <= old_len as u64 || end > self.window_size {
+            return Ok(false);
+        }
+        let byte = self.ring[self.position as usize - 1];
+        let desired = ring_size(old_len as u64, self.window_size, end)?;
+        self.memory.reserve(&mut self.ring, desired)?;
+        self.ring[self.position as usize..].fill(byte);
+        self.ring.resize(desired, byte);
+        self.position = end;
+        Ok(true)
+    }
+
     fn ring_mask(&self) -> u64 {
         self.ring.len() as u64 - 1
     }
@@ -469,7 +528,9 @@ impl Stream {
         let index = (self.position & self.ring_mask()) as usize;
         self.ring[index] = byte;
         self.position = next;
-        output.bytes[output.produced] = byte;
+        if output.collect.is_none() {
+            output.bytes[output.produced] = byte;
+        }
         output.produced += 1;
         self.remaining -= 1;
         Ok(())
@@ -497,11 +558,11 @@ impl Stream {
     ) -> Result<Stop, DecodeError> {
         let result = self.run_stages(backend, input, output, config, dictionary);
         // The fast path may pull whole speculative bytes into the reservoir.
-        // Across an input/output pause they persist in `self.bits`, so `consumed`
-        // legitimately counts them. At a member boundary the session resets the
-        // workspace and discards the reservoir, so any whole bytes belonging to
-        // a following member must return to the input to be read again.
-        if matches!(result, Ok(Stop::Member)) {
+        // Return read-ahead at output pauses too: a long pending copy can end
+        // the member on a later call without accepting more input. Keeping its
+        // read-ahead would then strand the next member in an older call.
+        // Incomplete fields at input pauses still retain all accepted bytes.
+        if matches!(result, Ok(Stop::Member | Stop::Output)) {
             self.bits.unread(input);
         }
         result
@@ -749,7 +810,19 @@ impl Stream {
                     }
                     let mut done = 0;
                     if trivial {
-                        for slot in ring[index..index + run].iter_mut() {
+                        // Three symbols need at most 45 bits. Amortize the
+                        // reservoir check across a batch; short input and the
+                        // final one or two literals use the scalar loop below.
+                        for slots in ring[index..index + run].as_chunks_mut::<3>().0 {
+                            if bits.count() < 45 && !bits.refill_from(fast_input, &mut consumed) {
+                                break;
+                            }
+                            slots[0] = trivial_table.decode_fast(&mut bits) as u8;
+                            slots[1] = trivial_table.decode_fast(&mut bits) as u8;
+                            slots[2] = trivial_table.decode_fast(&mut bits) as u8;
+                            done += 3;
+                        }
+                        for slot in ring[index + done..index + run].iter_mut() {
                             if bits.count() < 15 && !bits.refill_from(fast_input, &mut consumed) {
                                 break;
                             }
@@ -1046,14 +1119,12 @@ impl Stream {
                         self.emit(byte, output)?;
                         continue;
                     }
-                    let end = self
-                        .position
-                        .checked_add(count as u64)
-                        .ok_or(DecodeError::SizeOverflow)?;
-                    self.ensure_ring(end)?;
                     let bytes = &input.bytes[input.consumed..input.consumed + count];
-                    output.bytes[output.produced..output.produced + count].copy_from_slice(bytes);
-                    write_ring(&mut self.ring, &mut self.position, bytes, None);
+                    self.write_raw(bytes)?;
+                    if output.collect.is_none() {
+                        output.bytes[output.produced..output.produced + count]
+                            .copy_from_slice(bytes);
+                    }
                     input.consumed += count;
                     output.produced += count;
                     self.remaining -= count as u64;
@@ -1340,17 +1411,19 @@ impl Stream {
                         .position
                         .checked_add(n)
                         .ok_or(DecodeError::SizeOverflow)?;
-                    self.ensure_ring(end)?;
                     let mut flushed = self.position;
-                    dispatch!(backend.0, simd => copy_ring(
-                        simd,
-                        &mut self.ring,
-                        &mut self.position,
-                        self.distance,
-                        n as usize,
-                        &mut flushed,
-                        output,
-                    ));
+                    if !self.repeat_growing(end)? {
+                        self.ensure_ring(end)?;
+                        dispatch!(backend.0, simd => copy_ring(
+                            simd,
+                            &mut self.ring,
+                            &mut self.position,
+                            self.distance,
+                            n as usize,
+                            &mut flushed,
+                            output,
+                        ));
+                    }
                     flush_ring(&self.ring, self.position, &mut flushed, output);
                     self.copy -= n;
                     self.remaining -= n;
@@ -1495,6 +1568,65 @@ mod tests {
     use crate::dictionary::{DecodeDictionary, DecodeDictionaryLimits, DictionaryAttachment};
 
     #[test]
+    fn raw_growth_initializes_only_padding_and_preserves_wrapped_history() {
+        let mut stream = Stream {
+            window_size: 128,
+            ..Stream::default()
+        };
+        stream.write_raw(b"abc").unwrap();
+        assert_eq!(&stream.ring[..3], b"abc");
+        assert_eq!(stream.ring.len(), 64);
+        stream.write_raw(&[7; 65]).unwrap();
+        assert_eq!(&stream.ring[3..68], &[7; 65]);
+        assert_eq!(&stream.ring[68..], &[0; 60]);
+        stream.write_raw(&[9; 65]).unwrap();
+        assert_eq!(stream.position, 133);
+        assert_eq!(&stream.ring[..5], &[9; 5]);
+        assert_eq!(stream.memory.live, stream.ring.capacity());
+        let output = stream.ring.clone();
+        stream.window_size = 256;
+        stream.memory.limit = Some(stream.memory.live);
+        // Simulate the pre-wrap growth boundary, with an exhausted budget.
+        stream.position = 128;
+        assert!(matches!(
+            stream.write_raw(&[1; 10]),
+            Err(DecodeError::MemoryLimitExceeded { .. })
+        ));
+        assert_eq!(stream.ring, output);
+        assert_eq!(stream.position, 128);
+    }
+
+    #[test]
+    fn repeat_growth_fills_new_storage_once_and_keeps_failure_atomic() {
+        let mut stream = Stream {
+            window_size: 256,
+            distance: 1,
+            ..Stream::default()
+        };
+        stream.write_raw(b"x").unwrap();
+        assert!(!stream.repeat_growing(63).unwrap());
+        stream.memory.limit = Some(stream.memory.live);
+        assert!(stream.repeat_growing(129).is_err());
+        assert_eq!(stream.position, 1);
+        assert_eq!(&stream.ring[1..], &[0; 63]);
+        stream.memory.limit = None;
+        assert!(stream.repeat_growing(129).unwrap());
+        assert_eq!(&stream.ring[..], &[b'x'; 256]);
+        assert_eq!(stream.position, 129);
+        assert!(!stream.repeat_growing(257).unwrap());
+        stream.distance = 2;
+        assert!(!stream.repeat_growing(256).unwrap());
+    }
+
+    #[test]
+    fn ring_sizing_caps_doubling_at_the_window() {
+        assert_eq!(ring_size(0, 1024, 1).unwrap(), 64);
+        assert_eq!(ring_size(64, 1024, 65).unwrap(), 128);
+        assert_eq!(ring_size(64, 1024, 900).unwrap(), 1024);
+        assert_eq!(ring_size(64, 1024, u64::MAX).unwrap(), 1024);
+    }
+
+    #[test]
     fn prefix_references_continue_through_history_and_overlap() {
         for (window_size, maximum) in [(8u64, 4u64), (1024, 1008)] {
             let dictionary = DecodeDictionary::new(
@@ -1522,6 +1654,7 @@ mod tests {
             loop {
                 let mut bytes = [0; 1];
                 let mut output = Output {
+                    collect: None,
                     bytes: &mut bytes,
                     produced: 0,
                     total_before: decoded.len() as u64,
@@ -1580,6 +1713,7 @@ mod tests {
                     }
                     let mut sink = alloc::vec![0u8; length];
                     let mut output = Output {
+                        collect: None,
                         bytes: &mut sink,
                         produced: 0,
                         total_before: 0,

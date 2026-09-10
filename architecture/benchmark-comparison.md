@@ -139,15 +139,17 @@ or alter CSVs and environment records. Older report charts use their own CSV.
 ## Decoder comparison
 
 The separate `decoders` Criterion entry point calls `run_decoders`; private
-`core::decoder` owns the adapters, validation and timing. It shares only the
-existing deterministic corpus generator and C encoder helper with `core`.
+`core::decoder` owns the adapters, validation and timing. It shares the C encoder
+helper and the original eight-input `core::corpora`
+generator with the encoder comparison. It always writes to
+`target/criterion-decoders`; input selection has no environment switch.
 Neither codec's production API, state machine nor SIMD dispatch is changed.
 
 ```mermaid
 flowchart TD
     Main[decoders benchmark main] --> Public[run_decoders]
     Public --> Core[private core::decoder]
-    Corpora[core::corpora: 8 original datasets] --> Prepare
+    Corpora[core::corpora: 8 shared inputs] --> Prepare
     Core --> Prepare[C encode once: q0-q11, generic, window 22]
     Prepare --> Streams[96 retained compressed streams]
     Streams --> Validate[4 decoders restore exact original bytes]
@@ -193,9 +195,21 @@ is recorded once per shared stream in each quality page; there is no decoder
 size ranking. The exporter rejects incomplete matrices, unsupported keys,
 inconsistent lengths/window/shared compressed sizes, and invalid timing bounds.
 Reports rank source qualities by mbrotli median C-time/decoder-time ratio over
-all eight equally weighted datasets; dataset panels rank mbrotli relative to
+all eight equally weighted datasets, including empty and tiny inputs; dataset
+panels rank mbrotli relative to
 the fastest peer. They reuse the encoder suite's ratio and plotting helpers,
 but retain separate source data, environment records and generated pages.
+
+The published decoder pages use the complete post-optimization refresh in
+`docs/benchmarks/decoder-comparison.csv` and its environment record. The preceding
+run remains in `decoder-comparison-before-literal-batching*`, and pre-ownership
+data remain in `decoder-comparison-before-owned-output*`; historical means are
+not paired samples. Both comparison suites validate their complete matrix over
+the same eight corpora, rejecting missing, duplicate or unsupported entries.
+The direct mbrotli/Burli column is the median of Burli time divided by mbrotli
+time per matching file; it never divides C medians. The focused optimization
+experiments remain separate in [owned output](decoder-owned-output.md) and
+[literal batching](decoder-literal-performance.md).
 
 Boundary tests cover every decoder at every source quality on empty, tiny,
 SIMD-width-adjacent and 4 KiB-adjacent lengths, malformed input, wrong restored
