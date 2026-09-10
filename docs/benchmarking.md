@@ -81,12 +81,67 @@ The charts show throughput with confidence bands, compressed bytes, and the
 speed/size tradeoff across six nontrivial corpora. Empty and tiny inputs remain
 in the CSV, where their per-call latency is easier to assess.
 
+## Decoder implementation comparison
+
+The [decoder results](benchmarks/decoders/README.md) compare Google C, mbrotli,
+Rust brotli and Burli on **identical compressed streams**, prepared by Google C
+at q0–q11, generic mode and window 22, from the same eight corpora above.
+All **384 cases** must restore the original bytes before timing starts.
+Burli decodes all source qualities. SIMD Brotli is omitted because its decoder
+re-exports the Rust `brotli-decompressor` project. The lockfile resolves 6.0.0
+for Rust brotli and 5.0.3 for SIMD Brotli; this comparison measures the former.
+
+```sh
+cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench decoders --locked -- --test
+cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench decoders --locked -- --save-baseline my-decoders
+python3 benchmarks/comparison/report.py --decoding --baseline my-decoders --csv /tmp/my-decoders.csv
+```
+
+Results live in `benchmarks/comparison/target/criterion-decoders/`, independent
+of encoder and root API measurements. Archive its `sizes.csv` with each fresh
+named baseline. Filtering, for example `'alice29/q5/'`, still validates the
+complete matrix; a full sweep is required for export. Sampling defaults match
+the encoder comparison and accept the same Criterion overrides.
+
+| Decoder | Version | Timed API |
+| --- | --- | --- |
+| Google C | 1.2.0, pinned vendor revision | `BrotliDecoderDecompress` into a newly allocated, initialized output |
+| mbrotli | Local checkout | Construct `Decompressor`, then `decompress` |
+| Rust brotli | 9.0.0 | `BrotliDecompress` into a new Vec, native 4 KiB I/O buffers |
+| Burli | 0.3.1 | `burli::decompress` |
+
+This measures cold native APIs, including construction, allocation, decode and
+disposal. C requires the known output capacity; the Rust Vec helpers discover
+output size while decoding. No decoder retains state between iterations.
+Throughput counts **restored bytes**, not compressed input bytes. In the CSV,
+`input_bytes` is the original corpus length and `compressed_bytes` is the
+identical compressed input size. Quality is the **source encoder's** setting.
+Empty input has latency but no meaningful throughput or compression fraction.
+
+Rebuild the checked-in overview, twelve quality pages and thirteen SVG charts
+with Matplotlib 3.10.8:
+
+```sh
+python3 benchmarks/comparison/decoder_docs.py \
+  --csv docs/benchmarks/decoder-comparison.csv \
+  --environment docs/benchmarks/decoder-comparison-environment.json \
+  --report docs/benchmarks/decoder-comparison.md \
+  --output docs/benchmarks/decoders
+```
+
+The overview takes the median of eight per-dataset C-time/decoder-time ratios,
+with equal weight, including empty and tiny input. Per-quality panels retain
+all individual mean confidence bounds. Shared compressed sizes are listed
+alongside restored lengths instead of ranking decoders by size. See the
+[run report](benchmarks/decoder-comparison.md) for environment and limitations.
+
 ## Existing API benchmarks
 
 The original harnesses retain their names, settings, and result locations:
 
 ```sh
 cargo bench --bench compress --locked
+cargo bench --bench decompress --locked
 cargo bench --bench parallel --locked
 cargo bench --bench track_b --features experimental --locked
 ```

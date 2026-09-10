@@ -4,17 +4,20 @@
 import argparse
 import csv
 import json
+import math
 from pathlib import Path
 
 
-def collect(root, baseline):
+def collect(root, baseline, *, decoding=False):
     if not baseline or baseline in {".", "..", "new", "base"} or any(c in baseline for c in "/\\"):
         raise ValueError("use a unique named baseline")
     with (root / "sizes.csv").open() as source:
         sizes = list(csv.DictReader(source))
     expected = {}
+    suite = "decoders" if decoding else "implementations"
+    count = 384 if decoding else 432
     for row in sizes:
-        key = f'implementations/cold/{row["corpus"]}/q{row["quality"]}/{row["implementation"]}'
+        key = f'{suite}/cold/{row["corpus"]}/q{row["quality"]}/{row["implementation"]}'
         if key in expected:
             raise ValueError(f"duplicate size row: {key}")
         expected[key] = row
@@ -27,9 +30,13 @@ def collect(root, baseline):
         if metadata["throughput"] != {"Bytes": int(expected[key]["input_bytes"])}:
             raise ValueError(f"input size mismatch: {key}")
         estimate = json.loads((path.parent / "estimates.json").read_text())["mean"]
+        timing = [estimate["confidence_interval"]["lower_bound"], estimate["point_estimate"],
+                  estimate["confidence_interval"]["upper_bound"]]
+        if any(not math.isfinite(value) or value <= 0 for value in timing) or timing != sorted(timing):
+            raise ValueError(f"invalid timing bounds: {key}")
         measured[key] = estimate
-    if measured.keys() != expected.keys() or len(expected) != 432:
-        raise ValueError(f"incomplete matrix: {len(measured)} measurements, {len(expected)} sizes; expected 432")
+    if measured.keys() != expected.keys() or len(expected) != count:
+        raise ValueError(f"incomplete matrix: {len(measured)} measurements, {len(expected)} sizes; expected {count}")
     rows = []
     for key, size in expected.items():
         estimate = measured[key]
@@ -45,17 +52,22 @@ def collect(root, baseline):
             "speed_relative_to_c": reference / ns,
             "compressed_fraction": int(size["compressed_bytes"]) / length if length else "",
         })
+    if decoding:
+        from quality_docs import validate_rows
+        validate_rows(rows, decoding=True)
     return rows
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, default=Path(__file__).parent / "target/criterion")
+    parser.add_argument("--root", type=Path)
+    parser.add_argument("--decoding", action="store_true", help="export the four-decoder suite")
     parser.add_argument("--baseline", required=True)
     parser.add_argument("--csv", type=Path, required=True)
     args = parser.parse_args()
     try:
-        rows = collect(args.root, args.baseline)
+        root = args.root or Path(__file__).parent / ("target/criterion-decoders" if args.decoding else "target/criterion")
+        rows = collect(root, args.baseline, decoding=args.decoding)
     except (OSError, ValueError, KeyError) as error:
         parser.error(str(error))
     with args.csv.open("w", newline="") as output:

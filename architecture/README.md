@@ -8,7 +8,7 @@ and known gaps. For usage examples, start with the [user guide](../docs/README.m
 
 | Specification | Scope |
 | --- | --- |
-| [Implementation comparison](benchmark-comparison.md) | Isolated five-encoder Criterion suite, validated exports, equal-weight dataset medians, ranked vertical-bar reports, and current-run provenance. |
+| [Implementation comparison](benchmark-comparison.md) | Isolated five-encoder and four-decoder Criterion suites, identical decoder inputs, validated exports, dataset medians, ranked bar reports, and run provenance. |
 | [Codec features](codec-features.md) | Independent default-enabled codecs, shared public types, private primitive gates, crate documentation and isolated consumer checks. |
 | [No standard library](no-std.md) | Opt-in alloc-backed compression, feature precedence, excluded std APIs, compile-time SIMD, and no_std-only libm dependencies. |
 | [Native decompressor](decompressor.md) | Incremental raw decoding, whole-word reservoir, table Huffman, ring history, SIMD copies and command fast path, dictionaries, resource budgets, retained lifecycle, I/O, and executable API contracts. |
@@ -66,7 +66,8 @@ graph TD
     Kernels --> SIMD[fearless_simd]
     C[google-brotli-ffi: development dependency] -. tests and benchmarks .-> API
     Comparison[isolated benchmarks/comparison] -. native API comparison .-> API
-    Comparison --> Competitors[C, brotli, simd-brotli, burli]
+    Comparison -. identical C streams .-> Decode
+    Comparison --> Competitors[C, brotli, burli; encoder-only simd-brotli]
 ```
 
 The public surface uses validated configuration values and high-level errors.

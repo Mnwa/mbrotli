@@ -6,7 +6,9 @@ that fits your application.
 
 [Benchmark results](benchmarks/README.md) compare speed and output size using
 medians across all datasets, with a chart and exact measurements for each
-quality and workload. For specialized use, see [dictionaries](dictionaries.md)
+quality and workload. The [decoder comparison](benchmarks/decoders/README.md)
+measures four libraries on identical compressed inputs at all source qualities.
+For specialized use, see [dictionaries](dictionaries.md)
 and [parallel compression](parallel.md).
 
 ## Decompression

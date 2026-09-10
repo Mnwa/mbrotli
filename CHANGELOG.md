@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Add an isolated four-decoder Criterion comparison for mbrotli, Google C,
+  Rust brotli and Burli on identical C streams at q0–q11. Validate all 384
+  cases before timing, export timings and shared stream sizes separately,
+  and publish decoder overview/quality charts, raw results and run provenance.
+  SIMD Brotli is omitted because it shares Rust brotli’s decoder.
+
 - Specialize decoder command loops for the configured CPU backend and use safe
   `fearless_simd` snapshots for 16- and 32-byte history copies. Dispatch stays
   outside command loops; headers and raw blocks share scalar code. Add

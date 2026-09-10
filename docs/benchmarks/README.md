@@ -1,10 +1,28 @@
 # Benchmark results
 
-Compare Google C Brotli, mbrotli, Rust Brotli, SIMD Brotli, and Burli with
-vertical bars for speed and compressed size. Start with the median across all
-eight datasets, then open a quality page for individual workloads.
+Compare compression and decompression with vertical speed bars across eight
+datasets, then open a quality page for individual workloads. Compression includes
+Google C Brotli, mbrotli, Rust Brotli, SIMD Brotli and Burli, with output sizes.
+Decompression uses the same libraries except SIMD Brotli.
 
-## Median across all datasets
+## Decompression comparison
+
+The [four-decoder comparison](decoders/README.md) measures Google C Brotli,
+mbrotli, Rust brotli and Burli on identical C-generated streams from the same
+8 corpora at source qualities q0–q11. SIMD Brotli shares Rust brotli's decoder
+and is omitted. Burli's decoder participates at every source quality.
+
+![Median decompression speed relative to C](decoders/charts/overview.svg)
+
+Each bar is the median of eight equally weighted C-time/decoder-time ratios,
+including empty and tiny input. Higher is faster; 1× matches C. Open the
+[quality pages and exact tables](decoders/README.md) for all 384 cases, restored
+throughput, mean confidence bounds and shared compressed sizes. These are cold
+native APIs; C knows the output capacity, while Rust brotli includes its 4 KiB
+I/O adapter. See the [run report](decoder-comparison.md),
+[raw CSV](decoder-comparison.csv) and [environment](decoder-comparison-environment.json).
+
+## Compression: median across all datasets
 
 ![Median speed and output relative to C, by quality](library-comparison-charts/tradeoff.svg)
 

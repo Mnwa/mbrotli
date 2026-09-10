@@ -20,3 +20,7 @@ thiserror = "2"
 [[bench]]
 name = "implementations"
 harness = false
+
+[[bench]]
+name = "decoders"
+harness = false

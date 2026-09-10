@@ -32,14 +32,21 @@ CORPORA = {
 }
 
 
-def load_rows(path):
+def load_rows(path, *, decoding=False):
     """Reject missing, duplicate, unsupported, or inconsistent measurements."""
     with path.open() as source:
         rows = list(csv.DictReader(source))
+    return validate_rows(rows, decoding=decoding)
+
+
+def validate_rows(rows, *, decoding=False):
+    """Validate one codec's complete matrix and normalize numeric columns."""
     expected = {(q, corpus, encoder) for q in range(12) for corpus in CORPORA
-                for encoder in ENCODERS if encoder != "burli" or q <= 5}
+                for encoder in ENCODERS
+                if (encoder != "simd-brotli" if decoding else encoder != "burli" or q <= 5)}
     found = set()
     lengths = {}
+    stream_sizes = {}
     for row in rows:
         for key in ["quality", "input_bytes", "compressed_bytes", "lgwin"]:
             row[key] = int(row[key])
@@ -60,8 +67,11 @@ def load_rows(path):
             raise ValueError(f"invalid empty corpus: {key}")
         if lengths.setdefault(row["corpus"], length) != length:
             raise ValueError(f"inconsistent input lengths: {key}")
+        stream = row["corpus"], row["quality"]
+        if decoding and stream_sizes.setdefault(stream, row["compressed_bytes"]) != row["compressed_bytes"]:
+            raise ValueError(f"inconsistent compressed stream sizes: {key}")
     if found != expected:
-        raise ValueError(f"incomplete matrix: {len(found)} cases; expected 432")
+        raise ValueError(f"incomplete matrix: {len(found)} cases; expected {len(expected)}")
     return rows
 
 

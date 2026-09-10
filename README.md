@@ -33,19 +33,42 @@ Compression performance is generally close to or faster than Google C Brotli,
 depending on the workload and quality setting.
 
 <details>
-<summary>Benchmark results and methodology</summary>
+<summary>Compression benchmark results and methodology</summary>
 
 ![Compression speed and output size relative to Google C Brotli across qualities 0–11][bench-chart]
 
 **Recorded 2026-09-07 · Intel Core i7-13700KF · WSL2 · window 22 · cold serial APIs.**
 Each value is the median of per-dataset ratios across eight equally weighted datasets,
 including empty and tiny inputs. A speed ratio above **1×** is faster than C; a size
-ratio below **1×** is smaller. These are compression results, not decoder benchmarks.
+ratio below **1×** is smaller. These are compression results; the separate decoder comparison follows below.
 
 The benchmark includes encoder construction, allocation, compression, and disposal.
 Results apply to the [recorded revision and machine][bench-qualities].
 
 [Per-dataset results and methodology][benchmarks] · [Raw measurements][bench-csv] · [Reproduce the benchmarks][benchmarking]
+
+</details>
+
+<details>
+<summary>Decompression benchmark results and methodology</summary>
+
+![Decompression speed relative to Google C Brotli by source quality][decoder-bench-chart]
+
+**Recorded 2026-09-10 · Intel Core i7-13700KF · WSL2 · window 22 · cold serial APIs.**
+Google C, mbrotli, Rust brotli and Burli decode identical C-generated streams at
+source qualities **0–11**. SIMD Brotli shares Rust brotli's decoder and is omitted;
+Burli decodes every source quality. All **384 cases** restore the original bytes.
+
+The mbrotli median speed / C ranges from **1.19× to 1.78×** across source qualities
+on this run; individual workloads include slower cases.
+Each bar is the median of eight equally weighted per-dataset timing ratios,
+including empty and tiny input; above **1×** is faster than C. Throughput in the
+quality pages counts restored bytes. Construction, allocation, decode and disposal
+are timed. C receives the known output capacity; Rust brotli includes its native
+4 KiB I/O adapter. These are cold API measurements on the recorded machine,
+with results varying by workload and source quality.
+
+[Per-quality and dataset results][decoder-benchmarks] · [Raw measurements][decoder-bench-csv] · [Methodology and limits][decoder-bench-report]
 
 </details>
 
@@ -263,8 +286,8 @@ file input, and other executors.
 ## Native decompression
 
 `Decompressor` provides reusable Vec/slice APIs, incremental sessions, and synchronous
-reader/writer adapters. Vec appends are rolled back on failure. The decoder is
-currently scalar Rust; SIMD acceleration applies to the encoder.
+reader/writer adapters. Vec appends are rolled back on failure. The decoder specializes command loops
+and history copies for the selected CPU backend using safe `fearless_simd` abstractions.
 
 **Configure limits for untrusted input.** Numeric budgets are unlimited by default.
 This example accepts standard windows and sets explicit input, output, and workspace
@@ -382,3 +405,8 @@ The [development guide][development] covers local checks, coverage, and fuzzing.
 [bench-chart]: ./docs/benchmarks/library-comparison-charts/tradeoff.svg
 [benchmarking]: ./docs/benchmarking.md
 [google-brotli]: https://github.com/google/brotli
+
+[decoder-benchmarks]: ./docs/benchmarks/decoders/README.md
+[decoder-bench-csv]: ./docs/benchmarks/decoder-comparison.csv
+[decoder-bench-chart]: ./docs/benchmarks/decoders/charts/overview.svg
+[decoder-bench-report]: ./docs/benchmarks/decoder-comparison.md

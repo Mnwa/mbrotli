@@ -9,3 +9,11 @@ mod core;
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     core::run()
 }
+
+/// Run the isolated cold decoder comparison on identical C-encoded streams.
+///
+/// # Errors
+/// Returns an error if stream preparation, decoding, validation, or reporting fails.
+pub fn run_decoders() -> Result<(), Box<dyn std::error::Error>> {
+    core::decoder::run()
+}

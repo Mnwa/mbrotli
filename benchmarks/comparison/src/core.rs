@@ -6,6 +6,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 
+pub(super) mod decoder;
+
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const WINDOW: u8 = 22;
 const ENCODERS: [&str; 5] = ["c-brotli", "mbrotli", "rust-brotli", "simd-brotli", "burli"];
