@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Regenerate benchmark charts from the recorded compression and decompression
+  CSVs. Refresh the decoder overview, all twelve quality charts and their
+  tables; confirm the compressor charts already match the recorded data.
+
 - Stop materialising the high-quality match forest. Qualities ten and eleven
   size the binary-tree forest by the window whenever a stream is not one final
   block, as the C reference does, but the forest was grown with `Vec::resize`,
