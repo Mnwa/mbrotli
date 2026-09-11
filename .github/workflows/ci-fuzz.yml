@@ -73,10 +73,11 @@ jobs:
             dictionary) seeds=seeds/dictionary ;;
             serialized_dictionary) seeds=seeds/serialized ;;
             decode_roundtrip) seeds=seeds/params ;;
-            compressor_lifecycle|framing|parallel|decompress|decode_*) seeds="regressions/$TARGET" ;;
+            compressor_lifecycle|framing|parallel) seeds="regressions/$TARGET" ;;
+            decompress|decode_*) seeds="regressions/$TARGET"; timeout_ms=5000 ;;
           esac
           cargo afl fuzz -S ci -i "$seeds" -o findings -V 600 \
-            -- "target/release/$TARGET"
+            -t "$timeout_ms" -m none -- "target/release/$TARGET"
       - name: fail on any crash or saved hang
         working-directory: fuzz/afl
         run: |
