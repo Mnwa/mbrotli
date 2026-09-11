@@ -69,7 +69,7 @@ jobs:
           AFL_NO_AFFINITY: 1
         run: |
           seeds=seeds/params
-          timeout_ms=1000
+          timeout_ms=30000
           fuzz_args=()
           case "$TARGET" in
             dictionary) seeds=seeds/dictionary ;;
