@@ -138,8 +138,17 @@ build; the experimental phase fuzzes 24 targets of a
 The phases run one after the other so every worker owns a hardware thread.
 `CAMPAIGN_PARALLEL=1` runs them together instead: the campaign then costs one
 phase of wall clock and oversubscribes the host, which lowers executions per
-second per worker. Results belong in the
+second per worker. The two scripts can also run at the same time as each other,
+as the eight-hour record did — 46 encoder workers alongside 13 decoder ones on
+24 hardware threads. Results belong in the
 [correctness proof](../../docs/correctness.md).
+
+A saved hang is a slow execution, not a proven loop, and on an oversubscribed
+host wall clock is not evidence by itself. Time it standalone against the
+instrumented binary before drawing a conclusion, and watch resident memory as
+well as the clock: the eight-hour campaign's only findings were `large_window`
+hangs whose seconds were kernel time faulting in a window-sized allocation, not
+search.
 
 ## Triage and required checks
 

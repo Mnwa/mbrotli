@@ -12,7 +12,9 @@
 //! above relies on: it walks the matches expecting each to be longer than the
 //! last.
 
+use alloc::vec;
 use alloc::vec::Vec;
+use core::mem;
 
 use fearless_simd::{Simd, SimdBase, SimdMask, u8x32};
 
@@ -291,8 +293,20 @@ impl BinaryTreeMatcher {
         } else {
             window
         };
-        if self.forest.len() < 2 * num_nodes {
-            self.forest.resize(2 * num_nodes, 0);
+        let needed = 2 * num_nodes;
+        if self.forest.len() < needed {
+            // Take the forest from the allocator's zeroing path instead of
+            // writing it. A stream that is not one final block reserves a
+            // window of nodes whatever its length is — eight gibibytes at a
+            // thirty-bit window — and reads almost none of them; the reference
+            // allocates the same reservation without touching its pages, so
+            // filling them here would cost what the reference never pays. The
+            // old forest is released first, so the peak holds one of the two.
+            // Its contents are already unreachable: every bucket has just been
+            // reset to `invalid_pos`, and a node no chain reaches is never
+            // read.
+            drop(mem::take(&mut self.forest));
+            self.forest = vec![0u32; needed];
         }
     }
 

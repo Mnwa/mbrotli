@@ -367,7 +367,10 @@ from the ordinary encoder's byte-identity checks. See the [dictionary and format
 
 The repository includes differential tests against the pinned C encoder and decoder,
 cross-API and cross-backend checks, AFL++ fuzz targets, Miri checks, and AddressSanitizer
-workflows. Read the [encoder verification report][validation] and the separate
+workflows. The most recent campaign ran 59 AFL++ workers over both surfaces and both
+feature builds for eight hours — 914.9 million executions, no crash, and one fixed
+defect in how the high-quality match finder reserved its forest. Read the
+[encoder verification report][validation] and the separate
 [native decoder report][decoder-checks] for tested configurations, dated results,
 reproduction commands, and limitations. Testing and fuzzing are evidence, not formal verification.
 

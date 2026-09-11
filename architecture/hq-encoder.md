@@ -155,11 +155,18 @@ stores only positions below its length, so it gets `2 * input_size` links
 rather than `2 << lgwin`; any other stream gets the window's worth. The
 forest only grows, and a reused matcher keeps the largest one it has needed;
 the links of positions a stream never stored are never followed, so nothing
-is cleared between streams. The buckets are written once on the first
-preparation with the empty marker rather than zeroed and then refilled. A
-sixteen-byte call used to zero a 32 MiB forest and a mebibyte of literal
-prices; both are now sized by the stream (`ZopfliCostModel::reserve` sizes
-the prices per block).
+is cleared between streams. A forest that has to grow is taken from the
+allocator's zeroing path, the previous one released first, rather than grown
+and filled in place: the reservation matches the reference's, but the reference
+never touches those pages, and a stream that is not one final block reserves a
+window's worth of links whatever its length — 8 GiB at a thirty-bit window — of
+which a short stream reads almost none. Writing them would materialise a
+reservation the reference leaves virtual, which is what an eight-hour AFL
+campaign reported as a hang in `large_window`. The buckets are written once on
+the first preparation with the empty marker rather than zeroed and then
+refilled. A sixteen-byte call used to zero a 32 MiB forest and a mebibyte of
+literal prices; both are now sized by the stream (`ZopfliCostModel::reserve`
+sizes the prices per block).
 
 Three bounds shape what it finds, all from the reference:
 

@@ -400,4 +400,21 @@ mod tests {
             .unwrap();
         assert_eq!(table.len(), len);
     }
+
+    #[test]
+    fn the_constant_standard_table_is_what_the_layout_computes() {
+        // `STANDARD_TABLE` is built at compile time, so nothing executes
+        // `standard_table` at run time and the decoder never recomputes what
+        // it holds. Calling it here pins the constant to the layout it claims
+        // to be a copy of.
+        let computed = standard_table();
+        assert_eq!(computed.len(), STANDARD_ALPHABET);
+        assert_eq!(computed, STANDARD_TABLE);
+        let layout = DistanceLayout::default();
+        assert!(layout.is_standard());
+        for (symbol, entry) in STANDARD_TABLE.iter().enumerate() {
+            assert_eq!(*entry, layout.entry(symbol), "symbol {symbol}");
+        }
+        assert_eq!(layout.table(&[]), &STANDARD_TABLE);
+    }
 }

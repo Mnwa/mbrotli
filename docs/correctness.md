@@ -8,8 +8,9 @@ verification: the encoder is compared byte for byte with the pinned C reference,
 its streams are decoded by the reference decoder, its own entry points and SIMD
 backends are compared with each other, its memory behaviour is checked under
 Miri and AddressSanitizer, every function is required to execute under test,
-and coverage-guided fuzz campaigns over both feature builds — two hours across
-the encoder surface, three across the decoder — drive all of those oracles with
+and coverage-guided fuzz campaigns over both feature builds — most recently
+eight hours across both surfaces at once, on top of the earlier two across the
+encoder and three across the decoder — drive all of those oracles with
 mutated inputs. Every command below runs from a
 checkout; nothing in the record depends on a hosted service.
 
@@ -40,7 +41,8 @@ flowchart TD
     Coverage["100% function coverage gate"] --> Replay
     Replay["AFL regression replay<br/>both flows"] --> Campaign
     Campaign["Two-hour encoder AFL++ campaign<br/>44 concurrent workers over both builds"] --> Decoder
-    Decoder["Three-hour decoder AFL++ campaign<br/>13 concurrent workers over both builds"]
+    Decoder["Three-hour decoder AFL++ campaign<br/>13 concurrent workers over both builds"] --> Joint
+    Joint["Eight-hour joint AFL++ campaign<br/>59 concurrent workers, both surfaces, both builds"]
 ```
 
 Each layer strengthens the one above it. Static checks and tests establish
@@ -418,6 +420,337 @@ which is what the call sites predict: it is one test per ring write, and the
 writes it can reject are the ones that would have copied nothing.
 
 
+## Record: 2026-09-11, eight-hour encoder and decoder campaign
+
+This record covers both surfaces in one run: the encoder campaign and the
+decoder campaign ran side by side for eight hours each, against the tree at
+`f936968`, the commit that landed the large-file decoder work. The two records
+above still stand; this one extends them and reports the one defect the run
+found, which this record's commit fixes.
+
+| Item | Value |
+| --- | --- |
+| Revision fuzzed | `f936968` |
+| Revision recorded | `f936968` plus this record's commit, which carries the fix, its regression test and these documents |
+| C reference | Google Brotli v1.2.0, upstream `4508218e` (`brotli-ffi/vendor/brotli`) |
+| Host | Intel Core i7-13700KF, 24 hardware threads, 47 GiB, Ubuntu 22.04 under WSL2 |
+| Stable toolchain | rustc 1.98.1 (2026-09-01), cargo 1.98.1 |
+| Fuzzer | cargo-afl 0.18.2, AFL++ 4.40c, CmpLog, persistent mode with shared-memory test cases and a deferred forkserver |
+
+### What ran
+
+```sh
+cd fuzz/afl
+cargo afl build --release --no-default-features --target-dir target/stable
+cargo afl build --release --no-default-features --features experimental \
+    --target-dir target/experimental
+CAMPAIGN_PARALLEL=1 ./campaign.sh findings/campaign-2026-09-10-8h 28800 &
+SEED_ROOT=seeds/decoder-cmin ./decoder-campaign.sh findings/decoder-2026-09-10-8h 28800 &
+wait
+```
+
+Fifty-nine workers at once on 24 hardware threads, from 2026-09-10T20:12:38Z to
+2026-09-11T04:15:36Z: 46 encoder workers — 22 from the `--no-default-features`
+build and 24 from the `--features experimental` build — and 13 decoder workers,
+six and seven. Eight hours each, 472 worker-hours. Every worker used CmpLog and
+no memory limit, with a fixed timeout of thirty seconds for the encoder targets
+and five for the decoder ones. Payloads are capped at 128 KiB by the targets
+and decoded output at 64 KiB.
+
+The encoder seeds are the committed corpora minimised by `minimise-seeds.sh`
+and the committed regression corpora, as in the 2026-09-07 record. The decoder
+seeds are `seeds/decoder-cmin`, the `cargo afl cmin` reduction carried forward
+from the 2026-09-10 decoder campaign, so those thirteen workers extended that
+exploration rather than re-deriving it.
+
+Executions per second are a floor rather than a representative rate: 59 workers
+shared 24 hardware threads, about 2.5 workers per thread for the whole run.
+Oracle outcomes do not depend on that load; reached edges and queue growth do.
+
+### The defect this campaign found
+
+Nothing crashed. Every one of the nineteen saved hangs, and all twenty-eight
+executions that reached the thirty-second timeout, came from `large_window` —
+ten hangs and fourteen timeouts in the stable build, nine and fourteen in the
+experimental one. The decoder campaign saved neither a crash, a hang, nor a
+timeout in 786 million executions.
+
+The hangs are one input class: quality ten or eleven, a declared window of at
+least thirty bits, a pinned sixteen-bit block size, and a payload longer than
+that block. AFL reached it from both directions — a 65,679-byte input declaring
+window 44, and a 131,328-byte one declaring window 62; the encoder caps both at
+thirty bits.
+
+A payload longer than one input block makes the first `process` call non-final,
+so `BinaryTreeMatcher::prepare` takes the reference's non-one-shot branch and
+sizes the match forest by the window rather than by the payload: `2 << 30`
+links, 8 GiB. The reference's `HashMemAllocInBytes`
+(`c/enc/hash_to_binary_tree_inc.h`) computes the same number, so the
+*reservation* was never a divergence. What it did with it was: the forest was
+grown with `Vec::resize`, which writes every link, so all 8 GiB became resident
+— about 10.5 million minor page faults and 15.5 s of kernel time to compress
+64 KiB — while the reference allocates the same reservation and never touches
+its pages. A stream that is not one final block reads almost none of those
+links.
+
+The fix takes the forest from the allocator's zeroing path instead, releasing
+the previous one first, so the pages arrive zeroed from the operating system
+and are faulted in only as the forest is used. Nothing is lost by dropping the
+old allocation: `prepare` has just reset every bucket to the empty marker, so
+no chain reaches a node from a previous stream.
+
+Measured on the idle host, release with debug info, quality 10, window 30,
+block bits 16, and a payload of 65,672 bytes — one byte over the block:
+
+| | Time | Peak RSS |
+| --- | ---: | ---: |
+| `mbrotli`, before | 8.17 s | 8,197 MiB |
+| `mbrotli`, after | 8.03 ms | 6 MiB |
+| C reference, same streaming settings | 36.8 ms | 5 MiB |
+
+The same payload at 65,536 bytes — exactly one block, so the one-shot branch
+applies — always took 23 ms and 6 MiB, before the fix as well; so did the
+default block size, which is wide enough that the payload fits one block. That
+is what made the class so narrow, and what an eight-hour run found that shorter
+ones had not.
+
+`tests/hq_forest_allocation.rs` pins it without AFL. A global allocator that
+counts large `alloc` and `alloc_zeroed` requests separately compresses one byte
+over a pinned block at quality ten with a twenty-four-bit window, where the
+forest is a single 128 MiB request: it must arrive zeroed, and no plain
+allocation of that size may be made. The test fails before the fix and passes
+after it. A twenty-four-bit window keeps the reservation modest while
+exercising the same branch, so the test costs nothing to run.
+
+**Carried over.** The six-hour campaign of 2026-09-07 saved hangs in
+`large_window` at qualities ten and eleven too, and the record attributed them
+to slow compression, measuring one input at 7.4 s standalone. That measurement
+was right and the attribution was wrong: the seconds were kernel time spent
+faulting in a forest, not search. The two-hour campaign that replaced it saved
+no hangs, which the record read as the thirty-second timeout being the right
+one. Either explanation fits what was recorded — the class stayed under the
+new threshold, or those two hours never reached the combination — and neither
+was checked, because a hang already explained is one nobody measures again.
+
+### Fuzz campaign
+#### encoder campaign, stable build (22 workers)
+
+| Target | Executions | Execs/s | Queue | Edges | Map | Stability | Crashes | Hangs |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `compressor_lifecycle` | 5,117,245 | 178 | 7 → 13,062 | 22,117 | 21.21% | 99.99% | 0 | 0 |
+| `decode_roundtrip` | 668,216 | 23 | 85 → 987 | 2,212 | 40.73% | 99.91% | 0 | 0 |
+| `dictionary` | 1,105,452 | 38 | 90 → 4,431 | 31,593 | 30.13% | 99.99% | 0 | 0 |
+| `differential_c` | 2,203,231 | 76 | 85 → 6,568 | 25,448 | 24.50% | 99.99% | 0 | 0 |
+| `large_window` | 389,149 | 14 | 101 → 3,783 | 18,257 | 17.55% | 99.99% | 0 | 10 |
+| `output_capacity` | 1,484,252 | 52 | 85 → 6,030 | 30,127 | 28.96% | 99.99% | 0 | 0 |
+| `parallel` | 660,784 | 23 | 9 → 4,792 | 15,425 | 8.31% | 99.99% | 0 | 0 |
+| `parameter_parsing` | 689,023 | 24 | 85 → 3,791 | 20,863 | 20.09% | 99.99% | 0 | 0 |
+| `params_roundtrip` | 897,117 | 31 | 85 → 5,005 | 25,776 | 24.81% | 99.99% | 0 | 0 |
+| `q0_roundtrip` | 13,340,510 | 463 | 21 → 1,683 | 3,704 | 3.57% | 99.95% | 0 | 0 |
+| `q10_roundtrip` | 58,572 | 2 | 21 → 1,964 | 7,017 | 6.76% | 99.97% | 0 | 0 |
+| `q11_roundtrip` | 19,382 | 1 | 21 → 1,213 | 7,087 | 6.83% | 99.97% | 0 | 0 |
+| `q1_roundtrip` | 25,480,979 | 885 | 21 → 1,999 | 4,145 | 3.99% | 99.95% | 0 | 0 |
+| `q3_roundtrip` | 3,306,151 | 115 | 21 → 1,145 | 2,486 | 2.39% | 99.92% | 0 | 0 |
+| `q4_roundtrip` | 1,585,337 | 55 | 21 → 1,273 | 3,522 | 3.39% | 99.94% | 0 | 0 |
+| `q5_roundtrip` | 1,310,097 | 45 | 21 → 1,524 | 4,378 | 4.22% | 99.95% | 0 | 0 |
+| `q6_roundtrip` | 1,094,374 | 38 | 21 → 1,462 | 4,390 | 4.23% | 99.95% | 0 | 0 |
+| `q7_roundtrip` | 752,157 | 26 | 21 → 1,152 | 3,871 | 3.73% | 99.95% | 0 | 0 |
+| `q8_roundtrip` | 598,050 | 21 | 21 → 1,143 | 3,868 | 3.73% | 99.95% | 0 | 0 |
+| `q9_roundtrip` | 424,677 | 15 | 21 → 1,208 | 3,722 | 3.58% | 99.95% | 0 | 0 |
+| `simd_equivalence` | 887,527 | 31 | 85 → 5,385 | 25,253 | 24.32% | 99.99% | 0 | 0 |
+| `streaming_equivalence` | 719,914 | 25 | 85 → 4,219 | 28,406 | 27.15% | 99.99% | 0 | 0 |
+
+
+#### encoder campaign, experimental build (24 workers)
+
+| Target | Executions | Execs/s | Queue | Edges | Map | Stability | Crashes | Hangs |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `compressor_lifecycle` | 4,255,723 | 148 | 7 → 12,890 | 22,406 | 21.11% | 99.99% | 0 | 0 |
+| `decode_roundtrip` | 559,996 | 19 | 85 → 985 | 2,232 | 39.48% | 99.91% | 0 | 0 |
+| `dictionary` | 657,691 | 23 | 90 → 4,527 | 31,510 | 29.08% | 99.99% | 0 | 0 |
+| `differential_c` | 1,598,096 | 55 | 85 → 5,547 | 25,251 | 23.88% | 99.99% | 0 | 0 |
+| `framing` | 1,943,262 | 67 | 2 → 1,777 | 3,847 | 3.57% | 99.95% | 0 | 0 |
+| `large_window` | 674,724 | 23 | 101 → 3,426 | 18,352 | 17.33% | 99.99% | 0 | 9 |
+| `output_capacity` | 515,023 | 18 | 85 → 4,750 | 29,142 | 27.52% | 99.99% | 0 | 0 |
+| `parallel` | 501,145 | 17 | 9 → 4,450 | 15,514 | 8.21% | 99.99% | 0 | 0 |
+| `parameter_parsing` | 2,026,333 | 70 | 85 → 5,779 | 24,317 | 23.00% | 99.99% | 0 | 0 |
+| `params_roundtrip` | 872,402 | 30 | 85 → 5,571 | 25,923 | 24.51% | 99.99% | 0 | 0 |
+| `q0_roundtrip` | 13,454,179 | 467 | 21 → 1,685 | 3,705 | 3.51% | 99.95% | 0 | 0 |
+| `q10_roundtrip` | 30,870 | 1 | 21 → 1,700 | 7,031 | 6.65% | 99.97% | 0 | 0 |
+| `q11_roundtrip` | 19,795 | 1 | 21 → 1,150 | 7,099 | 6.72% | 99.97% | 0 | 0 |
+| `q1_roundtrip` | 27,506,851 | 955 | 21 → 2,035 | 4,144 | 3.92% | 99.95% | 0 | 0 |
+| `q3_roundtrip` | 1,829,383 | 64 | 21 → 1,012 | 2,472 | 2.34% | 99.92% | 0 | 0 |
+| `q4_roundtrip` | 1,488,652 | 52 | 21 → 1,205 | 3,516 | 3.33% | 99.94% | 0 | 0 |
+| `q5_roundtrip` | 1,224,516 | 43 | 21 → 1,471 | 4,404 | 4.17% | 99.95% | 0 | 0 |
+| `q6_roundtrip` | 924,182 | 32 | 21 → 1,406 | 4,410 | 4.17% | 99.95% | 0 | 0 |
+| `q7_roundtrip` | 574,523 | 20 | 21 → 1,105 | 3,889 | 3.68% | 99.95% | 0 | 0 |
+| `q8_roundtrip` | 505,650 | 18 | 21 → 1,147 | 3,887 | 3.68% | 99.95% | 0 | 0 |
+| `q9_roundtrip` | 369,512 | 13 | 21 → 1,172 | 3,762 | 3.56% | 99.95% | 0 | 0 |
+| `serialized_dictionary` | 2,814,241 | 98 | 16 → 3,881 | 9,505 | 8.69% | 99.98% | 0 | 0 |
+| `simd_equivalence` | 814,938 | 28 | 85 → 5,455 | 25,050 | 23.70% | 99.99% | 0 | 0 |
+| `streaming_equivalence` | 602,145 | 21 | 85 → 4,316 | 28,577 | 26.84% | 99.99% | 0 | 0 |
+
+
+
+
+#### decoder campaign, stable build (6 workers)
+
+| Target | Executions | Execs/s | Queue | Edges | Map | Stability | Crashes | Hangs |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `decode_dictionary` | 29,022,824 | 1008 | 518 → 949 | 2,495 | 46.49% | 99.92% | 0 | 0 |
+| `decode_io_limits` | 76,689,580 | 2663 | 436 → 708 | 2,518 | 45.09% | 99.92% | 0 | 0 |
+| `decode_lifecycle` | 139,004,201 | 4827 | 65 → 65 | 322 | 6.11% | 99.38% | 0 | 0 |
+| `decode_roundtrip` | 351,531 | 12 | 287 → 704 | 2,209 | 40.67% | 99.91% | 0 | 0 |
+| `decode_streaming` | 6,761,851 | 235 | 346 → 773 | 2,396 | 44.84% | 99.92% | 0 | 0 |
+| `decompress` | 70,145,286 | 2436 | 401 → 556 | 2,429 | 45.84% | 99.92% | 0 | 0 |
+
+
+#### decoder campaign, experimental build (7 workers)
+
+| Target | Executions | Execs/s | Queue | Edges | Map | Stability | Crashes | Hangs |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `decode_dictionary` | 31,051,685 | 1078 | 517 → 1,020 | 2,531 | 41.87% | 99.92% | 0 | 0 |
+| `decode_io_limits` | 71,582,797 | 2486 | 399 → 709 | 2,537 | 43.64% | 99.92% | 0 | 0 |
+| `decode_lifecycle` | 144,644,565 | 5022 | 68 → 68 | 322 | 5.87% | 99.38% | 0 | 0 |
+| `decode_roundtrip` | 467,365 | 16 | 260 → 753 | 2,232 | 39.48% | 99.91% | 0 | 0 |
+| `decode_serialized` | 148,052,747 | 5141 | 552 → 960 | 2,882 | 48.32% | 99.93% | 0 | 0 |
+| `decode_streaming` | 5,125,101 | 178 | 372 → 767 | 2,437 | 43.82% | 99.92% | 0 | 0 |
+| `decompress` | 63,427,246 | 2202 | 392 → 663 | 2,457 | 44.53% | 99.92% | 0 | 0 |
+
+| Campaign | Build | Workers | Executions | Queue | Crashes | Hangs | Timeouts |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| encoder | stable | 22 | 62,792,196 | 1,033 → 73,819 | 0 | 10 | 14 |
+| encoder | experimental | 24 | 65,763,832 | 1,051 → 78,442 | 0 | 9 | 14 |
+| decoder | stable | 6 | 321,975,273 | 2,053 → 3,755 | 0 | 0 | 0 |
+| decoder | experimental | 7 | 464,351,506 | 2,560 → 4,940 | 0 | 0 | 0 |
+| all | both | 59 | 914,882,807 | 6,697 → 160,956 | 0 | 19 | 28 |
+
+**Result.** No worker saved a crash in 914.9 million executions over 19,335
+completed queue cycles, and the only hangs and timeouts are the `large_window`
+class above. Every oracle held: the size bound, decoding by the C decoder, byte
+identity with the C encoder under equivalent streaming settings, agreement
+between every entry point, chunk schedule and SIMD backend, the typed refusals
+the API contract requires, the C decoder's typed outcome for arbitrary bytes,
+exact member consumption, chunked sessions agreeing with one-shot decoding on
+bytes and on cumulative progress, attached raw and serialized dictionaries
+against C, lifecycle recovery after abandonment, and a retryable sink failure
+that may neither duplicate nor drop payload. Per-worker stability stayed at or
+above 99.38%, so the instrumentation saw deterministic executions rather than
+run-to-run variation that would blunt the coverage feedback.
+
+The encoder queue grew from 2,084 seeds to 152,261 saved inputs, 1.7 times what
+the two-hour campaign reached, and in the stable build `compressor_lifecycle`,
+`differential_c`, `output_capacity`, `params_roundtrip` and `simd_equivalence`
+each passed 5,000 saved inputs. The
+decoder queue grew from 4,613 to 8,695 on top of a corpus that was already the
+minimised product of an earlier campaign; its targets completed 19,276 cycles
+between them, so that surface is closer to saturation than the encoder's, where
+the slowest targets had not finished a first cycle.
+
+### Static checks and tests
+
+Run on the fixed tree, after the campaign.
+
+| Check | Command | Standard | Experimental |
+| --- | --- | --- | --- |
+| Formatting | `cargo fmt --all -- --check` | pass | n/a |
+| Lint | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | n/a | pass |
+| Tests, default features | `cargo test --workspace --locked` | pass, 929 tests | n/a |
+| Tests, experimental | `cargo test --workspace --features experimental --locked` | n/a | pass, 1132 tests |
+| Tests, all features | `cargo test --workspace --all-features --locked` | n/a | pass, 234 tests |
+| Tests, release, per binary | `cargo test --release --locked --test <each> --lib --doc`, and the `experimental` suites the same way | pass, 927 tests | pass, 901 tests |
+| Function coverage | `CARGO_PROFILE_TEST_OPT_LEVEL=1 cargo llvm-cov --workspace --locked --summary-only --fail-under-functions 100` | pass: 2173/2173 functions, 96.80% regions, 97.58% lines | n/a |
+| Match finder coverage | `cargo llvm-cov --locked --lib --test hq_forest_allocation --test simd_backends --test differential_c --summary-only` | pass: `compressor/core/hq/h10.rs` 70/70 functions, 97.49% regions, 98.73% lines | n/a |
+| Fuzz package lint | `cargo clippy --all-targets --no-default-features [--features experimental] -- -D warnings` | pass | pass |
+| Regression replay | `cargo afl test --no-default-features [--features experimental]` | pass (209 inputs, 27 targets) | pass (230 inputs, 30 targets) |
+
+The three workspace rows were run before the `standard_table` unit test below
+was added; the release row was run after it, one test binary at a time, and is
+the one that covers the tree exactly as this record leaves it. Slicing it was a
+host constraint rather than a methodological choice: after eight hours of
+fuzzing the machine held 30 GiB of page cache, and whole-workspace runs were
+killed by the sandbox's memory guard while individual binaries were not. The
+experimental column of that row counts the four `experimental`-gated suites plus
+the library and documentation tests in that configuration.
+
+As the 2026-09-10 record explains, `--all-features` enables `no_std` alongside
+`std` and so compiles out the integration suites that need `std`; its 234 tests
+are the narrowest of the three rows, not the widest. The new
+`tests/hq_forest_allocation.rs` runs in all three.
+
+The function-coverage gate is therefore recorded with the default feature set,
+which is the configuration that executes the std-facing suites. Run with
+`--all-features` it reports eleven functions unexecuted, and all eleven are
+executed in the row above; they are reached only by suites `no_std` compiles
+out. The gate also found one genuine gap, unrelated to the campaign:
+`decompressor::core::distance::standard_table` is evaluated at compile time to
+build `STANDARD_TABLE`, so nothing ever ran it. A unit test now calls it and
+pins the constant to the layout it claims to copy, which is a check worth
+having on its own and not only a coverage formality.
+
+### Verification rerun
+
+Both `large_window` workers were rerun against the fixed build, from a corpus
+of the 101 minimised `seeds/large_window` inputs plus all nineteen saved hangs,
+so the trigger class was in the starting corpus rather than something the
+fuzzer had to rediscover:
+
+```sh
+cd fuzz/afl
+cargo afl fuzz -i <seeds/large_window + the 19 saved hangs> \
+    -o findings/verify-2026-09-11-large_window/<build> -V 2700 -t 30000 -m none \
+    -- target/<build>/release/large_window
+```
+
+| Build | Workers | Executions | Queue | Edges | Stability | Crashes | Hangs |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| stable | 1 | 8,658 | 120 → 578 | 10,537 | 99.98% | 0 | 0 |
+| experimental | 1 | 9,742 | 120 → 657 | 9,070 | 99.98% | 0 | 0 |
+
+Forty-five minutes each, nothing saved. Replaying the nineteen hangs directly
+against the fixed binaries takes 0.11 s to 1.66 s and 9 MiB to 13 MiB each,
+against 40 s to 51 s and 16.8 GiB before; the eight slowest are the 128 KiB
+payloads, which compress the same data several times per execution across the
+backends the target compares. The pre-fix build saved its first hang of this
+class thirteen minutes into the campaign.
+
+### Benchmarks
+
+The fix changes how one allocation is obtained, on a path every quality ten and
+eleven stream reaches, so it was measured rather than assumed. Criterion ran the
+quality ten and eleven cases of the `compress` benchmark on the fixed tree, then
+again with the forest grown by `Vec::resize` as before, on an idle host after
+the campaign:
+
+```sh
+cargo bench --bench compress --locked -- --save-baseline fixed \
+    'q(10|11)/(mbrotli|c-brotli)'
+# with the fix reverted:
+cargo bench --bench compress --locked -- --baseline fixed \
+    'q(10|11)/(mbrotli|c-brotli)'
+```
+
+The percentages below are the older code measured against the fixed baseline,
+so a positive number is the pre-fix build being slower. The `c-brotli` cases
+are the control: the same C encoder ran in both passes, so whatever it shows is
+drift between the two runs rather than an effect of the change.
+
+| Group | Cases | Median | Range |
+| --- | ---: | ---: | --- |
+| `mbrotli`, all quality 10 and 11 cases | 69 | -0.61% | -3.77% .. +7.00% |
+| `c-brotli` control | 78 | -0.71% | -7.75% .. +1.65% |
+| `cold/q10/mbrotli` | 11 | -0.06% | -1.72% .. +7.00% |
+| `reused/q11/mbrotli` | 11 | -1.57% | -3.60% .. -0.20% |
+
+Both distributions sit around the same small negative median, which is the
+drift, and the fix is invisible in all but one corner. That corner is real:
+four `cold/q10` cases — `vendor-mapsdatazrh` +7.00%, `text-1MiB` +6.13%,
+`vendor-plrabn12.txt` +4.47%, `vendor-lcet10.txt` +3.59% — are the inputs long
+enough to span several encoder blocks, where a fresh compressor used to zero a
+32 MiB forest before finding its first match. Nothing regressed beyond the
+control's own spread, which is what the call site predicts: the allocation
+happens once per stream, and the branch around it is unchanged.
+
 ## What this does not prove
 
 - The C reference is the oracle for bytes and validity. A defect shared with
@@ -432,19 +765,25 @@ writes it can reject are the ones that would have copied nothing.
 - The `experimental` API has no stable reference encoder; its evidence is
   RFC conformance through the C parser and decoder plus fixtures, not byte
   identity with a pinned encoder.
-- Fuzzing is bounded evidence. The encoder record shows what 88 worker-hours
-  reached and the decoder record what a further 39 reached; the queue and edge
-  counts show how far each target's exploration went, and the encoder run's
-  host was oversubscribed throughout, so a longer or less contended run would
-  execute more.
+- Fuzzing is bounded evidence. The three campaigns recorded here reached 88,
+  39 and 472 worker-hours; the queue and edge counts show how far each target's
+  exploration went, and every one of those runs oversubscribed its host, so a
+  longer or less contended run would execute more. The eight-hour run is also
+  what found a defect the two shorter ones had missed, which is the shape of
+  the limit: duration buys input classes, not certainty.
 - Decoded output is capped at 64 KiB and the decoder workspace at 8 MiB under
   the fuzzer, so a stream that legitimately expands past either budget reaches
   a resource refusal instead of the code beyond it. Larger decodes rest on the
   integration tests and the benchmark corpora.
-- The decoder campaign's seeds were carried forward from an earlier campaign's
+- The decoder campaigns' seeds were carried forward from an earlier campaign's
   queue. That deepens the exploration but means the corpus is not reproducible
   from the repository alone; `prepare-decoder-seeds.sh` regenerates the
   committed starting point, not that queue.
+- A saved hang is a slow execution, not a proven non-terminating one, and the
+  fuzzer's timeout is wall clock on a loaded host. Each one has to be measured
+  standalone before it means anything; the `large_window` class in the
+  eight-hour record was real, and the same target's hangs in the six-hour
+  record had been read as ordinary slowness for months.
 - The `--all-features` test and coverage gates enable `no_std`, which compiles
   out the std-facing integration suites. They are not the widest configuration,
   and a claim resting on them alone would understate what was run.
@@ -466,7 +805,10 @@ cd fuzz/afl && ./decoder-campaign.sh findings/decoder-smoke 600
 ```
 
 Both scripts are needed for a complete record: the first covers the encoder
-surface and the C-to-native round trip, the second the decoder surface.
+surface and the C-to-native round trip, the second the decoder surface. They
+can run at once, as the eight-hour record did, at the cost of oversubscribing
+the host further; a host with fewer than 24 hardware threads should run them
+one after the other instead.
 `scripts/fuzz_decoder.sh base|experimental 60` is the shortest decoder run,
 one target at a time against a `target/release` build.
 

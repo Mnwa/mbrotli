@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+- Stop materialising the high-quality match forest. Qualities ten and eleven
+  size the binary-tree forest by the window whenever a stream is not one final
+  block, as the C reference does, but the forest was grown with `Vec::resize`,
+  which writes every link: a payload one byte over a pinned sixteen-bit block
+  with a thirty-bit window made all 8 GiB of that reservation resident, about
+  10.5 million page faults and 15.5 s of kernel time to compress 64 KiB, where
+  the reference leaves the pages untouched. The forest now comes from the
+  allocator's zeroing path, so the same case takes 8 ms and 6 MiB. Output bytes
+  are unchanged. Found by an eight-hour AFL campaign in `large_window`, which
+  also explains the same target's hangs in the earlier six-hour campaign;
+  covered by `tests/hq_forest_allocation.rs`.
+
+- Cover `decompressor::core::distance::standard_table`, which is evaluated at
+  compile time to build `STANDARD_TABLE` and so never ran under test. The new
+  unit test pins that constant to the layout it copies and restores the 100%
+  function-coverage gate under the default feature set.
+
 - Cut cold decoder allocation and memory traffic further. The block-switch
   state, context maps, prefix-code groups, distance layout and dictionary
   scratch a compressed meta-block needs now live in a workspace created on the

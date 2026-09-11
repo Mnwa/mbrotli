@@ -300,6 +300,28 @@ and 11 mutations as timeouts instead of executing them. The default is 30000
 milliseconds, about four times the slowest observed instrumented execution of a
 128 KiB payload at quality 11 across three backends.
 
+The two scripts may run at once, as the 2026-09-11 record did: 46 encoder
+workers under `CAMPAIGN_PARALLEL=1` alongside 13 decoder workers, 59 on 24
+hardware threads. The oversubscription costs executions per second and nothing
+else, but it does inflate wall-clock timings, so a saved hang has to be
+measured standalone before it is read as one. What the eight-hour run's hangs
+turned out to be was the opposite of a fuzzer artefact — a forest the encoder
+wrote instead of reserving — which is why the triage step belongs in the loop
+even when a timeout looks like contention.
+
+```mermaid
+flowchart TD
+    Joint["campaign.sh CAMPAIGN_PARALLEL=1 (46 workers)<br/>+ decoder-campaign.sh (13 workers)"] --> Saved
+    Saved{"worker saved a hang?"}
+    Saved -->|no| Record["record executions, queue,<br/>edges, stability"]
+    Saved -->|yes| Standalone["time the input against the<br/>instrumented binary, alone"]
+    Standalone --> Cost{"wall clock ≈ user time?"}
+    Cost -->|"yes: the work is search"| Slow["slow input: check the timeout<br/>and the target's per-iteration cost"]
+    Cost -->|"no: kernel time and page faults"| Memory["an allocation is being written;<br/>compare peak RSS with the C reference"]
+    Memory --> Fix["deterministic regression test,<br/>then fix"]
+    Slow --> Fix
+```
+
 ## Known gaps
 
 - Decoder targets and their independent C oracle are described below. Encoder
@@ -311,9 +333,11 @@ milliseconds, about four times the slowest observed instrumented execution of a
   `tests/framing.rs` injects short writes and retryable failures at each tested
   offset; the fuzz target varies valid resource/metadata sequences and chunking.
 - **Payloads are capped at 128 KiB.** Inputs longer than that are truncated, so
-  windows of 2^17 and above never span multiple encoder blocks under the
-  fuzzer. `tests/vendor_corpus.rs` covers multi-fragment inputs instead,
-  including a 12 MiB case.
+  no fuzzed stream reaches the multi-fragment sizes `tests/vendor_corpus.rs`
+  covers, including its 12 MiB case. A capped payload does still span more than
+  one encoder block when the case header pins the block size: sixteen bits
+  makes any payload over 64 KiB non-final in its first block, which is the
+  branch the 2026-09-11 campaign's `large_window` finding came from.
 - **CI smoke campaigns are bounded evidence.** `.github/workflows/ci-fuzz.yml`
   runs manual campaigns including serialized dictionaries and framing; a short
   campaign is not a substitute for longer fuzzing.

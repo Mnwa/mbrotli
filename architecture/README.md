@@ -29,7 +29,7 @@ and known gaps. For usage examples, start with the [user guide](../docs/README.m
 | [Serialized dictionaries](serialized-dictionary.md) | Experimental parsing, append serialization, public versus private transform behavior, and resource limits. |
 | [Custom encoding and continuations](rfc9841-encoding.md) | Experimental static indexes, context combinations, and stream offsets. |
 | [Framing](framing.md) | Experimental resources, metadata, references, directory, footer, and explicit finalization examples. |
-| [Fuzzing](fuzzing.md) | Isolated AFL package, stable and experimental target selection, input models, bidirectional C/Rust round-trip oracles, shared encoder seeds, encoder and decoder campaign structure, and regression replay. |
+| [Fuzzing](fuzzing.md) | Isolated AFL package, stable and experimental target selection, input models, bidirectional C/Rust round-trip oracles, shared encoder seeds, encoder and decoder campaign structure, concurrent campaigns and hang triage, and regression replay. |
 | [Continuous integration](ci.md) | Automatic checks, tag-triggered fuzz/Miri/ASan, API compatibility, feature-isolated AFL replay, cache boundaries, archived findings and function-coverage gating. |
 
 ## Module map
