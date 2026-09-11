@@ -4,7 +4,7 @@
 //! features and select either codec alongside `std` or `no_std`. For example:
 //!
 //! ```toml
-//! mbrotli = { version = "0.2", default-features = false, features = ["std", "decompression"] }
+//! mbrotli = { version = "0.3", default-features = false, features = ["std", "decompression"] }
 //! ```
 //!
 //! A disabled codec has no module, API re-exports, dictionaries or I/O adapters.
@@ -288,7 +288,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! mbrotli = { version = "0.2", default-features = false, features = ["no_std", "decompression"] }
+//! mbrotli = { version = "0.3", default-features = false, features = ["no_std", "decompression"] }
 //! ```
 //!
 //! Add `"compression"` for both codecs, or use `"std"` instead of `"no_std"` for standard

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v0.3.0](https://github.com/Mnwa/mbrotli/releases/tag/v0.3.0) - 2026-09-11
+
 - Regenerate benchmark charts from the recorded compression and decompression
   CSVs. Refresh the decoder overview, all twelve quality charts and their
   tables; confirm the compressor charts already match the recorded data.
