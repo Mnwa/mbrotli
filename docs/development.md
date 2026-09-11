@@ -27,6 +27,14 @@ optimized while retaining debug assertions and overflow checks:
 CARGO_PROFILE_TEST_OPT_LEVEL=1 cargo test --workspace --all-features --locked
 ```
 
+`--all-features` activates `no_std`, which removes std-only adapters and parallel
+APIs. Also exercise the std surface and experimental extensions:
+
+```sh
+cargo test --workspace --locked
+cargo test --workspace --features experimental --locked
+```
+
 ## Coverage
 
 The repository requires every changed Rust function to be exercised and targets
@@ -35,13 +43,16 @@ The repository requires every changed Rust function to be exercised and targets
 ```sh
 rustup component add llvm-tools-preview
 cargo install cargo-llvm-cov --version 0.9.0 --locked
-CARGO_INCREMENTAL=1 CARGO_PROFILE_TEST_OPT_LEVEL=1 cargo llvm-cov --workspace --all-features --locked --html --fail-under-functions 100
+cargo llvm-cov clean --workspace
+CARGO_INCREMENTAL=1 CARGO_PROFILE_TEST_OPT_LEVEL=1 cargo llvm-cov --workspace --features experimental,diagnostics,hotpath-cpu,hotpath-alloc --locked --no-report
+CARGO_INCREMENTAL=1 CARGO_PROFILE_TEST_OPT_LEVEL=1 cargo llvm-cov --workspace --all-features --locked --lib --test no_std --no-report
+cargo llvm-cov report --workspace --html --fail-under-functions 100
 ```
 
 The explicit incremental setting matches CI. Disabling it at optimization
 level 1 can lose coverage counters for small public APIs during automatic
-cross-crate inlining, even when tests call them. The coverage command cleans
-previous workspace coverage artifacts before running tests.
+cross-crate inlining, even when tests call them. Clean workspace coverage artifacts before the first run; keep the profiles
+from both feature configurations for the combined report.
 
 Inspect the report in `target/llvm-cov/html/`; passing tests alone do not show
 which functions executed. Coverage reports are local artifacts.
@@ -53,8 +64,10 @@ changes there, or to a public API its targets call, run from `fuzz/afl/`:
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo afl test
+cargo clippy --all-targets --no-default-features -- -D warnings
+cargo clippy --all-targets --no-default-features --features experimental -- -D warnings
+cargo afl test --no-default-features
+cargo afl test --no-default-features --features experimental
 ```
 
 `cargo afl test` links the AFL runtime and replays committed regressions.
@@ -65,7 +78,7 @@ and crash minimization.
 
 | Path | Contents |
 | --- | --- |
-| `src/` | Public compressor API and private implementation |
+| `src/` | Public codec APIs and private implementations |
 | `tests/` | Public API, compatibility, and integration tests |
 | `examples/` | Runnable usage and profiling examples |
 | `benches/` | Criterion comparisons with C |
@@ -83,8 +96,8 @@ Vendored upstream files and externally authored specifications are maintained
 separately.
 
 Routine CI runs formatting, lint, documentation, packaging, tests, and AFL
-regression replay. Coverage, Miri, sanitizer, fuzz campaigns, and benchmarks are
-separate manual workflows. See [CI mechanics](../architecture/ci.md) and
+regression replay. Separate workflows cover coverage and benchmarks; release tags
+also trigger Miri, sanitizers, fuzz campaigns and heavy decoder checks. See [CI mechanics](../architecture/ci.md) and
 [benchmark commands](benchmarking.md).
 
 Codec feature isolation is checked with `python3 scripts/check_codec_features.py`.

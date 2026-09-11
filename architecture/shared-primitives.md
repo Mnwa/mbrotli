@@ -60,7 +60,7 @@ and public API identities intact while making common data accessible to both cod
 Codec gates remove unused private primitives as well as public APIs. Encoder
 search/hash/entropy modules require `compression`; decoder dictionary modules
 require `decompression`. Built-in words and format tables are common. Public
-decode dictionary types now live in `src/dictionary/decode.rs`, with the root
+decode dictionary types live in `src/dictionary/decode.rs`, with the root
 facade retaining prepared dictionary exports when compression is enabled.
 Shared configuration and finish errors live in private root modules; see
 [codec feature boundaries](codec-features.md) for their ownership diagram.

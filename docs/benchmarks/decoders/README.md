@@ -2,7 +2,7 @@
 
 [Benchmark index](../README.md)
 
-Recorded run: **decoder-synthetic-final-2026-09-10-090040** (2026-09-10).
+Published measurements: **2026-09-10**. See the report for provenance limits.
 [CSV](../decoder-comparison.csv) · [Environment](../decoder-comparison-environment.json) · [Methodology and limits](../decoder-comparison.md).
 
 ![Median decompression speed relative to C](charts/overview.svg)

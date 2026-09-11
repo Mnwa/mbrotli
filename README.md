@@ -60,7 +60,7 @@ source qualities **0–11**. SIMD Brotli shares Rust brotli's decoder and is omi
 Burli decodes every source quality. All **384 cases** restore the original bytes.
 
 Across the eight equally weighted inputs, the median speed / Burli is
-**1.013×** (previously 0.967× in a separate run), and the median speed / Google
+**1.013×**, and the median speed / Google
 C ranges from **3.1× to 3.7×** by source quality. Empty and tiny inputs retain
 the same weight as larger datasets. The chart shows per-quality medians of
 C-time/decoder-time ratios; above **1×** is faster than C. Throughput in the
@@ -333,9 +333,9 @@ Leave `std` and `hotpath*` disabled throughout the dependency graph for a std-fr
 
 ## Compatibility
 
-The encoder is ported from **Google Brotli v1.2.0** (`028fb5a`); the test
-reference in `brotli-ffi/vendor/brotli` is pinned to upstream `master` at
-`4508218e` (2026-09-01), which still reports version 1.2.0. Ordinary encoding at qualities **0–11** and windows **10–24** is compared
+The test reference in `brotli-ffi/vendor/brotli` is pinned to
+**Google Brotli v1.2.0**, revision `4508218e`. Ordinary encoding at qualities
+**0–11** and windows **10–24** is compared
 byte-for-byte with equivalent C streaming settings.
 
 That comparison requires matching configuration, dictionary, declared input size,
@@ -367,11 +367,8 @@ from the ordinary encoder's byte-identity checks. See the [dictionary and format
 
 The repository includes differential tests against the pinned C encoder and decoder,
 cross-API and cross-backend checks, AFL++ fuzz targets, Miri checks, and AddressSanitizer
-workflows. The most recent campaign ran 59 AFL++ workers over both surfaces and both
-feature builds for eight hours — 914.9 million executions, no crash, and one fixed
-defect in how the high-quality match finder reserved its forest. Read the
-[encoder verification report][validation] and the separate
-[native decoder report][decoder-checks] for tested configurations, dated results,
+workflows. Read the [compatibility and validation guide][validation] and the
+[native decoder checks][decoder-checks] for supported configurations,
 reproduction commands, and limitations. Testing and fuzzing are evidence, not formal verification.
 
 The crate enforces `#![cfg_attr(not(test), forbid(unsafe_code))]`. This describes
@@ -404,9 +401,9 @@ The [development guide][development] covers local checks, coverage, and fuzzing.
 [development]: ./docs/development.md
 [architecture]: ./architecture/README.md
 [benchmarks]: ./docs/benchmarks/README.md
-[bench-qualities]: ./docs/benchmarks/qualities/README.md
-[bench-csv]: ./docs/benchmarks/library-comparison.csv
-[bench-chart]: ./docs/benchmarks/library-comparison-charts/tradeoff.svg
+[bench-qualities]: ./docs/benchmarks/encoders/README.md
+[bench-csv]: ./docs/benchmarks/encoder-comparison.csv
+[bench-chart]: ./docs/benchmarks/encoders/charts/overview.svg
 [benchmarking]: ./docs/benchmarking.md
 [google-brotli]: https://github.com/google/brotli
 

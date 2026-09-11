@@ -1,16 +1,14 @@
-# Library benchmark refresh — 2026-09-07
+# Compression comparison — 2026-09-07
 
-[Benchmark index](README.md) · [Results by quality](qualities/README.md)
+[Benchmark index](README.md) · [Results by quality](encoders/README.md)
 
-This run refreshes the five-library comparison at encoder revision
-`ce83e1067ca85a2cb6e7ee4826c91b4ed8d0e072`. The [432-case CSV](library-comparison.csv)
-and [environment record](library-comparison-environment.json) supply every timing,
-confidence bound, compressed size, and provenance field used by the quality
-pages. Encoder code and benchmark settings are unchanged by this refresh.
+The [432-case CSV](encoder-comparison.csv) and
+[environment record](encoder-comparison-environment.json) describe encoder revision
+`ce83e1067ca85a2cb6e7ee4826c91b4ed8d0e072` on the recorded machine.
 
 ## Final measurements
 
-![Median speed and output relative to C by quality](library-comparison-charts/tradeoff.svg)
+![Median speed and output relative to C by quality](encoders/charts/overview.svg)
 
 Each quality summarizes eight equally weighted datasets. Speed / C is C mean
 latency divided by the encoder's mean latency for the same input; output / C is
@@ -43,19 +41,13 @@ producing 52,809 bytes. Burli measures 64.11 MiB/s with 54,231 bytes. At q11,
 mbrotli measures 1.302 MiB/s against C's 1.096 MiB/s, both producing 46,487 bytes;
 SIMD Brotli measures 1.326 MiB/s with 46,493 bytes.
 
-The [quality pages](qualities/README.md) retain all datasets, all implementations,
+The [quality pages](encoders/README.md) retain all datasets, all implementations,
 and exact timings with 95% mean confidence bounds. Burli supports q0–q5 only.
 Equal quality numbers describe each encoder's effort policy and do not imply
 equal output size.
 
-All 432 compressed sizes match the previously published five-library CSV.
 mbrotli and Google C produce equal output lengths in all 96 shared cases in
 this run. Equal lengths alone do not establish compressed byte identity.
-
-This is a fresh measurement of the current checkout, not a matched before/after
-experiment. Earlier [implementation comparison](implementation-comparison.md)
-and [optimization results](competitor-paths.md) keep their original measurements;
-differences from those runs cannot by themselves establish a code-change speedup.
 
 ## Measurement contract
 
@@ -91,9 +83,9 @@ Run from the repository root; use a fresh baseline name when repeating timings:
 ```sh
 cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench implementations --locked -- --test
 taskset -c 2 cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench implementations --locked -- --save-baseline library-refresh-2026-09-07-191328 --sample-size 30 --warm-up-time 0.2 --measurement-time 0.5 --noplot
-python3 benchmarks/comparison/report.py --baseline library-refresh-2026-09-07-191328 --csv docs/benchmarks/library-comparison.csv
-python3 benchmarks/comparison/quality_docs.py --csv docs/benchmarks/library-comparison.csv --environment docs/benchmarks/library-comparison-environment.json --report docs/benchmarks/library-comparison.md --output docs/benchmarks/qualities
-python3 benchmarks/comparison/plot.py --csv docs/benchmarks/library-comparison.csv --output docs/benchmarks/library-comparison-charts --subtitle 'i7-13700KF; ce83e10; 30 samples; 2026-09-07'
+python3 benchmarks/comparison/report.py --baseline library-refresh-2026-09-07-191328 --csv docs/benchmarks/encoder-comparison.csv
+python3 benchmarks/comparison/quality_docs.py --csv docs/benchmarks/encoder-comparison.csv --environment docs/benchmarks/encoder-comparison-environment.json --report docs/benchmarks/encoder-comparison.md --output docs/benchmarks/encoders
+python3 benchmarks/comparison/plot.py --csv docs/benchmarks/encoder-comparison.csv --output docs/benchmarks/encoders/charts --subtitle 'i7-13700KF; ce83e10; 30 samples; 2026-09-07'
 ```
 
 Plotting uses Matplotlib 3.10.8. Criterion extends slow cases to collect the
@@ -104,19 +96,6 @@ Raw samples remain local under `benchmarks/comparison/target/criterion/`.
 This run also archives all named baseline directories, the matching size
 manifest, logs, exported CSV, and environment under
 `benchmarks/comparison/target/run-archives/library-refresh-2026-09-07-191328/`.
-
-## Validation
-
-- Criterion validation mode passed all 432 cases; the timed sweep also completed
-  successfully after its own full C-decoder preflight.
-- All nine comparison exporter, page, and plot tests passed, as did the existing
-  root benchmark-comparison script test.
-- Checked all 432 exported rows, twelve generated quality pages, report medians,
-  111 SVG documents, local documentation links, and recorded file hashes.
-- Inspected an Alice q5 chart and checked the diff for whitespace errors.
-
-Only reporting text and generated results changed. No Rust functions changed,
-so Rust coverage, AFL campaigns, and workspace code checks were not rerun.
 
 ## Interpretation limits
 

@@ -238,16 +238,10 @@ sizes, smallest and largest chunk sizes, incompressible payloads — plus
 Seeds are generated, not committed: `prepare-seeds.sh` derives them from the
 vendored submodule at `brotli-ffi/vendor/brotli/tests/testdata`, and
 `minimise-seeds.sh` reduces each corpus with `cargo afl cmin`, keeping the
-unminimised original alongside as `seeds/*.raw`. `seeds/generic` is the raw
-test data (24 files, minimised to 21); `seeds/params` is the same files behind
-a parameter header (historically 127, minimised to 85; the generator now also
-includes Q5–Q11 headers for small inputs);
-`seeds/dictionary` is each parameter seed behind two more bytes, at four
-attachment counts (0, 1, 15, 16 — the refused-empty path, one dictionary, the
-format's limit and one past it) crossed with a generous and an impossible
-budget (historically 1016 files, minimised to 90). `seeds/large_window`
-historically reduced to 101 of 508. Those counts predate the Q5–Q11 header
-expansion; current counts depend on the generated and minimized corpus.
+unminimised original alongside as `seeds/*.raw`. `seeds/generic` contains raw test data; `seeds/params` wraps it in parameter
+headers, including small-input Q5–Q11 cases. Dictionary seeds vary attachment
+counts at 0, 1, 15 and 16 with both generous and impossible budgets. Corpus counts
+depend on generation and coverage minimization.
 
 `seeds/serialized` is the exception: RFC 9841 dictionary streams have no
 counterpart in the upstream test data, so the seeds are copies of the committed
@@ -300,27 +294,10 @@ and 11 mutations as timeouts instead of executing them. The default is 30000
 milliseconds, about four times the slowest observed instrumented execution of a
 128 KiB payload at quality 11 across three backends.
 
-The two scripts may run at once, as the 2026-09-11 record did: 46 encoder
-workers under `CAMPAIGN_PARALLEL=1` alongside 13 decoder workers, 59 on 24
-hardware threads. The oversubscription costs executions per second and nothing
-else, but it does inflate wall-clock timings, so a saved hang has to be
-measured standalone before it is read as one. What the eight-hour run's hangs
-turned out to be was the opposite of a fuzzer artefact — a forest the encoder
-wrote instead of reserving — which is why the triage step belongs in the loop
-even when a timeout looks like contention.
-
-```mermaid
-flowchart TD
-    Joint["campaign.sh CAMPAIGN_PARALLEL=1 (46 workers)<br/>+ decoder-campaign.sh (13 workers)"] --> Saved
-    Saved{"worker saved a hang?"}
-    Saved -->|no| Record["record executions, queue,<br/>edges, stability"]
-    Saved -->|yes| Standalone["time the input against the<br/>instrumented binary, alone"]
-    Standalone --> Cost{"wall clock ≈ user time?"}
-    Cost -->|"yes: the work is search"| Slow["slow input: check the timeout<br/>and the target's per-iteration cost"]
-    Cost -->|"no: kernel time and page faults"| Memory["an allocation is being written;<br/>compare peak RSS with the C reference"]
-    Memory --> Fix["deterministic regression test,<br/>then fix"]
-    Slow --> Fix
-```
+The encoder and decoder scripts can run together when host resources permit.
+Oversubscription reduces executions per worker and distorts timeout observations.
+Reproduce saved hangs standalone; inspect elapsed/user time, page faults and peak
+memory before deciding whether the cause is search cost, allocation or a loop.
 
 ## Known gaps
 
@@ -336,8 +313,7 @@ flowchart TD
   no fuzzed stream reaches the multi-fragment sizes `tests/vendor_corpus.rs`
   covers, including its 12 MiB case. A capped payload does still span more than
   one encoder block when the case header pins the block size: sixteen bits
-  makes any payload over 64 KiB non-final in its first block, which is the
-  branch the 2026-09-11 campaign's `large_window` finding came from.
+  makes any payload over 64 KiB non-final in its first block.
 - **CI smoke campaigns are bounded evidence.** `.github/workflows/ci-fuzz.yml`
   runs manual campaigns including serialized dictionaries and framing; a short
   campaign is not a substitute for longer fuzzing.

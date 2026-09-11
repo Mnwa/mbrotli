@@ -138,17 +138,13 @@ build; the experimental phase fuzzes 24 targets of a
 The phases run one after the other so every worker owns a hardware thread.
 `CAMPAIGN_PARALLEL=1` runs them together instead: the campaign then costs one
 phase of wall clock and oversubscribes the host, which lowers executions per
-second per worker. The two scripts can also run at the same time as each other,
-as the eight-hour record did — 46 encoder workers alongside 13 decoder ones on
-24 hardware threads. Results belong in the
-[correctness proof](../../docs/correctness.md).
+second per worker. Run both scripts together only when host resources permit.
+Record results with revision, corpus and feature configuration; see
+[validation limits](../../docs/correctness.md).
 
-A saved hang is a slow execution, not a proven loop, and on an oversubscribed
-host wall clock is not evidence by itself. Time it standalone against the
-instrumented binary before drawing a conclusion, and watch resident memory as
-well as the clock: the eight-hour campaign's only findings were `large_window`
-hangs whose seconds were kernel time faulting in a window-sized allocation, not
-search.
+A saved hang needs standalone reproduction against the instrumented binary.
+Inspect elapsed/user time, resident memory and page faults before classifying it
+as search cost, allocation work or a non-terminating loop.
 
 ## Triage and required checks
 
@@ -208,7 +204,7 @@ every worker runs, and an optional execution timeout in milliseconds, 5000 by
 default. Set `SEED_ROOT` to carry an earlier campaign's exploration forward:
 when `$SEED_ROOT/<config>-<target>` exists it replaces that worker's corpus,
 which is where a `cargo afl cmin` reduction of a previous queue belongs.
-Results belong in the [correctness proof](../../docs/correctness.md).
+Record the revision, corpus, feature configuration and results with each run.
 
 `decompress` and `decode_streaming` additionally consume arbitrary bytes directly.
 Their shared synthetic random-byte fixtures are described in

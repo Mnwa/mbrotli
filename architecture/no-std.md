@@ -77,7 +77,7 @@ all platforms and math libraries is not guaranteed by the logarithm tolerance.
 CI checks the library and experimental dictionaries for `thumbv7em-none-eabi`,
 a target with no standard library, and runs host tests with defaults disabled.
 Default and explicit std-feature tests continue to cover the omitted APIs;
-`--all-features` now exercises the `no_std` API because that feature takes
+`--all-features` exercises the `no_std` API because that feature takes
 precedence. `benches/alloc.rs` validates and times the alloc-backed one-shot API against C
 in either feature mode, recording throughput and output size for text, binary,
 repeated, noisy, small, and large inputs.

@@ -1,9 +1,11 @@
-# Median results by quality
+# Encoder comparison
 
 [Benchmark index](../README.md)
 
 Recorded run: **library-refresh-2026-09-07-191328** (2026-09-07).
-[Raw results](../library-comparison.csv) · [Environment](../library-comparison-environment.json) · [Run analysis](../library-comparison.md).
+[Raw results](../encoder-comparison.csv) · [Environment](../encoder-comparison-environment.json) · [Run analysis](../encoder-comparison.md).
+
+![Median compression speed and size relative to C](charts/overview.svg)
 
 All eight datasets contribute equally to each median, including empty and tiny input.
 For each dataset, speed / C = C mean latency / implementation mean latency;

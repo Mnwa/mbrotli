@@ -156,17 +156,10 @@ rather than `2 << lgwin`; any other stream gets the window's worth. The
 forest only grows, and a reused matcher keeps the largest one it has needed;
 the links of positions a stream never stored are never followed, so nothing
 is cleared between streams. A forest that has to grow is taken from the
-allocator's zeroing path, the previous one released first, rather than grown
-and filled in place: the reservation matches the reference's, but the reference
-never touches those pages, and a stream that is not one final block reserves a
-window's worth of links whatever its length — 8 GiB at a thirty-bit window — of
-which a short stream reads almost none. Writing them would materialise a
-reservation the reference leaves virtual, which is what an eight-hour AFL
-campaign reported as a hang in `large_window`. The buckets are written once on
-the first preparation with the empty marker rather than zeroed and then
-refilled. A sixteen-byte call used to zero a 32 MiB forest and a mebibyte of
-literal prices; both are now sized by the stream (`ZopfliCostModel::reserve`
-sizes the prices per block).
+allocator's zeroing path after releasing the old allocation. A non-final first
+block can reserve a full window of links even for short input; untouched links
+must not be eagerly materialized. Buckets are initialized with their empty marker
+on first preparation. `ZopfliCostModel::reserve` sizes literal prices per block.
 
 Three bounds shape what it finds, all from the reference:
 
@@ -270,14 +263,7 @@ the reference's decisions:
   `pos + best_len + 1 ..= pos + len` and calling `ZopfliNode::record` on each
   node, instead of indexing `nodes[pos + l]` per length; the tree-match loop
   does the same over `pos + len ..= pos + max_match_len`.
-- A counted `while` over the probe table rather than an iterator: measured
-  with callgrind, the `enumerate` form carried twice the loop overhead, and
-  the loop body now runs in about 23 instructions with a spill-free register
-  set (it was 33, with seven stack reloads per probe).
-
-Alice at quality eleven fell from 2.10 to 1.71 billion instructions with
-these two changes together, against 1.92 for the C reference in the same
-binary, and the command stream is unchanged.
+- A counted `while` walks the probe table with the loop state held by value.
 
 Two shortcuts keep it tractable. `compute_minimum_copy_length` refuses to price
 a copy shorter than one already known to reach its destination more cheaply.

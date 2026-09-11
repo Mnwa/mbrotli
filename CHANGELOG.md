@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+- Unify benchmark documentation under `encoder-comparison` / `decoder-comparison`
+  reports and `encoders/` / `decoders/` quality pages, with matching chart paths
+  and updated generators and links.
+
+- Shorten user and architecture documentation, remove historical optimization
+  narratives, and consolidate navigation around usage, current mechanics and
+  reproducible validation. Preserve the README structure and a concise record
+  of the eight-hour AFL campaign. Correct stale links and feature-check instructions.
+
 ## [v0.3.0](https://github.com/Mnwa/mbrotli/releases/tag/v0.3.0) - 2026-09-11
 
 - Regenerate benchmark charts from the recorded compression and decompression

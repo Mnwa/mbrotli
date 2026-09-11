@@ -28,7 +28,7 @@ class PlotTests(unittest.TestCase):
         plt.close(fig)
 
     def test_dataset_figures_keep_latency_throughput_and_exact_output(self):
-        rows = load_rows(ROOT / "docs/benchmarks/competitor-paths-comparison.csv")
+        rows = load_rows(ROOT / "docs/benchmarks/encoder-comparison.csv")
         for corpus in ["empty", "tiny-text", "alice29"]:
             group = cases(rows, 0, corpus)
             with patch("matplotlib.pyplot.close"):
@@ -45,7 +45,7 @@ class PlotTests(unittest.TestCase):
             plt.close(fig)
 
     def test_median_figures_use_calculated_ratios_and_render_complete_overviews(self):
-        rows = load_rows(ROOT / "docs/benchmarks/competitor-paths-comparison.csv")
+        rows = load_rows(ROOT / "docs/benchmarks/encoder-comparison.csv")
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
             with patch("matplotlib.pyplot.close"):
@@ -59,7 +59,7 @@ class PlotTests(unittest.TestCase):
             positions = [text.index(f"Quality {q}") for q in quality_order(rows)]
             self.assertEqual(positions, sorted(positions))
             before_after_chart(ROOT / "docs/benchmarks/competitor-paths-before-after.csv", output / "before-after.svg")
-            for filename in ["median.svg", "throughput.svg", "size.svg", "tradeoff.svg", "before-after.svg"]:
+            for filename in ["median.svg", "throughput.svg", "size.svg", "overview.svg", "before-after.svg"]:
                 self.assertTrue(ET.parse(output / filename).getroot().tag.endswith("svg"))
             invalid = output / "invalid.csv"
             invalid.write_text("corpus,quality,before_ns,after_ns\nempty,0,1,1\n")

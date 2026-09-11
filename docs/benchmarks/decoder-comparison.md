@@ -1,18 +1,12 @@
-# Decoder implementation comparison
+# Decompression comparison — 2026-09-10
 
-[Benchmark index](README.md) · [All decoder quality pages](decoders/README.md)
+[Benchmark index](README.md) · [All quality pages](decoders/README.md) ·
+[Published CSV](decoder-comparison.csv)
 
-With the original eight inputs unchanged, the current mbrotli median speed
-relative to Burli is **1.013×** across all 96 corpus/quality pairs. The
-previously recorded value was **0.967×**. Every per-quality median is now at or
-above **1.006×**, so mbrotli matches or leads Burli's median at every source
-quality; median speed relative to Google C ranges from **3.1× to 3.7×**. Each
-corpus/quality pair has equal weight, including empty and tiny inputs.
-
-The complete run **decoder-workspace-split-2026-09-10** measures all 384 decoder
-cases with exactly the previous corpora, q0–q11, generic mode, requested window
-22 and cold native APIs. Empty input and tiny text retain equal weight in the
-median. Every decoder restored the exact original bytes before timing.
+The published 384 rows cover four decoders on eight identical C-produced inputs
+at each source quality. mbrotli's median speed relative to Burli is **1.013×**
+across all 96 corpus/quality pairs. Empty and tiny inputs have the same weight as
+large inputs. Per-workload results include cases where mbrotli is slower.
 
 | Source quality | Google C | mbrotli | Rust brotli | Burli | mbrotli / Burli |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -29,49 +23,35 @@ median. Every decoder restored the exact original bytes before timing.
 | q10 | 1.000× | 3.236× | 0.604× | 3.225× | 1.006× |
 | q11 | 1.000× | 3.131× | 0.582× | 3.137× | 1.020× |
 
-The Google C, mbrotli, Rust brotli and Burli columns are the median across the
-eight datasets of C mean time / that decoder's mean time (higher is faster; 1×
-matches C). The final column is the median of the per-corpus Burli time /
-mbrotli time ratios, which is not the ratio of the two C-relative medians.
+Each library column is the median of eight C mean time / decoder mean time
+ratios. The last column uses direct Burli time / mbrotli time ratios. The overall
+value takes the median of all 96 direct ratios, not an average of quality medians.
+Higher is faster; medians do not establish statistical significance.
 
-Each value takes Burli mean time / mbrotli mean time for each matching corpus,
-then the median. For eight values this averages the fourth and fifth sorted
-ratios. The overall value uses all 96 ratios; it does not average the twelve
-quality medians or divide two medians relative to C. These are separate runs,
-not paired trials: differences also include host variation. The controlled
-[78-case before/after experiment](decoder-literal-paired.csv) reports code effects.
+## Measurement contract
 
-![Median decoder speed relative to C](decoders/charts/overview.svg)
+Cold native APIs include construction, allocation, decoding and disposal. C gets
+the known output capacity; Rust brotli includes 4 KiB I/O adaptation. Throughput
+counts restored bytes. The shared input sizes belong to the source streams,
+not to a decoder. Every case must restore the original bytes before timing.
 
-> The SVG charts and per-quality pages under `decoders/` still render the
-> preceding **decoder-synthetic-final-2026-09-10-090040** run; regenerating them
-> needs the Matplotlib-equipped benchmarking environment (`decoder_docs.py`).
-> The table above and [`decoder-comparison.csv`](decoder-comparison.csv) are the
-> current source of truth for this run.
+The corpus is empty input, tiny text, Alice, cyclic Alice at 1 MiB, structured
+binary at 64 KiB, random bytes at 64 KiB and 1 MiB, and repeated `a` at 1 MiB.
+Parameters are generic mode and window 22 on an i7-13700KF/WSL2 host. The reported
+sampling settings are 30 samples, 0.2 s warmup and at least 0.5 s measurement.
 
-The [CSV](decoder-comparison.csv),
-[environment](decoder-comparison-environment.json) and
-[quality pages](decoders/README.md) retain every measurement,
-including cases where Burli is faster. The preceding run remains in the
-[historical CSV](decoder-comparison-before-literal-batching.csv).
+## Provenance and limits
 
-## Unchanged measurement contract
+The CSV, quality tables and charts agree. The checked-in
+[environment record](decoder-comparison-environment.json) has a different CSV hash
+and summary, so it cannot authenticate the source revision, binary or exact run
+identity of these published timings. Treat the results as exploratory; a fresh
+run with matching provenance is needed for a reproducible performance claim.
 
-The eight inputs are empty, 44-byte tiny text, Alice, cyclic Alice at 1 MiB,
-structured binary at 64 KiB, random bytes at 64 KiB and 1 MiB, and repeated
-`a` at 1 MiB. The same deterministic generator and C encoder prepare the same
-streams. All four decoders use their cold native APIs, including construction,
-allocation and disposal. C receives known output capacity; Rust brotli includes
-its 4 KiB I/O adapter. Source preparation and validation remain outside timing.
-Burli covers every source quality. Both comparison suites use the shared
-`core::corpora` generator. The decoder benchmark writes to
-`target/criterion-decoders`.
-
-Intel Core i7-13700KF, WSL2, logical CPU 2; Rust 1.98.1; normal release flags;
-30 samples, 0.2 s warmup and at least 0.5 s measurement per case. Compilation,
-tests and profiles finish before timing. Sampling intervals do not capture
-all host scheduling, clock, thermal or allocator variation. No significance
-claim is inferred for the across-corpus medians.
+One shared host, fixed implementation order and uncontrolled clocks/thermals can
+bias results beyond sampling intervals. These data cover cold serial decoding
+of standard-window C streams; retained state, streaming, dictionaries and other
+producers require separate measurements.
 
 ## Reproduce
 
@@ -79,27 +59,8 @@ claim is inferred for the across-corpus medians.
 cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench decoders --locked -- --test
 cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench decoders --locked -- --save-baseline my-decoders --sample-size 30 --warm-up-time 0.2 --measurement-time 0.5 --noplot
 python3 benchmarks/comparison/report.py --decoding --baseline my-decoders --csv /tmp/my-decoders.csv
-python3 benchmarks/comparison/decoder_docs.py \
-  --csv docs/benchmarks/decoder-comparison.csv \
-  --environment docs/benchmarks/decoder-comparison-environment.json \
-  --report docs/benchmarks/decoder-comparison.md \
-  --output docs/benchmarks/decoders
 ```
 
-Use a fresh baseline name for another run. This run's raw samples, size manifest,
-estimates and logs are archived locally in `benchmarks/comparison/target/run-archives/decoder-synthetic-final-2026-09-10-090040/`.
-
-The recorded timings are reused unchanged. Restoring the benchmark default
-changes corpus selection and reporting only; the decoder implementation and
-timed adapters are unchanged. The environment record retains the exact command
-and hashes from the measured run.
-
-## Publication checks
-
-The restored default passed all 384 Criterion preflight cases; every corpus,
-source quality, decoder and input/compressed size matches the published CSV.
-Formatting, strict workspace and comparison Clippy, 930 workspace tests and
-doctests, comparison tests and 14 Python report tests passed. Instrumented
-preflight covered all five compiled functions/closures in the decoder benchmark
-module (100% function coverage). All 13 SVGs and 179 local documentation links
-were checked. Coverage output remains a local artifact.
+Use a fresh baseline name and archive its size manifest, source/binary identity,
+commands and environment together. [Benchmarking](../benchmarking.md) covers
+report generation and the separate root API benchmarks.

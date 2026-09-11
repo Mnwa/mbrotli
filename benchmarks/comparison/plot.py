@@ -79,7 +79,7 @@ def render(rows, output, subtitle):
     fig.text(.5, .02, subtitle + "\nPer-dataset ratios to C · equal weight · qualities ordered by mbrotli median speed / C",
              ha="center", fontsize=10)
     fig.tight_layout(rect=(0, .07, 1, .89))
-    fig.savefig(output / "tradeoff.svg", metadata={"Date": None})
+    fig.savefig(output / "overview.svg", metadata={"Date": None})
     plt.close(fig)
 
 

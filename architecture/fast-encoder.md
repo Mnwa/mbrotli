@@ -406,10 +406,8 @@ parameters, so the shift and the match predicate are compile-time constants
 inside the hot loop. The table itself is handed to the specialised body as an
 array reference `&mut [i32; 1 << TABLE_BITS]` (`first_chunk_mut` on the
 prepared slice), so every hash index — a `64 - TABLE_BITS` shift — is provably
-inside it and no lookup carries a bounds check. A slice re-cut to the same
-length does not give the compiler that proof once the scan is compiled inside
-the backend-specific `vectorize` function, which is why the earlier re-slicing
-form left a compare on every table access.
+inside it and no lookup carries a bounds check. The array type preserves this
+bound inside the backend-specific `vectorize` function.
 
 Inside q1's `create_commands` the pass-one command and literal vectors are
 moved into locals for the duration of the scan and moved back at its end:
@@ -448,7 +446,7 @@ empty metadata block that pushes the stream back onto a byte boundary — and,
 when there is buffered input, a short non-final fragment ahead of it. An empty
 input skips the fragment entirely, exactly as the reference does when a flush
 arrives with nothing buffered, and nothing at all is emitted when the stream
-was already aligned. See [compressor.md](compressor.md) §4.2.
+was already aligned. See [compressor flushing](compressor.md#one-shot-and-incremental-flow).
 
 Quality 1 emits a code description per meta-block. Frequent flushes create
 smaller blocks and can substantially increase compressed size.

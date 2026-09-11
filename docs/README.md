@@ -1,34 +1,51 @@
 # User guide
 
-`mbrotli` compresses and decompresses Brotli streams. Start with the
-[README example](../README.md#getting-started), then choose the output API
-that fits your application.
+[Quick start](../README.md#quick-start) · [API reference](https://docs.rs/mbrotli)
 
-[Benchmark results](benchmarks/README.md) compare speed and output size using
-medians across all datasets, with a chart and exact measurements for each
-quality and workload. The [decoder comparison](benchmarks/decoders/README.md)
-measures four libraries on identical compressed inputs at all source qualities.
-For specialized use, see [dictionaries](dictionaries.md)
-and [parallel compression](parallel.md).
+| Task | Read |
+| --- | --- |
+| Decode and set resource limits | [Decompression](#decompression) |
+| Choose compression settings | [Configuration](#configuration) |
+| Control allocations | [Output buffers](#output-buffers) and [reuse](#reusing-memory) |
+| Connect synchronous I/O or drive a session | [Streaming](#streaming-and-completion) |
+| Share a dictionary or use extended formats | [Dictionaries](dictionaries.md) |
+| Split a job across workers | [Parallel compression](parallel.md) |
+| Compare libraries | [Benchmarks](benchmarks/README.md) |
 
 ## Decompression
 
-Use `Decompressor` with `DecoderConfig` for reusable decoding. `decompress`
-returns a Vec, `decompress_into` appends atomically, and `decompress_to_slice`
-uses caller storage. `start` exposes incremental consumed/produced counts;
-`reader` and `writer` adapt synchronous I/O. Declare final input with `Finish`,
-and explicitly finish writers before recovering the sink.
+`Decompressor` owns reusable state. `decompress` returns a Vec,
+`decompress_into` appends atomically, and `decompress_to_slice` writes into
+caller storage. Sessions report consumed/produced counts; `reader` and `writer`
+adapt synchronous I/O.
 
-The default accepts one complete raw member and extended windows up to 62 bits.
-Configure `DecodeLimits` for input, output and workspace budgets;
-`MemberMode::Concatenated` accepts successive members. RAW dictionaries work in
-all profiles. `DecodeDictionary` avoids encoder search indexes, and existing
-`PreparedDictionary` values can also be borrowed for decoding. SERIALIZED/custom
-dictionaries require `experimental`; I/O adapters are absent with `no_std`.
+The default accepts one complete raw member and extended window declarations
+up to 62 bits. Numeric budgets are unlimited. Configure them for your application:
 
-See the [usage example](../README.md#decompression),
-[decoder mechanics](../architecture/decompressor.md), and
-[compatibility and measured limits](../architecture/decompressor-compatibility.md).
+```rust
+use mbrotli::{DecodeLimits, DecoderConfig, Decompressor, WindowLimit};
+
+fn decode_payload(input: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let limits = DecodeLimits::default()
+        .with_max_input_bytes(Some(1 << 20))
+        .with_max_output_bytes(Some(8 << 20))
+        .with_max_workspace_bytes(Some(32 << 20));
+    let config = DecoderConfig::default()
+        .with_window_limit(WindowLimit::standard(24)?)
+        .with_limits(limits);
+    let mut decoder = Decompressor::new(config)?;
+    Ok(decoder.decompress(input)?)
+}
+```
+
+The workspace budget excludes caller output and borrowed dictionaries; it is
+not a process-memory limit. `MemberMode::Concatenated` accepts successive raw
+members. `DecodeDictionary` prepares decoding data without encoder indexes;
+`PreparedDictionary` can also be borrowed. RAW dictionaries work in all profiles;
+serialized/custom dictionaries require `experimental`.
+
+See [decoder mechanics](../architecture/decompressor.md) and
+[compatibility limits](../architecture/decompressor-compatibility.md).
 
 ## Configuration
 
@@ -106,6 +123,35 @@ copying the workspace. For one stream split across workers, see
 
 ## Streaming and completion
 
+`reader(source, stream)` consumes source bytes and yields transformed bytes
+through `Read`. `writer(sink, stream)` accepts source bytes through `Write`
+and delivers transformed bytes to the sink. Compression takes plain input;
+decompression takes compressed input. Both adapter families require std APIs.
+
+```rust
+use mbrotli::{Compressor, EncoderConfig, InputSize, Quality};
+use std::io::Write;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let payload = b"streamed payload";
+    let mut encoder = Compressor::new(
+        EncoderConfig::default().with_quality(Quality::Q5),
+    )?;
+    let stream = InputSize::Exact(payload.len() as u64).into();
+    let mut writer = encoder.writer(Vec::new(), stream)?;
+    writer.write_all(payload)?;
+    let compressed = writer.finish().map_err(mbrotli::io::FinishError::into_error)?;
+    assert!(!compressed.is_empty());
+    Ok(())
+}
+```
+
+For a decoder reader, pass compressed input and `DecodeStreamConfig::default()`,
+then read the restored bytes to EOF. `into_parts()` recovers any reader read-ahead.
+A decoder writer must also be finished: finalization reports incomplete or invalid
+input. In a direct decoder session, declare final input with `DecodeOperation::Finish`.
+
+
 A writer borrows the compressor and owns its sink. Use `write_all` for input,
 `flush` for an intermediate decoding boundary, and `finish` to terminate the
 stream. Frequent flushes add block boundaries and can increase output size.
@@ -113,7 +159,7 @@ stream. Frequent flushes add block boundaries and can increase output size.
 `try_finish(&mut self)` supports retrying finalization after an I/O error.
 Consuming `finish` returns the sink on success; `FinishError` retains the writer
 on failure. Use `into_parts()` to recover both the error and writer for retry.
-`into_error()`, as used by the README's in-memory example, discards the writer.
+`into_error()` discards the writer.
 
 The writer retains pending output across short writes and sink errors. An input
 write can succeed after accepting bytes even if delivery then fails; that
@@ -168,6 +214,6 @@ preserves the writer in `FinishError`.
 - [Parallel compression](parallel.md)
 - [Benchmark results by compression quality](benchmarks/README.md)
 - [Running benchmarks and profiling](benchmarking.md)
-- [Correctness proof](correctness.md)
+- [Compatibility and validation](correctness.md)
 - [Development checks](development.md)
 - [Compressor mechanics](../architecture/compressor.md)

@@ -266,9 +266,10 @@ def main():
         for corpus in CORPORA:
             chart(cases(rows, quality, corpus), quality, corpus, charts / f"q{quality}-{corpus}.svg")
         (args.output / f"q{quality}.md").write_text(quality_page(rows, quality, environment, *links))
-    overview = ["# Median results by quality", "", "[Benchmark index](../README.md)", "",
+    overview = ["# Encoder comparison", "", "[Benchmark index](../README.md)", "",
                 f"Recorded run: **{environment['baseline']}** ({environment['date']}).",
                 f"[Raw results]({links[0]}) · [Environment]({links[1]}) · [Run analysis]({links[2]}).", "",
+                "![Median compression speed and size relative to C](charts/overview.svg)", "",
                 "All eight datasets contribute equally to each median, including empty and tiny input.",
                 "For each dataset, speed / C = C mean latency / implementation mean latency;",
                 "output / C = implementation bytes / C bytes. Medians are taken over those ratios.",

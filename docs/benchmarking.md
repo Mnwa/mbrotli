@@ -8,11 +8,27 @@ bars, and complete timings. The strongest mbrotli comparisons appear first;
 the pages explain the ranking and retain every dataset.
 The index also links the recorded run reports, raw data, and limitations.
 
-The [competitor-guided optimization follow-up](benchmarks/competitor-paths.md)
-records pinned source reviews, isolated before/after measurements, and the
-quality-0 and HQ path changes. Its results are separate from the original run.
+Both codecs use the same documentation layout under `docs/benchmarks/`:
 
-## New implementation comparison
+| Artifact | Encoder | Decoder |
+| --- | --- | --- |
+| Report | `encoder-comparison.md` | `decoder-comparison.md` |
+| Measurements | `encoder-comparison.csv` | `decoder-comparison.csv` |
+| Environment | `encoder-comparison-environment.json` | `decoder-comparison-environment.json` |
+| Index and quality pages | `encoders/README.md`, `encoders/q0.md`–`q11.md` | `decoders/README.md`, `decoders/q0.md`–`q11.md` |
+| Charts | `encoders/charts/` | `decoders/charts/` |
+
+Each chart directory contains `overview.svg`. Install plotting support in an
+isolated environment if needed:
+
+```sh
+python3 -m venv /tmp/brotli-plots
+/tmp/brotli-plots/bin/python -m pip install matplotlib==3.10.8
+```
+
+Use that environment's Python for the generation commands below.
+
+## Encoder comparison
 
 Run from the repository root:
 
@@ -69,19 +85,25 @@ confidence bounds, MiB/s, `C time / encoder time`, compressed bytes, and
 `compressed / input`. For empty input, throughput is zero and the compressed
 fraction is undefined; compare latency.
 
-Generate standalone SVG diagrams from a complete exported CSV using Matplotlib:
+Rebuild the checked-in encoder pages and charts with Matplotlib 3.10.8:
 
 ```sh
-python3 -m venv /tmp/brotli-plots
-/tmp/brotli-plots/bin/python -m pip install matplotlib==3.10.8
-/tmp/brotli-plots/bin/python benchmarks/comparison/plot.py --csv /tmp/my-comparison.csv --output /tmp/my-comparison-charts --subtitle 'My CPU and run settings'
+python3 benchmarks/comparison/quality_docs.py \
+  --csv docs/benchmarks/encoder-comparison.csv \
+  --environment docs/benchmarks/encoder-comparison-environment.json \
+  --report docs/benchmarks/encoder-comparison.md \
+  --output docs/benchmarks/encoders
+python3 benchmarks/comparison/plot.py \
+  --csv docs/benchmarks/encoder-comparison.csv \
+  --output docs/benchmarks/encoders/charts \
+  --subtitle 'i7-13700KF; ce83e10; 30 samples; 2026-09-07'
 ```
 
-The charts show throughput with confidence bands, compressed bytes, and the
-speed/size tradeoff across six nontrivial corpora. Empty and tiny inputs remain
-in the CSV, where their per-call latency is easier to assess.
+`quality_docs.py` writes the index, twelve quality pages and their detailed
+charts. `plot.py` writes `overview.svg`, `throughput.svg` and `size.svg` into
+the same charts directory. All eight corpora contribute to the medians.
 
-## Decoder implementation comparison
+## Decoder comparison
 
 The [decoder results](benchmarks/decoders/README.md) compare Google C, mbrotli,
 Rust brotli and Burli on **identical compressed streams**, prepared by Google C
@@ -139,9 +161,9 @@ all individual mean confidence bounds. Shared compressed sizes are listed
 alongside restored lengths instead of ranking decoders by size. See the
 [run report](benchmarks/decoder-comparison.md) for environment and limitations.
 
-## Existing API benchmarks
+## API benchmarks
 
-The original harnesses retain their names, settings, and result locations:
+Run these harnesses to compare specific API modes:
 
 ```sh
 cargo bench --bench compress --locked
@@ -153,7 +175,7 @@ cargo bench --bench track_b --features experimental --locked
 `compress` covers cold, reused, presized, tiny, streaming, flush, dictionary,
 and universal cases against a matched C streaming oracle. `parallel` covers
 task counts and source adapters. `track_b` covers experimental formats.
-Their contracts differ from this new native one-shot comparison. The existing
+Their contracts differ from the cold native one-shot comparison. The
 per-case 95%-of-C gate and its Python tests remain available:
 
 ```sh

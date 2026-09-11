@@ -9,8 +9,8 @@ from quality_docs import CORPORA, dataset_order, load_rows, medians, quality_ord
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / "docs/benchmarks/competitor-paths-comparison.csv"
-ENVIRONMENT = ROOT / "docs/benchmarks/competitor-paths-environment.json"
+SOURCE = ROOT / "docs/benchmarks/encoder-comparison.csv"
+ENVIRONMENT = ROOT / "docs/benchmarks/encoder-comparison-environment.json"
 
 
 class QualityDocsTests(unittest.TestCase):

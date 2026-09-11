@@ -46,7 +46,7 @@
     "benchmarks/comparison/benches/implementations.rs": "4235d7819fcae8a1833fcb7fcbe8abccb7e827d25c4e8248cc6955f94ecab045",
     "brotli-ffi/build.rs": "c2c982f3c5fdf878664ac006b850d8be4885c801ebb37e7c9266a6cc62103064",
     "brotli-ffi/vendor/brotli/tests/testdata/alice29.txt": "7467306ee0feed4971260f3c87421154a05be571d944e9cb021a5713700c38f0",
-    "docs/benchmarks/library-comparison.csv": "d85cf0005a83657f11ff788e1c3a791da406b1e79b714e1010f60d7df4df3dbe",
+    "docs/benchmarks/encoder-comparison.csv": "d85cf0005a83657f11ff788e1c3a791da406b1e79b714e1010f60d7df4df3dbe",
     "benchmarks/comparison/quality_docs.py": "918017b5f3cbba0c3fc2fb47237cc2afb2a39203bc3ed3bb68d782e393740b52",
     "benchmarks/comparison/report.py": "2d0c14227245d0095578d3ed07f3871becff7904d8bfd3480a05092c5ad5865f",
     "benchmarks/comparison/plot.py": "19321f6a22f7b8c7f607d3b043586bd2f89af8e28bb581ed18fbc9e263137229"

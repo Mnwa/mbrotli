@@ -229,8 +229,7 @@ many cached distances a search probes (`last_distances_for`: four up to
 thirty-two slots, ten up to 128, sixteen beyond) and whether slots carry tags
 (depth at most thirty-two). With both constants every slot mask, block index
 and hash shift is an immediate, and the dense tables are arrays whose
-indexing needs no check; a loop that carries a runtime depth was measured to
-spill the values it needs at every candidate.
+indexing needs no runtime shape check.
 
 The reference allocates every bucket's block up front and never initialises
 it, reading a slot only below the counter that guards it. Safe Rust has to
@@ -243,27 +242,12 @@ what `prepare` is told about it:
 | Sparse | a known input below the dense limit; an input of unknown length on a deep shape; unless the dense table already exists | a boxed `[u64; BUCKETS]`: generation stamp, block index with a starter flag, counter | typed pools: `Vec<[u32; 4]>` starters that grow into `Vec<[u32; BLOCK]>` full blocks on their fifth store, tags alongside for tagged shapes | bump the generation |
 | Dense | the matcher's size hint is at least the shape's dense limit — a sixteenth of the table for tagged q5/q6 shapes (64 KiB and 128 KiB of input); for deep q7–q9 shapes an eighth of it on the matcher's first stream (1, 2 and 4 MiB) and a sixty-fourth from its second stream on (256 KiB, 256 KiB and 512 KiB) — or the length is unknown on a tagged shape, or the matcher already holds the dense table and the stream is not compact | `[u16; BUCKETS]` counters | one flat `Vec<u32>` of `BUCKETS * BLOCK` slots, viewed as `[[u32; BLOCK]; BUCKETS]` for a run, zeroed once per matcher | zero the counters |
 
-The dense decision rests on the construction-time size hint rather than on
-`prepare`'s `one_shot` flag: an input longer than one block is not one shot
-at its first block, and choosing the dense table there made every cold
-multi-block call pay for zeroing (and, on WSL2, faulting in) a table of up to
-32 MiB. An unknown length is taken for a long stream on the tagged shapes
-(`expected_input`), because the reference always uses its dense table and a
-stream written in pieces without a size hint — a writer flushing every
-64 KiB — stored every position through the sparse index's dependent loads at
-several times the cost of a counter and a block; the deep shapes keep the
-on-demand layouts there, as only a long stream repays clearing their tables.
-The deep shapes' limit depends on whether the matcher has been reused
-(`streams`): a cold call on a short compressible input stores few positions,
-and clearing an 8 or 16 MiB table for it costs more than compressing it — a
-quarter-mebibyte of zeros at quality seven measured 48% of the reference
-with the table and 234% without — while a matcher on its second stream pays
-the clear once for every stream that follows, and the sparse index's
-dependent load per bucket cost more than the whole search on a
-quarter-mebibyte input (quality 7 binary 81% against 97% with the table).
-That second-stream allocation is deliberate: the crate promises nothing
-about when a reused compressor allocates, only that its output is the
-reference's. The size hint itself is retargetable: a reused encoder whose
+The dense decision uses the construction-time size hint, not `prepare`'s
+`one_shot` flag. Unknown-length streams use dense storage on tagged shapes and
+on-demand layouts on deep shapes. Deep-shape thresholds also depend on whether
+the matcher has been reused. These layout choices preserve candidate order and
+output; allocation timing is not part of the public reuse contract.
+The size hint itself is retargetable: a reused encoder whose
 new hint resolves to the same shape and the same match-finder variant takes
 the hint over (`GreedyEncoder::retarget`, `MatchFinder::retarget`) instead
 of being rebuilt, so a compressor fed inputs of varying lengths keeps its
@@ -386,7 +370,7 @@ The loop body is split in two functions. The search at every position stays
 in the loop; everything a found match entails — the delayed search, the
 distance cache update, the command and the stores — lives in `commit_match`,
 which re-enters the SIMD feature context and is left for the compiler to
-inline (forcing it out of line measured 8–10% slower on q2/q3 text). Both
+inline. Both
 feature-context closures `move` their captures: the context is a separate
 function, and a capture by reference is a pointer it dereferences at every
 use, where a moved value is a local it keeps in a register. The loop's state
