@@ -31,6 +31,10 @@ pub type TargetFn = fn(&Context, &[u8]);
 /// with `decode_roundtrip` sharing the `params_roundtrip` corpus. Every
 /// registered target must have a nonempty corpus.
 pub const TARGETS: &[(&str, TargetFn)] = &[
+    #[cfg(feature = "experimental")]
+    ("framed_decode", crate::framed_targets::framed_decode),
+    #[cfg(feature = "experimental")]
+    ("framed_roundtrip", crate::framed_targets::framed_roundtrip),
     ("decode_roundtrip", crate::decode_targets::decode_roundtrip),
     ("decompress", crate::decode_targets::decompress),
     (

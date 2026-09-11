@@ -14,7 +14,10 @@ graph TD
     Encode --> ECore[private compressor::core]
     Decode --> DCore[private decompressor::core]
     Encode --> Parallel[parallel API and private core: std]
-    Encode --> Framing[framing API and private core: experimental, std]
+    Encode --> Framing[framing writer: experimental, std]
+    Decode --> FDecode[framed decoder and private core: experimental, alloc]
+    Framing --> Wire[codec-neutral framing types]
+    FDecode --> Wire
     ECore --> Shared[private shared primitives]
     DCore --> Shared
     ECore --> SIMD[fearless_simd: selected backend]
@@ -51,6 +54,7 @@ FFI do not appear in public signatures. Each codec compiles independently.
 
 | Specification | Scope |
 | --- | --- |
+| [Framed decoder](framed-decoder.md) | Structured containers, detection, events, dictionaries, validation, budgets and lending reader. |
 | [Native decompressor](decompressor.md) | Parsing, sessions, history, dictionaries, budgets and I/O. |
 | [Owned decoder output](decoder-owned-output.md) | Stored members, allocation transfer and read-ahead accounting. |
 | [Literal and stored-header decoding](decoder-literal-performance.md) | Literal batches and complete stored-member recognition. |
@@ -72,4 +76,4 @@ FFI do not appear in public signatures. Each codec compiles independently.
 | --- | --- |
 | [Implementation comparison](benchmark-comparison.md) | Isolated Criterion suites, validation and symmetric encoder/decoder reports. |
 | [Fuzzing](fuzzing.md) | Target inputs, oracles, campaigns and regression replay. |
-| [Continuous integration](ci.md) | Triggers, checks, artifacts and coverage gating. |
+| [Continuous integration](ci.md) | Triggers, checks, framed fuzz campaigns, artifacts and coverage gating. |

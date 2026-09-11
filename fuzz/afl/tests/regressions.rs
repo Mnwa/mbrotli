@@ -90,7 +90,13 @@ fn arbitrary_decoder_bytes_do_not_panic_on_any_host_backend() {
 
 #[test]
 fn experimental_targets_follow_feature_selection() {
-    for name in ["serialized_dictionary", "framing"] {
+    for name in [
+        "serialized_dictionary",
+        "framing",
+        "decode_serialized",
+        "framed_decode",
+        "framed_roundtrip",
+    ] {
         assert_eq!(
             targets::TARGETS.iter().any(|(target, _)| *target == name),
             cfg!(feature = "experimental"),

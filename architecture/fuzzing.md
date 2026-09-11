@@ -17,11 +17,12 @@ the fuzz package has no direct dependency on the SIMD implementation crate.
 
 The fuzz package has no default features. Its opt-in `experimental` feature
 forwards to both `mbrotli/experimental` and `google-brotli-ffi/experimental`,
-enabling the serialized dictionary parser and its C oracle together. Only
-`serialized_dictionary`, `framing` and `decode_serialized` require it: their
+enabling the serialized dictionary parser and its C oracle together. The targets
+`serialized_dictionary`, `framing`, `decode_serialized`, `framed_decode`, and
+`framed_roundtrip` require it: their
 Cargo binary entries, target bodies, private helpers, C helpers, and `TARGETS`
 entries share the gate. The default build contains 27 targets; enabling the
-feature contains all 30.
+feature contains all 32.
 
 ```mermaid
 flowchart TD
@@ -38,7 +39,7 @@ The package is split so that the AFL dependency stops at the binary layer:
 ```mermaid
 graph TD
     subgraph engine["Engine layer (depends on afl)"]
-        bins["src/bin/ — 27 stable and 3 experimental afl::fuzz! adapters"]
+        bins["src/bin/ — 27 stable and 5 experimental afl::fuzz! adapters"]
     end
 
     subgraph neutral["Engine-neutral layer (no afl dependency)"]
@@ -466,3 +467,34 @@ The arbitrary-byte `decompress` and `decode_streaming` corpora also contain
 compression step. Errors from malformed input are expected; panics and oracle
 violations fail replay. A focused test feeds arbitrary byte arrays of lengths
 0, 1, 2, 3, 7, 31, 256 and 4096 through both targets on every host backend.
+
+## Structured framed decoding
+
+`framed_decode` incrementally parses arbitrary bytes with bounded input, output,
+metadata and chunk counts, varies input/output slices, compares successful owned
+and streaming payload, checks progress, and verifies whole-Vec rollback.
+`framed_roundtrip` creates compressed resources with metadata/repeats through the
+writer, verifies the owned result, then runs the incremental oracle. Both targets,
+binaries, registry entries and seed corpora are experimental-only. The byte-parser
+corpus contains independent signature, raw, stored, metadata and footer fixtures.
+`dictionaries/framed.dict` supplies wire tokens without constraining mutations.
+Both targets run in the experimental matrix of `.github/workflows/ci-fuzz.yml`
+for ten minutes with five-second per-input timeouts and their committed regression
+seeds. CI passes the wire dictionary to `framed_decode` and fails on saved crashes
+or hangs while archiving findings.
+
+```mermaid
+graph LR
+    Bytes[arbitrary bytes] --> Parser[framed_decode]
+    Structured[payload bytes] --> Writer[bounded framing writer]
+    Writer --> Roundtrip[framed_roundtrip: verify owned payload]
+    Roundtrip --> Parser
+    Parser --> Progress[fragment identity and bounded progress]
+    Parser --> Rollback[owned versus streaming and Vec rollback]
+```
+
+Build with `cargo afl build --release --features experimental --bin framed_decode
+--bin framed_roundtrip`. Run each with `cargo afl fuzz -i regressions/TARGET
+-o /tmp/UNIQUE-FINDINGS -S smoke -V 30 -c - -- target/release/TARGET`. Findings
+remain local; deterministic seeds use `.bin` so regression replay includes them.
+No system-wide AFL tuning is required by these commands.

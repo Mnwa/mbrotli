@@ -52,6 +52,23 @@ seed selection uses generated corpora or committed lifecycle, framing and parall
 regressions. Base decoder targets run in both feature profiles; custom targets
 require `experimental`.
 
+The experimental matrix includes `framed_decode` and `framed_roundtrip`, each
+using its committed `regressions/TARGET` seeds. The arbitrary-byte framed decoder
+also uses `dictionaries/framed.dict`. Campaigns run for ten minutes, with a
+five-second per-input timeout for decoder targets and a one-second default for
+other targets.
+
+```mermaid
+flowchart LR
+    Matrix[experimental framed targets] --> Seeds[committed regression seeds]
+    Seeds --> Parser[framed_decode with framing dictionary]
+    Seeds --> Roundtrip[framed_roundtrip]
+    Parser --> Campaign[ten-minute AFL campaign]
+    Roundtrip --> Campaign
+    Campaign --> Check[fail on saved crashes or hangs]
+    Campaign --> Archive[upload archived findings even on failure]
+```
+
 Saved crashes or hangs fail the job. Findings are archived as tar.gz and uploaded
 when present, including after failures; this preserves AFL filenames with colons.
 Regression replay does not start a campaign or require host core-dump configuration.

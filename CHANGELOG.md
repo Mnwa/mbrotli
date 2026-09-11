@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+- Add experimental structured framed decoding with strict/Auto detection,
+  reusable owners, incremental borrowed events, owned/Vec/slice results, and a
+  lending `BufRead` adapter. Validate metadata, continuation, dictionaries,
+  directory/header identity and footer under aggregate budgets. Preserve raw
+  decoder contracts and writer import paths through codec-neutral framing types.
+  Add independent wire, allocation-failure and reader-fault tests, experimental
+  AFL targets, feature probes and framing/raw-regression benchmarks. Dictionary
+  entry points accept `impl Into<DictionaryResolverRef>` and public methods
+  include runnable documentation examples.
+  Run both framed decoder AFL targets in CI with committed seeds, parser mutation
+  tokens and explicit per-input timeouts.
+
 - Unify benchmark documentation under `encoder-comparison` / `decoder-comparison`
   reports and `encoders/` / `decoders/` quality pages, with matching chart paths
   and updated generators and links.

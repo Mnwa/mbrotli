@@ -452,3 +452,6 @@ pub fn c_parse_shared_dictionary(bytes: &[u8]) -> bool {
     }
     info.ok == 1
 }
+
+#[cfg(feature = "experimental")]
+pub mod framed_targets;

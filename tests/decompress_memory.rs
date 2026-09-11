@@ -162,3 +162,75 @@ fn decode_only_dictionary_counts_storage_and_allocation_failures() {
     assert_eq!(dictionary.retained_bytes(), LIVE.get() - before);
     assert_eq!(dictionary.retained_bytes(), 6);
 }
+
+#[cfg(feature = "experimental")]
+fn framed_fixture() -> Vec<u8> {
+    let mut bytes = vec![0x91, 10, 66, 82, 4];
+    for _ in 0..12 {
+        bytes.extend_from_slice(&[6, 1, 0, b'i', b'd', 1, b'x', 6, 2, 0, 0, b'a', b'b', b'c']);
+    }
+    bytes.extend_from_slice(&[3, 10, 0, 0]);
+    bytes
+}
+#[cfg(feature = "experimental")]
+#[test]
+fn framed_append_rolls_back_at_every_allocation_failure() {
+    use mbrotli::framing::{FramedDecodeError, FramedDecompressor};
+    let bytes = framed_fixture();
+    let mut warm = FramedDecompressor::new(Default::default()).unwrap();
+    warm.decompress(&bytes).unwrap();
+    drop(warm);
+    let mut success = false;
+    for fail_after in 0..512 {
+        let mut d = FramedDecompressor::new(Default::default()).unwrap();
+        let mut dst = b"prefix".to_vec();
+        FAIL.set(Some(fail_after));
+        let result = d.decompress_into(&bytes, &mut dst);
+        FAIL.set(None);
+        if result.is_ok() {
+            success = true;
+            break;
+        }
+        assert!(
+            matches!(result, Err(FramedDecodeError::AllocationFailed)),
+            "{result:?}"
+        );
+        assert_eq!(dst, b"prefix");
+        assert!(d.decompress(&bytes).is_ok());
+    }
+    assert!(success);
+}
+#[cfg(feature = "experimental")]
+#[test]
+fn framed_workspace_ceiling_covers_peak_and_retained_storage() {
+    use mbrotli::framing::{FramedDecodeConfig, FramedDecodeLimits, FramedDecompressor};
+    let bytes = framed_fixture();
+    let mut dst = [0; 36];
+    let mut warm = FramedDecompressor::new(Default::default()).unwrap();
+    drop(warm.decompress_to_slice(&bytes, &mut dst).unwrap());
+    drop(warm);
+    let before = LIVE.get();
+    PEAK.set(before);
+    let mut d = FramedDecompressor::new(Default::default()).unwrap();
+    let output = d.decompress_to_slice(&bytes, &mut dst).unwrap();
+    let peak = PEAK.get() - before;
+    drop(output);
+    assert_eq!(d.retained_bytes(), LIVE.get() - before);
+    drop(d);
+    for limit in [0, peak / 2, peak - 1, peak, peak + 1] {
+        let mut d = FramedDecompressor::new(
+            FramedDecodeConfig::default()
+                .with_limits(FramedDecodeLimits::default().with_max_workspace_bytes(Some(limit))),
+        )
+        .unwrap();
+        let before = LIVE.get();
+        PEAK.set(before);
+        let result = d.decompress_to_slice(&bytes, &mut dst);
+        let measured = PEAK.get() - before;
+        assert!(
+            measured <= limit,
+            "budget {limit}, observed peak {measured}, result {result:?}"
+        );
+        drop(result);
+    }
+}

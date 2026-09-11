@@ -28,3 +28,4 @@ jobs:
           --test streaming --test simd_backends --test dictionary
           --test decompress --test decompress_c --test decompress_wire
           --test decompress_contract --test decompress_io --test serialized_dictionary
+          --test framed_decoder

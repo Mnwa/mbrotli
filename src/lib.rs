@@ -293,7 +293,7 @@
 //!
 //! Add `"compression"` for both codecs, or use `"std"` instead of `"no_std"` for standard
 //! I/O support. `no_std` requires a global allocator; it excludes I/O adapters, parallel
-//! compression, experimental framing, and profiling, and uses compile-time SIMD selection.
+//! compression, the experimental framing writer, and profiling, and uses compile-time SIMD selection.
 //! Cargo features are additive: another dependency can re-enable a codec or `std`.
 //! Leave `std` and `hotpath*` disabled throughout the dependency graph for a std-free build.
 //!
@@ -454,11 +454,15 @@ pub use decompressor::{
 #[cfg(any(feature = "compression", feature = "decompression"))]
 pub mod dictionary;
 #[cfg(all(
-    feature = "compression",
     feature = "experimental",
-    not(feature = "no_std")
+    any(feature = "compression", feature = "decompression")
 ))]
-pub use compressor::framing;
+pub mod framing;
+#[cfg(all(feature = "experimental", feature = "decompression"))]
+pub use decompressor::framing::{
+    FramedDecodeConfig, FramedDecodeError, FramedDecodeFailure, FramedDecodeLimits,
+    FramedDecodeStreamConfig, FramedDecoderSession, FramedDecompressor, FramedOutput,
+};
 #[cfg(all(
     any(feature = "compression", feature = "decompression"),
     not(feature = "no_std")

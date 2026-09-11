@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [differential_c, streaming_equivalence, dictionary, serialized_dictionary, framing, compressor_lifecycle, parallel, decompress, decode_roundtrip, decode_streaming, decode_dictionary, decode_serialized, decode_lifecycle, decode_io_limits]
+        target: [differential_c, streaming_equivalence, dictionary, serialized_dictionary, framing, framed_decode, framed_roundtrip, compressor_lifecycle, parallel, decompress, decode_roundtrip, decode_streaming, decode_dictionary, decode_serialized, decode_lifecycle, decode_io_limits]
         features: [experimental]
         include:
           - {target: decompress, features: ""}
@@ -69,15 +69,23 @@ jobs:
           AFL_NO_AFFINITY: 1
         run: |
           seeds=seeds/params
+          timeout_ms=1000
+          fuzz_args=()
           case "$TARGET" in
             dictionary) seeds=seeds/dictionary ;;
             serialized_dictionary) seeds=seeds/serialized ;;
-            decode_roundtrip) seeds=seeds/params ;;
+            decode_roundtrip) seeds=seeds/params; timeout_ms=5000 ;;
             compressor_lifecycle|framing|parallel) seeds="regressions/$TARGET" ;;
+            framed_decode)
+              seeds="regressions/$TARGET"
+              timeout_ms=5000
+              fuzz_args=(-x dictionaries/framed.dict)
+              ;;
+            framed_roundtrip) seeds="regressions/$TARGET"; timeout_ms=5000 ;;
             decompress|decode_*) seeds="regressions/$TARGET"; timeout_ms=5000 ;;
           esac
           cargo afl fuzz -S ci -i "$seeds" -o findings -V 600 \
-            -t "$timeout_ms" -m none -- "target/release/$TARGET"
+            -t "$timeout_ms" -m none "${fuzz_args[@]}" -- "target/release/$TARGET"
       - name: fail on any crash or saved hang
         working-directory: fuzz/afl
         run: |

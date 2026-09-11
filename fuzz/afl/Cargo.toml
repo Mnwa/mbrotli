@@ -37,3 +37,13 @@ codegen-units = 1
 name = "decode_serialized"
 path = "src/bin/decode_serialized.rs"
 required-features = ["experimental"]
+
+[[bin]]
+name = "framed_decode"
+path = "src/bin/framed_decode.rs"
+required-features = ["experimental"]
+
+[[bin]]
+name = "framed_roundtrip"
+path = "src/bin/framed_roundtrip.rs"
+required-features = ["experimental"]

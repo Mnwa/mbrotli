@@ -498,6 +498,12 @@ pub(crate) struct Stream {
 }
 
 impl Stream {
+    /// The framing layer shares its outer live budget with this workspace.
+    #[cfg(feature = "experimental")]
+    pub(crate) fn set_framed_workspace_limit(&mut self, limit: Option<usize>) {
+        self.memory.limit = limit;
+    }
+
     pub(crate) const fn retained_bytes(&self) -> usize {
         self.memory.live
     }

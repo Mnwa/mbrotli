@@ -190,3 +190,19 @@ directory tests require every type 1–8 header. Metadata emits independent stre
 not cross-chunk keep-decoder streams, and pre-encoded repeated metadata does not
 use internal repeat-to-repeat dictionaries. No decompressor or automatic
 dictionary checksum policy is implemented.
+
+## Codec-neutral types and decoder
+
+`DictionaryId`, `DictionaryReference`, `MetadataKind`, and `MetadataField` live
+in `src/framing/mod.rs`. Existing `compressor::framing` imports re-export the
+same types. `mbrotli::framing` exposes the writer when compression/std are
+available and the [structured decoder](framed-decoder.md) independently with
+`decompression,experimental`, including alloc-only builds.
+
+```mermaid
+graph LR
+    Common[framing: shared wire types] --> Writer[compressor::framing re-exports]
+    Common --> Decoder[decompressor::framing]
+    Writer --> Public[mbrotli::framing facade]
+    Decoder --> Public
+```

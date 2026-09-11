@@ -527,3 +527,20 @@ initialization and session setup. Compatibility evidence and remaining acceptanc
 are tracked separately in
 [decompressor compatibility](decompressor-compatibility.md). There is no container
 parser, authentication, seek, or async runtime in this raw decoder.
+
+## Experimental framed driver
+
+The separate `decompressor::framing::core` uses the existing private `Stream`
+directly. It owns content boundaries and passes short-lived dictionary views.
+`set_framed_workspace_limit` adjusts the remaining outer heap ceiling before
+a framed content call; it changes no raw session transitions or hot loops.
+See [framed decoder](framed-decoder.md) for the independent public lifecycle.
+
+```mermaid
+graph LR
+    Raw[raw DecoderSession] --> Stream[private core::Stream]
+    Framed[framing::core driver] --> Stream
+    Framed --> Budget[aggregate framing and dictionary budgets]
+    Budget --> Limit[remaining raw workspace ceiling]
+    Limit --> Stream
+```

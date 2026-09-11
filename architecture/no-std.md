@@ -47,7 +47,8 @@ The `io` module, its compressor reader/writer constructors, the conversion from
 `EncodeError` to `std::io::Error`, and the private I/O error variant are omitted.
 The entire `parallel` module and its private independent-fragment adapter are
 omitted because they depend on I/O, files, synchronization, clocks, and unwinding.
-Experimental `framing` is omitted because its writer API depends on `std::io`.
+The framing writer is omitted because it depends on `std::io`; codec-neutral
+framing types and the experimental framed decoder remain available.
 Hotpath measurement attributes are inactive under `no_std`.
 
 No new public type or state machine is introduced. Low-level implementation
@@ -101,3 +102,18 @@ the same experimental gate in std and alloc profiles. See [decoder mechanics](de
 and the four-profile [compatibility report](decompressor-compatibility.md).
 
 Codec selection is independent of `no_std`; see [codec features](codec-features.md).
+
+## Structured decoding with alloc
+
+`decompression,experimental,no_std` exposes framing detection, owner/session,
+owned/range outputs, metadata and dictionary resolution without compression.
+Only `FramedReader` is excluded by `no_std` precedence.
+
+```mermaid
+graph LR
+    Alloc[alloc + decompression + experimental] --> Frame[framed owner/session and core]
+    Frame --> Raw[existing raw Stream]
+    Frame --> Dict[decode-only dictionary preparation]
+    Std[not no_std] --> Reader[lending BufRead adapter]
+    Reader --> Frame
+```

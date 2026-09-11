@@ -32,3 +32,5 @@ jobs:
 
       - run: cargo miri test --test decompress_golden
       - run: cargo miri test --test decompress_golden --features experimental
+
+      - run: cargo miri test --lib --features experimental decompressor::framing::core::wire::tests

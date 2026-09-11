@@ -5,7 +5,8 @@
 //! drains that queue. After a sink error, retry draining or finalization.
 //! The resulting container is not a raw Brotli stream: a container parser must
 //! extract its resources before passing their compressed data to a raw decoder.
-//! This crate does not yet provide that parser.
+//! `framing::FramedDecompressor` provides structured parsing when the
+//! `decompression` feature is enabled.
 //!
 //! # Examples
 //!
@@ -30,6 +31,8 @@
 //! ```
 
 mod core;
+
+pub use crate::framing::{DictionaryId, DictionaryReference, MetadataField, MetadataKind};
 
 use super::dictionary::PreparedDictionary;
 use super::{Compressor, EncodeError, EncoderSession, StreamConfig};
@@ -78,25 +81,6 @@ impl Default for FramingConfig {
     }
 }
 
-/// A caller-supplied 256-bit HighwayHash value. No key or hashing policy is implied.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DictionaryId(pub [u8; 32]);
-
-/// An explicit dictionary source, in decoder attachment order.
-#[derive(Debug, Clone, Copy)]
-pub enum DictionaryReference {
-    /// An application-resolved external prefix dictionary.
-    PrefixId(DictionaryId),
-    /// An application-resolved serialized dictionary.
-    SerializedId(DictionaryId),
-    /// A complete, earlier resource containing prefix bytes.
-    PrefixResource(u64),
-    /// A complete, earlier resource containing a serialized dictionary.
-    SerializedResource(u64),
-    /// The contents of an earlier individual chunk, used as a prefix.
-    PrefixChunk(u64),
-}
-
 /// Resource visibility and optional caller-supplied checksum.
 ///
 /// Defaults to visible with no checksum. Setting `id` only records the supplied
@@ -107,26 +91,6 @@ pub struct ResourceOptions {
     pub hidden: bool,
     /// Checksum of the whole uncompressed resource, emitted on its last chunk.
     pub id: Option<DictionaryId>,
-}
-
-/// Where metadata applies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MetadataKind {
-    /// Applies to the next resource; permits `id`, `mt`, and uppercase codes.
-    Resource,
-    /// Applies to the preceding resource; permits uppercase codes only.
-    Footer,
-    /// Applies to the container; permits uppercase codes only.
-    Global,
-}
-
-/// One borrowed metadata field. Codes and reserved value shapes are validated.
-#[derive(Debug, Clone, Copy)]
-pub struct MetadataField<'a> {
-    /// Two uppercase ASCII letters, or a recognized lowercase code.
-    pub code: [u8; 2],
-    /// Raw field content. `id` is UTF-8; `mt` is an eight-byte signed timestamp.
-    pub value: &'a [u8],
 }
 
 /// Compression for a self-contained metadata chunk.

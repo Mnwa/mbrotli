@@ -60,3 +60,7 @@ pub use config::{
     DecodeLimits, DecodeStreamConfig, DecoderConfig, MemberMode, OutputSize, WindowLimit,
 };
 pub use error::{DecodeConfigError, DecodeError, InvalidDataKind};
+
+/// Experimental structured container decoding.
+#[cfg(feature = "experimental")]
+pub mod framing;
