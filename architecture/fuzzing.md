@@ -521,3 +521,12 @@ flowchart LR
     OneShot --> Equal
     Equal --> Decode[framed decode oracle for non-shared modes]
 ```
+
+## Indexed framing
+
+The experimental `framed_decode` target also opens `FramedSeekReader` on arbitrary
+bytes, reads up to sixteen resources in reverse order after an early-drop probe,
+and loads resource/footer metadata. Sequentially valid inputs must produce the
+same resource bytes and metadata. Indexed acceptance alone does not imply full
+container validation. `framed_roundtrip` sends writer-generated indexed containers
+through this oracle. `regressions/framed_decode/seek-resource.bin` seeds the path.

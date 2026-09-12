@@ -97,3 +97,8 @@ malformed records, medians, generated pages and SVG structure. See
   state, slices, streaming, parallel tasks and experimental formats.
 - Fixed implementation order and shared hosts can bias timings; confidence bounds
   do not capture every environmental effect or establish a significant lead.
+
+The experimental `framed_decompress` suite also includes indexed opening and
+resource reads. See [framed seek measurements](framed-seek-reader.md#local-execution-evidence-2026-09-12)
+for the corpus, command and limits of the raw C control; C has no framed container
+reader. Fixtures and compressed sizes are validated before timing.

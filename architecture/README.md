@@ -18,6 +18,7 @@ graph TD
     Framing --> FIO[framed writer and reader: std]
     Decode --> FDecode[framed decoder and private core: experimental, alloc]
     Framing --> Wire[codec-neutral framing types]
+    FDecode --> Seek[framed seek reader and resource Read: std]
     FDecode --> Wire
     ECore --> Shared[private shared primitives]
     DCore --> Shared
@@ -55,6 +56,7 @@ FFI do not appear in public signatures. Each codec compiles independently.
 
 | Specification | Scope |
 | --- | --- |
+| [Framed seek reader](framed-seek-reader.md) | Footer/directory indexing, lazy metadata, sparse dependency decoding and resource Read. |
 | [Framed decoder](framed-decoder.md) | Structured containers, detection, events, dictionaries, validation, budgets and lending reader. |
 | [Native decompressor](decompressor.md) | Parsing, sessions, history, dictionaries, budgets and I/O. |
 | [Owned decoder output](decoder-owned-output.md) | Stored members, allocation transfer and read-ahead accounting. |

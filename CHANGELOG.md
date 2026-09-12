@@ -4,6 +4,16 @@
 
 ## [v0.4.0](https://github.com/Mnwa/mbrotli/releases/tag/v0.4.0) - 2026-09-12
 
+- Add experimental std `FramedSeekReader` over `Read + Seek`, directory-derived
+  `ResourceInfo`, lazy resource/footer metadata and streaming `ResourceReader`.
+  Resolve partial/KeepDecoder chains and internal/external dictionaries on demand;
+  validate used original headers against directory copies. Support arbitrary and
+  repeated access and cancellation without I/O, under existing decode budgets and
+  workspace retention. Opening performs structural indexing without decompressing
+  resource payload. Add wire/lifecycle/limit tests, AFL oracles and Criterion cases.
+  Include runnable examples for every seek-reader public method, including lazy
+  metadata, external dictionaries, streaming reads and cancellation/reopening.
+
 - Document framed decoding in README and crate docs, with a one-shot example,
   event-reader semantics, feature availability and decoder configuration.
   Link structured framing APIs in crate docs, with feature-selection fallbacks

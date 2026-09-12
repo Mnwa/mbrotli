@@ -1,4 +1,6 @@
 //! Bounded container state and event transitions; no caller borrows are stored.
+#[cfg(not(feature = "no_std"))]
+pub(in crate::decompressor::framing) mod seek;
 mod wire;
 use super::*;
 use crate::decompressor::core::{Input, Output, Stop, Stream};

@@ -26,6 +26,38 @@ pub fn framed_decode(_ctx: &Context, data: &[u8]) {
         let mut raw = mbrotli::Decompressor::new(Default::default()).unwrap();
         assert_eq!(raw.decompress(data).unwrap(), output.resources[0].data);
     }
+    // Opening is structural only: malformed untouched payload can remain accepted.
+    // For sequentially valid objects, every indexed resource must match exactly.
+    if let Ok(mut indexed) = decoder.framed_seek_reader(std::io::Cursor::new(data)) {
+        use std::io::Read;
+        for i in (0..indexed.resources().len().min(16)).rev() {
+            let index = ResourceIndex(i as u64);
+            if let Ok(mut resource) = indexed.resource(index) {
+                let _ = resource.read(&mut [0; 1]);
+            }
+            if let Ok(mut resource) = indexed.resource(index) {
+                let mut payload = Vec::new();
+                let decoded = resource.read_to_end(&mut payload);
+                if let Ok(expected) = &expected {
+                    decoded.unwrap();
+                    assert_eq!(payload, expected.resources[i].data);
+                }
+            } else {
+                assert!(expected.is_err());
+            }
+            let metadata = indexed.resource_metadata(index);
+            if let Ok(expected) = &expected {
+                assert_eq!(metadata.unwrap(), expected.resources[i].metadata.as_ref());
+            }
+            let metadata = indexed.resource_footer_metadata(index);
+            if let Ok(expected) = &expected {
+                assert_eq!(
+                    metadata.unwrap(),
+                    expected.resources[i].footer_metadata.as_ref()
+                );
+            }
+        }
+    }
     let mut prefix = b"preserved prefix".to_vec();
     let appended = decoder.decompress_into(data, &mut prefix);
     assert_eq!(expected.is_ok(), appended.is_ok());

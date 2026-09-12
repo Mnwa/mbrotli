@@ -60,7 +60,8 @@ and metadata-only objects. Nonminimal varints are accepted within the nine-byte,
 ## Known gaps
 
 No async runtime, extraction, authentication, automatic dictionary fetching,
-seek/random access, or concatenated top-level objects are provided.
+or concatenated top-level objects are provided. Indexed random access is described
+in [Framed seek reader](framed-seek-reader.md).
 Only the current host can execute its available SIMD levels; other architectures
 need native execution evidence. Runtime checks and measurements are recorded below.
 
@@ -68,13 +69,13 @@ need native execution evidence. Runtime checks and measurements are recorded bel
 
 `FramedDecompressor` owns configuration, the selected `Backend`, retention policy,
 raw `Stream` workspace and framing bookkeeping. `start` and
-`start_with_dictionaries` create an exclusive `FramedDecoderSession`. Only the
-session borrows a resolver through `DictionaryResolverRef`. Dictionary-taking
+`start_with_dictionaries` create an exclusive `FramedDecoderSession`. Sessions and the std seek reader borrow resolvers through
+`DictionaryResolverRef`. Dictionary-taking
 entry points accept `impl Into<DictionaryResolverRef<'dict>>`; borrowed concrete
 resolvers convert without allocation. The wrapper privately erases the resolver
 type for attachment-boundary dispatch. Raw decoder state receives short-lived dictionary
 views during `run`; neither workspace stores dereferenceable external pointers.
-`mem::forget(session)` leaves the owner's active flag set. `trim` preserves that
+`mem::forget(session)` or forgetting a seek reader leaves the owner's active flag set. `trim` preserves that
 flag; `recover` and successful `reconfigure` clear it. Drop clears logical records
 and dictionary attachments, retaining reusable outer buffer capacities and raw
 workspace according to retention. Nested header and metadata allocations are

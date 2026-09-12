@@ -15,6 +15,10 @@ mod error;
 mod owner;
 #[cfg(not(feature = "no_std"))]
 mod reader;
+#[cfg(not(feature = "no_std"))]
+mod seek;
+#[cfg(not(feature = "no_std"))]
+pub use seek::*;
 mod session;
 mod types;
 pub use config::*;

@@ -14,7 +14,7 @@ pub struct FramedDecompressor {
     pub(super) engine: Engine,
     pub(super) backend: Backend,
     retention: RetentionPolicy,
-    active: bool,
+    pub(super) active: bool,
 }
 /// Construction policy with an optional explicitly selected host backend.
 #[derive(Clone, Copy, Debug)]
