@@ -50,7 +50,7 @@ FFI do not appear in public signatures. Each codec compiles independently.
 | [Fast encoder](fast-encoder.md) | Qualities 0–1: fragments, entropy coding and SIMD scans. |
 | [Greedy encoder](greedy-encoder.md) | Qualities 2–9: matchers, commands and meta-blocks. |
 | [High-quality encoder](hq-encoder.md) | Qualities 10–11: tree search, dynamic programming and clustering. |
-| [Parallel compression](parallel-compression.md) | Planning, caller-run tasks, staging and assembly. |
+| [Parallel compression](parallel-compression.md) | Planning, encoder reconfiguration, caller-run tasks, staging and assembly. |
 
 ## Decompression
 

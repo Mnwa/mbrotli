@@ -1081,7 +1081,7 @@ fn validate_framing_directory(bytes: &[u8]) {
 }
 
 /// Parallel output must decode once and remain invariant under task grouping,
-/// reverse execution, worker reuse, and scalar versus host dispatch.
+/// reverse execution, worker reuse, reconfiguration, and host dispatch.
 /// Payloads are bounded to two 64 KiB segments; scheduling is deterministic.
 pub fn parallel(ctx: &Context, data: &[u8]) {
     use mbrotli::compressor::parallel::{
@@ -1101,11 +1101,23 @@ pub fn parallel(ctx: &Context, data: &[u8]) {
         .with_minimum_parallel_size(0)
         .with_max_retained_workers(3);
     let encoder = EncoderConfig::default().with_quality(quality);
-    let mut expected = None;
+    let alternate =
+        encoder.with_quality(IMPLEMENTED_QUALITIES[usize::from((control % 12 + 1) % 12)]);
+    let mut expected = [None, None];
     for &backend in &ctx.levels {
         let mut compressor =
             ParallelCompressor::with_backend(encoder, parallel.clone(), backend).unwrap();
-        for count in [1, 3] {
+        for (index, count) in [(0, 1), (1, 3), (0, 3), (0, 1)] {
+            let settings = [encoder, alternate][index];
+            compressor.reconfigure(settings).unwrap();
+            let retained = compressor.retained_bytes();
+            assert!(
+                compressor
+                    .reconfigure(settings.with_window(Window::large(25).unwrap()))
+                    .is_err()
+            );
+            assert_eq!(compressor.encoder_config(), &settings);
+            assert_eq!(compressor.retained_bytes(), retained);
             let tasks = TaskCount::try_from(count).unwrap();
             let auto = BatchConfig::auto(tasks);
             let estimate = compressor
@@ -1136,10 +1148,10 @@ pub fn parallel(ctx: &Context, data: &[u8]) {
             let mut out = Vec::new();
             batch.finish_into(&mut out).unwrap();
             assert_round_trip(&input, &out);
-            if let Some(expected) = &expected {
+            if let Some(expected) = &expected[index] {
                 assert_eq!(&out, expected);
             } else {
-                expected = Some(out);
+                expected[index] = Some(out);
             }
         }
     }

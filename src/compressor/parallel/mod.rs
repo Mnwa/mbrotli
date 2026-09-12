@@ -234,6 +234,33 @@ impl ParallelCompressor {
     pub const fn encoder_config(&self) -> &EncoderConfig {
         &self.inner.encoder
     }
+    /// Replaces serial algorithm settings for subsequent batches.
+    ///
+    /// Changed settings release all idle workers; identical settings preserve
+    /// them. The parallel configuration and selected backend are preserved.
+    /// A live batch exclusively borrows this compressor, so reconfiguration is
+    /// only available after the batch is finished or dropped.
+    ///
+    /// # Errors
+    /// Returns the same configuration errors as [`Self::new`], including
+    /// unsupported Large Window settings. On error, the compressor and its
+    /// retained workers are unchanged.
+    ///
+    /// # Examples
+    /// ```
+    /// use mbrotli::{EncoderConfig, Quality};
+    /// use mbrotli::compressor::parallel::{ParallelCompressor, ParallelConfig};
+    ///
+    /// let mut compressor = ParallelCompressor::new(
+    ///     EncoderConfig::default(), ParallelConfig::default())?;
+    /// compressor.reconfigure(
+    ///     EncoderConfig::default().with_quality(Quality::Q1))?;
+    /// assert_eq!(compressor.encoder_config().quality(), Quality::Q1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn reconfigure(&mut self, config: EncoderConfig) -> Result<(), ParallelConfigError> {
+        self.inner.reconfigure(config)
+    }
     /// Fixed segmentation and resource policy.
     pub const fn parallel_config(&self) -> &ParallelConfig {
         &self.inner.parallel

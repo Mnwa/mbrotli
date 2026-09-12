@@ -140,6 +140,23 @@ fn benchmarks(c: &mut Criterion) {
                         black_box(&out);
                     })
                 });
+                let alternate = cfg.with_quality(if q == 0 { Quality::Q1 } else { Quality::Q0 });
+                compressor.reconfigure(alternate).unwrap();
+                compressor.reconfigure(cfg).unwrap();
+                encode(&mut compressor, &pool, input, tasks, &mut out);
+                assert_eq!(out, expected);
+                group.bench_with_input(
+                    BenchmarkId::new("tasks-reconfigured", tasks),
+                    &tasks,
+                    |b, &tasks| {
+                        b.iter(|| {
+                            compressor.reconfigure(black_box(alternate)).unwrap();
+                            compressor.reconfigure(black_box(cfg)).unwrap();
+                            encode(&mut compressor, &pool, black_box(input), tasks, &mut out);
+                            black_box(&out);
+                        })
+                    },
+                );
             }
             group.bench_function("c-serial-cold", |b| {
                 b.iter(|| black_box(support::c_compress(q.into(), 22, black_box(input))))

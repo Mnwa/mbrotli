@@ -326,14 +326,16 @@ memory before deciding whether the cause is search cost, allocation or a loop.
   from those rather than from the vendored test data.
 ## Parallel boundary target
 
-`parallel` uses the public task API, 64 KiB segments and at most 128 KiB of input. It compares one-task and reverse three-task output, all available host backends, retained workers, and independent C decoding. The engine-neutral body and per-quality seeds are replayed by the existing regression runner.
+`parallel` uses the public task API, 64 KiB segments and at most 128 KiB of input. It compares one-task and reverse three-task output, all available host backends, retained workers, and independent C decoding. Each backend runs four batches: original quality, adjacent quality, original quality again, and unchanged quality. Output is compared per configuration; rejected Large Window reconfiguration must preserve settings and retained bytes. The engine-neutral body and per-quality seeds are replayed by the existing regression runner.
 
 ```mermaid
 flowchart LR
-    Input[bounded bytes + quality/expansion controls] --> Plan[public parallel planner]
+    Input[bounded bytes + quality/expansion controls] --> Settings[original, adjacent, restored, unchanged quality]
+    Settings --> Reject[reject Large Window without mutation]
+    Reject --> Plan[public parallel planner]
     Plan --> One[one task]
     Plan --> Reverse[three tasks, reverse order]
-    One --> Equal[exact byte equality across tasks and backends]
+    One --> Equal[exact byte equality per configuration across tasks and backends]
     Reverse --> Equal
     Equal --> C[C decoder: one stream round trip]
 ```

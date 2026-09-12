@@ -388,6 +388,96 @@ fn automatic_staging_preserves_aggregate_limits_and_overflow_checks() {
 }
 
 #[test]
+fn reconfigure_matches_fresh_compressors_across_settings_and_backends() {
+    let input = data();
+    let initial = EncoderConfig::default().with_quality(Quality::Q0);
+    let settings = [
+        initial.with_quality(Quality::Q5),
+        initial.with_quality(Quality::Q11),
+        initial.with_mode(CompressionMode::Text),
+        initial.with_window(Window::standard(18).unwrap()),
+        initial,
+    ];
+    for backend in Backend::available() {
+        let mut c = ParallelCompressor::with_backend(initial, config(), backend).unwrap();
+        let original = inline(&mut c, &input, 2);
+        for encoder in settings {
+            c.reconfigure(encoder).unwrap();
+            assert_eq!(c.encoder_config(), &encoder);
+            assert_eq!(c.parallel_config(), &config());
+            assert_eq!(c.retained_worker_count(), 0);
+            assert_eq!(c.retained_bytes(), 0);
+            let mut fresh = ParallelCompressor::with_backend(encoder, config(), backend).unwrap();
+            for bytes in [&input[..], &input[..65536], &[]] {
+                let actual = inline(&mut c, bytes, 3);
+                assert_eq!(actual, inline(&mut fresh, bytes, 1));
+                assert_eq!(support::c_decompress(&actual, bytes.len()).unwrap(), bytes);
+            }
+        }
+        assert_eq!(inline(&mut c, &input, 2), original);
+    }
+}
+
+#[test]
+fn reconfigure_updates_serial_fallback_and_planning() {
+    let input = data();
+    let mut c = compressor(0);
+    c.reconfigure_parallel(config().with_minimum_parallel_size(u64::MAX));
+    let old_estimate = c.estimate_source(input.len() as u64, &batch(2)).unwrap();
+    let _ = inline(&mut c, &input[..100], 1);
+    let encoder = EncoderConfig::default().with_quality(Quality::Q5);
+    c.reconfigure(encoder).unwrap();
+    let estimate = c.estimate_source(input.len() as u64, &batch(2)).unwrap();
+    assert!(
+        estimate.estimated_active_workspace_bytes > old_estimate.estimated_active_workspace_bytes
+    );
+    let mut serial = mbrotli::Compressor::new(encoder).unwrap();
+    for bytes in [&input[..100], &[]] {
+        assert_eq!(inline(&mut c, bytes, 1), serial.compress(bytes).unwrap());
+    }
+}
+
+#[test]
+fn reconfigure_identical_settings_preserves_and_reuses_workers() {
+    let input = data();
+    let mut c = compressor(5);
+    let original = inline(&mut c, &input, 3);
+    let retained = c.retained_bytes();
+    c.reconfigure(*c.encoder_config()).unwrap();
+    assert_eq!(c.retained_worker_count(), 3);
+    assert_eq!(c.retained_bytes(), retained);
+    let mut b = c.prepare_slice(&input, batch(3)).unwrap();
+    b.run_inline().unwrap();
+    let mut output = Vec::new();
+    let result = b.finish_into(&mut output).unwrap();
+    assert_eq!(result.stats.workers_reused, 3);
+    assert_eq!(result.stats.workers_created, 0);
+    assert_eq!(output, original);
+}
+
+#[test]
+fn reconfigure_rejects_invalid_settings_without_changing_state() {
+    let input = data();
+    let mut c = compressor(5);
+    let encoder = *c.encoder_config();
+    let original = inline(&mut c, &input, 3);
+    let retained = c.retained_bytes();
+    let large = encoder.with_window(Window::large(25).unwrap());
+    let error = c.reconfigure(large.with_quality(Quality::Q0)).unwrap_err();
+    assert!(matches!(error, ParallelConfigError::Encoder(_)));
+    assert!(error.source().is_some());
+    assert!(matches!(
+        c.reconfigure(large),
+        Err(ParallelConfigError::UnsupportedParallelWindow)
+    ));
+    assert_eq!(c.encoder_config(), &encoder);
+    assert_eq!(c.parallel_config(), &config());
+    assert_eq!(c.retained_worker_count(), 3);
+    assert_eq!(c.retained_bytes(), retained);
+    assert_eq!(inline(&mut c, &input, 3), original);
+}
+
+#[test]
 fn configuration_bounds_and_retention_are_explicit() {
     assert!(SegmentSize::try_from(0).is_err());
     assert!(SegmentSize::try_from(65535).is_err());

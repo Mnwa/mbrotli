@@ -74,16 +74,28 @@ impl Compressor {
         parallel: ParallelConfig,
         backend: Backend,
     ) -> Result<Self, ParallelConfigError> {
-        encoder.validate()?;
-        if encoder.window().encoding() != WindowEncoding::Standard {
-            return Err(ParallelConfigError::UnsupportedParallelWindow);
-        }
-        Ok(Self {
+        let mut compressor = Self {
             encoder,
             parallel,
             backend,
             workers: Vec::new(),
-        })
+        };
+        compressor.reconfigure(encoder)?;
+        Ok(compressor)
+    }
+    pub(in crate::compressor::parallel) fn reconfigure(
+        &mut self,
+        encoder: EncoderConfig,
+    ) -> Result<(), ParallelConfigError> {
+        encoder.validate()?;
+        if encoder.window().encoding() != WindowEncoding::Standard {
+            return Err(ParallelConfigError::UnsupportedParallelWindow);
+        }
+        if self.encoder != encoder {
+            self.workers = Vec::new();
+            self.encoder = encoder;
+        }
+        Ok(())
     }
     pub(in crate::compressor::parallel) fn retained_bytes(&self) -> usize {
         self.workers

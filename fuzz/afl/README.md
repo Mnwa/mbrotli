@@ -76,7 +76,7 @@ the forkserver for `afl-cmin` folder-mode coverage collection.
 | `decode_serialized` (`experimental`) | `regressions/decode_serialized` | Serialized attachment parsing and attached decoding against the experimental C decoder |
 | `serialized_dictionary` (`experimental`) | `regressions/serialized_dictionary` | Parsing, canonical serialization, bounded preparation, and C decoding |
 | `framing` (`experimental`) | `regressions/framing` | Resource/metadata sequences, chunking, directory completeness, and payload decoding |
-| `parallel` | `regressions/parallel` | Scheduling, source adapters, staging, fragments, and C decoding |
+| `parallel` | `regressions/parallel` | Scheduling, encoder reconfiguration, source adapters, staging, fragments, and C decoding |
 
 The common parameter decoder reads six bytes before the payload:
 

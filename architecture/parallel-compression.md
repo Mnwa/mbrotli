@@ -257,6 +257,37 @@ collects only already-published results, and never waits for detached work. Late
 tasks release their own resources. The default retention count is zero; callers
 can retain compatible workspaces and trim them by aggregate size.
 
+## Encoder reconfiguration
+
+`ParallelCompressor::reconfigure(EncoderConfig)` delegates to the private
+`core::Compressor`, using the same validation path as construction. Invalid
+encoder settings propagate as `ParallelConfigError::Encoder` with their source;
+otherwise valid Large Window settings return `UnsupportedParallelWindow`.
+Validation completes before any mutation, so rejection preserves both settings
+and idle workers. Identical settings preserve workers as well.
+
+Changing encoder settings drops the idle worker reservoir and its allocations.
+The next batch plans with the new configuration and lazily constructs matching
+fragment and serial fallback encoders. Parallel configuration and the backend
+selected at construction remain unchanged; no SIMD detection is repeated.
+A live batch holds an exclusive borrow of the parent, preventing reconfiguration.
+After a batch is dropped, detached tasks keep their old exclusive workers and
+release them on completion; they cannot return them to a reconfigured parent.
+The parallel Criterion suite validates identical output after reconfiguration
+and measures reconfiguration plus encoding with one and four tasks, alongside
+retained-worker and C/Rust serial cases on the same corpora and codec settings.
+
+```mermaid
+flowchart TD
+    Request[reconfigure encoder settings] --> Validate[Validate encoder and standard window]
+    Validate -->|invalid| Error[Return typed error without mutation]
+    Validate -->|valid| Compare{Settings changed?}
+    Compare -->|no| Keep[Keep idle workers]
+    Compare -->|yes| Drop[Release idle workers and store settings]
+    Drop --> Next[Next batch plans and creates workers with new settings]
+    Keep --> Reuse[Next batch can reuse workers]
+```
+
 ## Assembly and output failure
 
 Directory staging resolves the existing directory to an absolute path. Each

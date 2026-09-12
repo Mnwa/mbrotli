@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [v0.4.1](https://github.com/Mnwa/mbrotli/releases/tag/v0.4.1) - 2026-09-12
+
+- Add `ParallelCompressor::reconfigure(EncoderConfig)` for subsequent batches.
+  Validate before mutation, preserve workers for identical settings, and release
+  idle workers when settings change while preserving parallel policy and backend.
+
 ## [v0.4.0](https://github.com/Mnwa/mbrotli/releases/tag/v0.4.0) - 2026-09-12
 
 - Add experimental std `FramedSeekReader` over `Read + Seek`, directory-derived
