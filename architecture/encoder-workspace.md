@@ -42,7 +42,9 @@ graph TD
     Family --> Search[retained matcher and ring buffer]
     Family --> Entropy[retained splits, histograms, trees and codes]
     Session[public EncoderSession] --> Owner[private SessionCore: borrows Compressor]
-    Owner --> State[private StreamState]
+    Owner --> Operation[private non-borrowing OperationState]
+    Operation --> State[private StreamState]
+    Framed[framed resource core] --> Operation
     OneShot[private one-shot driver] --> State
     Dictionary[immutable PreparedDictionary] -. borrowed .-> Family
 ```
@@ -78,7 +80,8 @@ explicit `recover`; the exclusive borrow alone cannot detect `mem::forget`.
 ## One scheduler, borrowed complete blocks
 
 `core::stream::StreamState` owns the phase, resolved block limit and continuation
-restart flag. `core::session::SessionCore` owns the compressor/dictionary borrows,
+restart flag. `core::session::SessionCore` owns the compressor/dictionary borrows and delegates
+to the non-borrowing `OperationState` shared with framed resource drivers. That state
 checks logical positions, and translates private encoder errors into `EncodeError`.
 One-shot vector and slice entry points call the same scheduler with `Finish`.
 

@@ -90,9 +90,10 @@ fn benchmarks(c: &mut criterion::Criterion) {
             ("many-small", false, 256, false),
             ("metadata-heavy", false, 256, true),
         ] {
-            let mut encoder = Compressor::new(Default::default()).unwrap();
-            let mut writer = encoder
-                .framed_writer(Vec::new(), FramingConfig::default())
+            let mut framed_encoder = mbrotli::framing::FramedCompressor::new(Default::default())
+                .expect("framed configuration");
+            let mut writer = framed_encoder
+                .framed_writer(Vec::new(), Default::default())
                 .unwrap();
             for i in 0..resources {
                 if metadata {
@@ -147,7 +148,6 @@ fn benchmarks(c: &mut criterion::Criterion) {
                 b.iter(|| stream(&mut decoder, black_box(&bytes), black_box(&mut buffer)))
             });
         }
-        let mut encoder = Compressor::new(Default::default()).unwrap();
         let prefix = b"dictionary content ".repeat(64);
         let dictionary = mbrotli::dictionary::DictionaryBuilder::new()
             .add_prefix(prefix.as_slice())
@@ -161,8 +161,10 @@ fn benchmarks(c: &mut criterion::Criterion) {
             }
         }
         let resolver = Resolver(prefix.clone());
-        let mut writer = encoder
-            .framed_writer(Vec::new(), FramingConfig::default())
+        let mut framed_encoder = mbrotli::framing::FramedCompressor::new(Default::default())
+            .expect("framed configuration");
+        let mut writer = framed_encoder
+            .framed_writer(Vec::new(), Default::default())
             .unwrap();
         for _ in 0..32 {
             let mut r = writer

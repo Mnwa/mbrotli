@@ -11,6 +11,12 @@ use crate::compressor::session::{Operation, Progress, StreamConfig};
 pub(crate) struct SessionCore<'c, 'd> {
     compressor: &'c mut Compressor,
     dictionary: Option<&'d PreparedDictionary>,
+    operation: OperationState,
+}
+
+/// Non-borrowing operation shared by raw guards and framed drivers.
+#[derive(Debug)]
+pub(crate) struct OperationState {
     state: StreamState,
     #[cfg(feature = "experimental")]
     logical_position: u64,
@@ -24,16 +30,35 @@ impl<'c, 'd> SessionCore<'c, 'd> {
         limit: usize,
         stream: StreamConfig,
     ) -> Self {
-        #[cfg(not(feature = "experimental"))]
-        let _ = stream;
-        #[cfg(feature = "experimental")]
-        let flint = stream.stream_offset() != 0;
-        #[cfg(not(feature = "experimental"))]
-        let flint = false;
         Self {
             compressor,
             dictionary,
-            state: StreamState::new(limit, flint),
+            operation: OperationState::new(limit, stream),
+        }
+    }
+    pub(crate) fn process(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        operation: Operation,
+    ) -> Result<Progress, EncodeError> {
+        self.operation
+            .process(self.compressor, self.dictionary, input, output, operation)
+    }
+    pub(crate) const fn is_finished(&self) -> bool {
+        self.operation.is_finished(self.compressor)
+    }
+}
+
+impl OperationState {
+    pub(crate) fn new(limit: usize, stream: StreamConfig) -> Self {
+        #[cfg(not(feature = "experimental"))]
+        let _ = stream;
+        Self {
+            state: StreamState::new(
+                limit,
+                cfg!(feature = "experimental") && stream.stream_offset() != 0,
+            ),
             #[cfg(feature = "experimental")]
             logical_position: stream.stream_offset(),
         }
@@ -42,6 +67,8 @@ impl<'c, 'd> SessionCore<'c, 'd> {
     /// Validates session state and logical positions, then runs the shared scheduler.
     pub(crate) fn process(
         &mut self,
+        compressor: &mut Compressor,
+        dictionary: Option<&PreparedDictionary>,
         input: &[u8],
         output: &mut [u8],
         operation: Operation,
@@ -70,7 +97,7 @@ impl<'c, 'd> SessionCore<'c, 'd> {
             pending,
             served,
             ..
-        } = &mut *self.compressor;
+        } = &mut *compressor;
         let Some(encoder) = workspace.encoder() else {
             self.state.phase = Phase::Failed;
             return Err(EncodeError::InternalInvariant {
@@ -79,7 +106,7 @@ impl<'c, 'd> SessionCore<'c, 'd> {
         };
         let outcome = self.state.process(
             encoder,
-            self.dictionary.map(PreparedDictionary::inner),
+            dictionary.map(PreparedDictionary::inner),
             Buffers {
                 staging,
                 pending,
@@ -103,20 +130,26 @@ impl<'c, 'd> SessionCore<'c, 'd> {
 
     /// Termination is observable only after all pending output was delivered.
     #[must_use]
-    pub(crate) const fn is_finished(&self) -> bool {
-        matches!(self.state.phase, Phase::Finished) && !self.compressor.has_pending()
+    pub(crate) const fn is_finished(&self, compressor: &Compressor) -> bool {
+        matches!(self.state.phase, Phase::Finished) && !compressor.has_pending()
+    }
+}
+
+impl OperationState {
+    pub(crate) fn release(&self, compressor: &mut Compressor) {
+        if self.state.phase != Phase::Finished {
+            compressor.workspace.invalidate();
+        }
+        compressor.staging.clear();
+        compressor.pending.clear();
+        compressor.served = 0;
+        compressor.active = false;
+        compressor.finish_operation();
     }
 }
 
 impl Drop for SessionCore<'_, '_> {
     fn drop(&mut self) {
-        if self.state.phase != Phase::Finished {
-            self.compressor.workspace.invalidate();
-        }
-        self.compressor.staging.clear();
-        self.compressor.pending.clear();
-        self.compressor.served = 0;
-        self.compressor.active = false;
-        self.compressor.finish_operation();
+        self.operation.release(self.compressor);
     }
 }

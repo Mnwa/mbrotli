@@ -188,10 +188,17 @@ fn dictionaries(c: &mut Criterion) {
             chunk_bytes: payload.len() + 1,
             ..Default::default()
         };
+        let mut framed_encoder = mbrotli::framing::FramedCompressor::new(
+            mbrotli::framing::FramedEncodeConfig::default()
+                .with_encoder_config(*compressor.config())
+                .with_framing_config(framing_config),
+        )
+        .expect("framed configuration");
         let mut framed = |output: &mut Vec<u8>| {
             output.clear();
-            let mut container = compressor
-                .framed_writer(output, framing_config)
+
+            let mut container = framed_encoder
+                .framed_writer(output, Default::default())
                 .expect("container");
             {
                 let mut resource = container
@@ -296,19 +303,21 @@ fn metadata(c: &mut Criterion) {
                 size
             };
             let size = c_encode(&mut c_output);
-            let mut compressor =
-                Compressor::new(EncoderConfig::default().with_quality(quality)).expect("config");
             let mut output = Vec::with_capacity(c_output.len() + 128);
+            let mut framed_encoder = mbrotli::framing::FramedCompressor::new(
+                mbrotli::framing::FramedEncodeConfig::default()
+                    .with_encoder_config(EncoderConfig::default().with_quality(quality))
+                    .with_framing_config(FramingConfig {
+                        central_directory: false,
+                        ..Default::default()
+                    }),
+            )
+            .expect("framed configuration");
             let mut rust_encode = |output: &mut Vec<u8>| {
                 output.clear();
-                let mut writer = compressor
-                    .framed_writer(
-                        output,
-                        FramingConfig {
-                            central_directory: false,
-                            ..Default::default()
-                        },
-                    )
+
+                let mut writer = framed_encoder
+                    .framed_writer(output, Default::default())
                     .expect("writer");
                 writer
                     .metadata_with_options(

@@ -47,3 +47,8 @@ required-features = ["experimental"]
 name = "framed_roundtrip"
 path = "src/bin/framed_roundtrip.rs"
 required-features = ["experimental"]
+
+[[bin]]
+name = "framed_encode"
+path = "src/bin/framed_encode.rs"
+required-features = ["experimental"]

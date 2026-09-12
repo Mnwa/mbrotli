@@ -96,6 +96,7 @@ fn experimental_targets_follow_feature_selection() {
         "decode_serialized",
         "framed_decode",
         "framed_roundtrip",
+        "framed_encode",
     ] {
         assert_eq!(
             targets::TARGETS.iter().any(|(target, _)| *target == name),

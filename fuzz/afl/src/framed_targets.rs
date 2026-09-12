@@ -104,16 +104,16 @@ pub fn framed_decode(_ctx: &Context, data: &[u8]) {
 /// Structured writer inputs exercise valid compressed chunks and repeated metadata.
 pub fn framed_roundtrip(_ctx: &Context, input: &[u8]) {
     let data = &input[..input.len().min(4096)];
-    let mut encoder = mbrotli::Compressor::new(Default::default()).unwrap();
-    let mut writer = encoder
-        .framed_writer(
-            Vec::new(),
-            FramingConfig {
-                chunk_bytes: 31,
-                repeat_metadata: true,
-                ..Default::default()
-            },
-        )
+    let mut framed_encoder = mbrotli::framing::FramedCompressor::new(
+        mbrotli::framing::FramedEncodeConfig::default().with_framing_config(FramingConfig {
+            chunk_bytes: 31,
+            repeat_metadata: true,
+            ..Default::default()
+        }),
+    )
+    .expect("framed configuration");
+    let mut writer = framed_encoder
+        .framed_writer(Vec::new(), Default::default())
         .unwrap();
     writer
         .metadata(
@@ -137,4 +137,189 @@ pub fn framed_roundtrip(_ctx: &Context, input: &[u8]) {
     assert_eq!(result.resources.len(), 1);
     assert_eq!(result.resources[0].data, data);
     framed_decode(_ctx, &bytes);
+}
+
+/// Native resource schedules agree with Write and, without explicit Flush, one-shot/Read.
+pub fn framed_encode(ctx: &Context, input: &[u8]) {
+    use mbrotli::framing::*;
+    use mbrotli::{EncoderConfig, InputSize, Operation, Quality};
+    use std::io::{Read, Write};
+    let selector = input.first().copied().unwrap_or(0);
+    let data = &input[input.len().min(1)..input.len().min(1025)];
+    let config = FramedEncodeConfig::default()
+        .with_encoder_config(EncoderConfig::default().with_quality(Quality::Q5))
+        .with_framing_config(FramingConfig {
+            chunk_bytes: 1 + usize::from(selector % 31),
+            ..Default::default()
+        });
+    let mut owner = FramedCompressor::builder(config)
+        .with_backend(ctx.level)
+        .build()
+        .unwrap();
+    let dictionary = mbrotli::dictionary::DictionaryBuilder::new()
+        .add_prefix(&b"dictionary payload words"[..])
+        .build()
+        .unwrap();
+    let references = [DictionaryReference::PrefixId(DictionaryId([7; 32]))];
+    let encoding = if selector & 8 != 0 {
+        ResourceEncoding::Shared {
+            dictionary: &dictionary,
+            references: &references,
+        }
+    } else if selector & 4 != 0 {
+        ResourceEncoding::Uncompressed
+    } else {
+        ResourceEncoding::Brotli
+    };
+    let options = ResourceOptions {
+        hidden: selector & 16 != 0,
+        id: (selector & 32 != 0).then_some(DictionaryId([9; 32])),
+    };
+    let stream = InputSize::Exact(data.len() as u64).into();
+    let split = data.len() / 2;
+    let flush = selector & 1 != 0;
+    let width = [1, 2, 7, 31][usize::from(selector >> 6)];
+    let mut buffer = vec![0; width];
+    let mut native = Vec::new();
+    {
+        let mut session = owner
+            .start(InputSize::Exact(data.len() as u64).into())
+            .unwrap();
+        assert!(matches!(
+            session.padding(0),
+            Err(FramedEncodeError::OutputPending)
+        ));
+        assert_eq!(
+            session
+                .process(&mut [], FramedEncodeOperation::Process)
+                .unwrap()
+                .status,
+            FramedEncoderStatus::NeedsOutput
+        );
+        loop {
+            let p = session
+                .process(&mut buffer, FramedEncodeOperation::Process)
+                .unwrap();
+            native.extend_from_slice(&buffer[..p.produced]);
+            if p.status != FramedEncoderStatus::NeedsOutput {
+                break;
+            }
+        }
+        assert!(
+            session
+                .metadata(
+                    MetadataKind::Global,
+                    &[MetadataField {
+                        code: *b"xx",
+                        value: data
+                    }]
+                )
+                .is_err()
+        );
+        assert!(
+            session
+                .resource_with_dictionary(
+                    Default::default(),
+                    stream,
+                    &dictionary,
+                    &[DictionaryReference::PrefixResource(u64::from(selector))]
+                )
+                .is_err()
+        );
+        {
+            let mut resource = match encoding {
+                ResourceEncoding::Uncompressed => session.uncompressed_resource(options).unwrap(),
+                ResourceEncoding::Brotli => session.resource(options, stream).unwrap(),
+                ResourceEncoding::Shared {
+                    dictionary,
+                    references,
+                } => session
+                    .resource_with_dictionary(options, stream, dictionary, references)
+                    .unwrap(),
+            };
+            if flush {
+                let mut p = 0;
+                loop {
+                    let progress = resource
+                        .process(&data[p..split], &mut buffer, Operation::Flush)
+                        .unwrap();
+                    p += progress.consumed;
+                    native.extend_from_slice(&buffer[..progress.produced]);
+                    if progress.status == FramedEncoderStatus::NeedsInput {
+                        break;
+                    }
+                }
+            }
+            let mut p = if flush { split } else { 0 };
+            loop {
+                let progress = resource
+                    .process(&data[p..], &mut buffer, Operation::Finish)
+                    .unwrap();
+                p += progress.consumed;
+                native.extend_from_slice(&buffer[..progress.produced]);
+                if progress.status == FramedEncoderStatus::Finished {
+                    break;
+                }
+            }
+        }
+        loop {
+            let p = session
+                .process(&mut buffer, FramedEncodeOperation::Finish)
+                .unwrap();
+            native.extend_from_slice(&buffer[..p.produced]);
+            if p.status == FramedEncoderStatus::Finished {
+                break;
+            }
+        }
+    }
+    {
+        let mut writer = owner.framed_writer(Vec::new(), Default::default()).unwrap();
+        {
+            let mut resource = match encoding {
+                ResourceEncoding::Uncompressed => writer.uncompressed_resource(options).unwrap(),
+                ResourceEncoding::Brotli => writer.resource(options, stream).unwrap(),
+                ResourceEncoding::Shared {
+                    dictionary,
+                    references,
+                } => writer
+                    .resource_with_dictionary(options, stream, dictionary, references)
+                    .unwrap(),
+            };
+            resource.write_all(&data[..split]).unwrap();
+            if flush {
+                resource.flush().unwrap();
+            }
+            resource.write_all(&data[split..]).unwrap();
+            resource.try_finish().unwrap();
+        }
+        assert_eq!(writer.finish().unwrap(), native);
+    }
+    if !flush {
+        let items = [FramedItem::Resource(FramedResource {
+            data,
+            options,
+            stream,
+            encoding,
+        })];
+        let input = items.as_slice().into();
+        assert_eq!(owner.compress(input).unwrap(), native);
+        let mut actual = Vec::new();
+        owner
+            .framed_reader(input, Default::default())
+            .unwrap()
+            .read_to_end(&mut actual)
+            .unwrap();
+        assert_eq!(actual, native);
+    }
+    if !matches!(encoding, ResourceEncoding::Shared { .. }) {
+        assert_eq!(
+            FramedDecompressor::new(Default::default())
+                .unwrap()
+                .decompress(&native)
+                .unwrap()
+                .resources[0]
+                .data,
+            data
+        );
+    }
 }

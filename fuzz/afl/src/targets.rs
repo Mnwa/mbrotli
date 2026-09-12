@@ -35,6 +35,8 @@ pub const TARGETS: &[(&str, TargetFn)] = &[
     ("framed_decode", crate::framed_targets::framed_decode),
     #[cfg(feature = "experimental")]
     ("framed_roundtrip", crate::framed_targets::framed_roundtrip),
+    #[cfg(feature = "experimental")]
+    ("framed_encode", crate::framed_targets::framed_encode),
     ("decode_roundtrip", crate::decode_targets::decode_roundtrip),
     ("decompress", crate::decode_targets::decompress),
     (
@@ -972,9 +974,16 @@ pub fn framing(ctx: &Context, input: &[u8]) {
     };
     let mut expected = None;
     for split in [1, 37, 2048] {
-        let mut compressor = ctx.encoder(EncoderConfig::default().with_quality(Quality::Q5));
-        let mut container = compressor
-            .framed_writer(Vec::new(), config)
+        let mut framed_encoder = mbrotli::framing::FramedCompressor::builder(
+            mbrotli::framing::FramedEncodeConfig::default()
+                .with_encoder_config(EncoderConfig::default().with_quality(Quality::Q5))
+                .with_framing_config(config),
+        )
+        .with_backend(ctx.level)
+        .build()
+        .expect("framed configuration");
+        let mut container = framed_encoder
+            .framed_writer(Vec::new(), Default::default())
             .expect("valid profile");
         if config.repeat_metadata && selector & 4 != 0 {
             container

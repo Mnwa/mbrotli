@@ -61,8 +61,14 @@ features = {json.dumps(features)}
         "framing": (compression or decompression) and experimental,
         "framing::FramedDecompressor": decompression and experimental,
         "framing::FramedReader": mode == "std" and decompression and experimental,
-        "framing::FramingConfig": mode == "std" and compression and experimental,
-        "compressor::framing::DictionaryId": mode == "std" and compression and experimental,
+        "framing::FramingConfig": compression and experimental,
+        "framing::FramedCompressor": compression and experimental,
+        "framing::FramedEncoderSession": compression and experimental,
+        "framing::FramedInput": compression and experimental,
+        "framing::FramedResourceSession": compression and experimental,
+        "framing::FramedWriter": mode == "std" and compression and experimental,
+        "framing::FramedEncoderReader": mode == "std" and compression and experimental,
+        "compressor::framing::DictionaryId": compression and experimental,
     }
     for item, expected in probes.items():
         source = "#![no_std]\n" if mode == "no_std" else ""

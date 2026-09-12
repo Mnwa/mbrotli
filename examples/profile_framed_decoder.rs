@@ -6,8 +6,8 @@ use mbrotli::framing::*;
 #[cfg_attr(feature = "hotpath", hotpath::main)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::{hint::black_box, io::Write};
-    let mut encoder = mbrotli::Compressor::new(Default::default())?;
-    let mut writer = encoder.framed_writer(Vec::new(), FramingConfig::default())?;
+    let mut framed_encoder = FramedCompressor::new(Default::default())?;
+    let mut writer = framed_encoder.framed_writer(Vec::new(), Default::default())?;
     for _ in 0..256 {
         writer.metadata(
             MetadataKind::Resource,

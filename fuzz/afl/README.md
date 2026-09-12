@@ -210,3 +210,19 @@ Record the revision, corpus, feature configuration and results with each run.
 Their shared synthetic random-byte fixtures are described in
 `regressions/decoder-provenance.md`; format errors are expected, while panics
 and violated progress or C-equivalence assertions fail the target.
+
+
+### Native framed encoder
+
+`framed_encode` requires `--features experimental`. It compares native tiny-output
+schedules with writer output, one-shot and Read (for matching flush schedules),
+and decoded payload. The 1024-byte cap bounds work, not accepted byte values.
+
+```sh
+cargo afl build --release --no-default-features --features experimental --bin framed_encode
+cargo afl fuzz -i regressions/framed_encode -o artifacts/framed-encode -S smoke -V 60 -c - -- target/release/framed_encode
+```
+
+Seeds in `regressions/framed_encode` select plain, flushed, stored, shared and
+hidden/checksummed cases. Preserve findings; replay the minimized input through
+`framed_targets::framed_encode` and add a deterministic regression before fixing.

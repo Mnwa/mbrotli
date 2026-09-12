@@ -14,7 +14,8 @@ graph TD
     Encode --> ECore[private compressor::core]
     Decode --> DCore[private decompressor::core]
     Encode --> Parallel[parallel API and private core: std]
-    Encode --> Framing[framing writer: experimental, std]
+    Encode --> Framing[framed compressor: experimental, alloc]
+    Framing --> FIO[framed writer and reader: std]
     Decode --> FDecode[framed decoder and private core: experimental, alloc]
     Framing --> Wire[codec-neutral framing types]
     FDecode --> Wire
@@ -68,7 +69,7 @@ FFI do not appear in public signatures. Each codec compiles independently.
 | [Shared Brotli](shared-brotli.md) | Large Window declarations and prepared prefix dictionaries. |
 | [Serialized dictionaries](serialized-dictionary.md) | Experimental wire format, transforms and resource limits. |
 | [Custom encoding and continuations](rfc9841-encoding.md) | Static indexes, contexts and headerless stream offsets. |
-| [Framing writer](framing.md) | Experimental container writing, metadata, finalization and framed decoder integration. |
+| [Framed compressor](framing.md) | Reusable owner, shared alloc engine, structured input, sessions, std adapters, metadata and wire compatibility. |
 
 ## Development tools
 

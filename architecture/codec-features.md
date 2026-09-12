@@ -13,7 +13,7 @@ unification is additive; another dependency can enable a disabled codec.
 | Either codec without `no_std` | `io` facade and its shared `FinishError` |
 | Neither codec | No codec API or private codec primitives |
 
-`no_std` still overrides std-only adapters, parallel encoding, the framing writer, and
+`no_std` still overrides std-only adapters, parallel encoding, framed I/O adapters, and
 profiling. `experimental` and `diagnostics` do not enable a codec. With
 compression disabled, `ConfigError` retains only window-validation variants.
 `DictionaryRef::Prepared` and its conversion exist only with both codecs;
@@ -114,8 +114,9 @@ flowchart TD
 `framing` exists with `experimental` and either codec. Its neutral types have no
 encoder dependency. `decompression,experimental` enables `FramedDecompressor`,
 one-shot results and incremental sessions in both std and alloc builds.
-`FramedReader` additionally requires the absence of `no_std`. The writer and its
-configuration retain their compression/experimental/std gates. Isolated consumer
+`FramedReader` additionally requires the absence of `no_std`. `compression,experimental` enables `FramedCompressor`, configuration, borrowed input,
+one-shot drivers and native sessions in alloc builds. Only its writer/resource
+writer/encoded reader require the absence of `no_std`. Isolated consumer
 probes cover the facade and both codec-specific types.
 
 ```mermaid
@@ -124,5 +125,7 @@ graph TD
     Decode[decompression + experimental] --> Framed[FramedDecompressor and session]
     Framed --> Alloc[std or alloc]
     Framed --> Reader[FramedReader: not no_std]
-    Encode[compression + experimental + not no_std] --> Writer[FramedWriter]
+    Encode[compression + experimental] --> Owner[FramedCompressor, input and native sessions]
+    Owner --> Alloc
+    Owner --> Writer[FramedWriter and FramedEncoderReader: not no_std]
 ```

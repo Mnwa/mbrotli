@@ -1,217 +1,221 @@
-# Shared Brotli framing writer
+# Framed compressor
 
-The writer is omitted when `no_std` is enabled. The separate
-[framed decoder](framed-decoder.md) supports alloc-only builds with
-`decompression,experimental,no_std`; only its `FramedReader` requires std APIs.
-See [feature boundaries](no-std.md).
+`compression,experimental` exposes a reusable `FramedCompressor`, configuration,
+borrowed structured input, one-shot operations and native sessions with std or
+alloc. `no_std` excludes only `FramedWriter`, `ResourceWriter`,
+`FramedEncoderReader` and transport errors. Decoder types and raw `Compressor`
+remain independent. The shared `framing` facade re-exports the encoder types;
+owner/configuration/error/progress/session types also have crate-root exports.
 
-`compressor::framing` is an `experimental`, separate container API. Raw
-compression never gains a container header implicitly. Its public adapters own
-ergonomic configuration and borrows; private `framing::core` owns ordering,
-wire sizes, output cursors and resource compression.
+## Ownership and dispatch
 
 ```mermaid
 graph TD
-    compressor[Compressor] --> writer[FramedWriter: borrows compressor, owns sink]
-    writer --> container[private core::Container]
-    writer --> resource[ResourceWriter: exclusive borrow until dropped]
-    resource --> mechanics[private core::resource::Resource]
-    mechanics --> session[EncoderSession: borrows compressor and optional PreparedDictionary]
-    mechanics --> container
-    container --> queue[Bounded pending chunk and durable write cursor]
-    container --> directory[Offsets and exact headers for types 1 through 8]
-    writer --> metadata[private core::metadata: bounded field serialization and compression]
-    metadata --> compressor
-    queue --> sink[Non-seekable Write]
+    Facade[framing: neutral types and public re-exports] --> Owner[FramedCompressor]
+    Owner --> Raw[Compressor: Aggressive inner retention]
+    Owner --> Engine[private framing core::engine::Engine]
+    Engine --> Container[Container: wire ordering, queue and directory]
+    Engine --> Resource[Resource: input/content staging and operation state]
+    Resource --> Operation[private raw OperationState: no borrows]
+    RawSession[raw EncoderSession / SessionCore] --> Operation
+    Operation --> Scheduler[existing StreamState scheduler]
+    Scheduler --> Workspace[raw retained encoder workspace]
+    Workspace --> SIMD[fearless_simd backend selected once at owner construction]
+    Guard[FramedResourceSession] -. borrowed per call .-> Dictionary[external PreparedDictionary]
+    Guard --> Owner
 ```
 
-## Public surface and ownership
+The owner stores no sink, input slices or dictionary references. The raw operation
+state was separated from `SessionCore`'s compressor/dictionary borrows; both raw
+and framed paths invoke its common `process` driver and `StreamState`. Native
+resource guards retain external dictionary borrows, while the lazy input driver
+looks up its borrowed description on each call. Forgetting either guard cannot
+leave dereferenceable external references in owner storage. No self-reference,
+unsafe lifetime extension, dictionary clone or second raw scheduler is used.
 
-`Compressor::framed_writer` queues the five-byte main header without I/O.
-`resource`, `resource_with_dictionary` and `uncompressed_resource` return a
-borrowing `ResourceWriter: Write`. Finish it explicitly with `try_finish`, then
-drop its borrow before starting another resource. `metadata` and `padding`
-queue chunks. `flush` drains them. Container `try_finish` is retryable; consuming
-`finish` returns the sink or a boxed `FramingFinishError` retaining the entire
-writer. `into_inner` aborts without I/O and intentionally discards pending data.
-No destructor writes or implicitly finishes a resource.
+Public modules contain configuration, API guards and std adapters. Private `core`
+contains command admission, logical state, bounded resource staging, metadata,
+wire serialization and the borrowed-input cursor. `core` does not import I/O.
 
-The public module example exercises resource metadata, an uncompressed resource,
-explicit resource finalization, padding, and container finalization. The
-`framed_writer` example covers compressed resources. The separate
-`mbrotli::framing::FramedDecompressor` parses these containers and decodes their
-resources when `decompression,experimental` are enabled. It provides owned
-results, incremental events and a std `BufRead` adapter; see
-[framed decoder](framed-decoder.md). Raw decoder entry points accept raw Brotli
-streams rather than containers.
+## Public input and API
 
-`metadata_with_options` accepts independent `MetadataEncoding` values for the
-original chunk and its repeated copy: uncompressed, Brotli, or Shared Brotli
-with a borrowed prepared dictionary and explicit references. `metadata` remains
-the uncompressed convenience call. `repeat_metadata_fields` selects field codes
-globally before the first metadata chunk; this guarantees that a selected field
-is repeated everywhere it occurs. An empty selection still emits one empty
-repeat per original resource/footer metadata chunk.
+`FramedEncodeConfig` combines `EncoderConfig` and the existing public-field
+`FramingConfig`; builder selects backend and outer retention. Defaults remain
+full container plus directory, no repeats, 65,536 bytes per chunk, 1 MiB metadata,
+8 MiB framing storage, 10,000 resources and 1,000,000 chunks. Profiles and chunk
+size (1..=16 MiB with conservative staging allowance) are validated before use.
 
-`ResourceOptions` carries visibility and an optional caller-provided 256-bit
-checksum. `DictionaryReference` distinguishes prefix/serialized external IDs,
-earlier complete resources, and earlier individual prefix chunks. IDs use the
-RFC HighwayHash checksum type, but keys and calculation belong to the caller.
-There is no hashing, identifier resolution, filesystem access, registry or
-network access in this layer. The caller must supply references matching the
-bytes and order in the borrowed `PreparedDictionary`.
+`FramedInput` borrows an ordered slice of `FramedItem`: complete resources,
+metadata or padding. `FramedResource` carries payload, visibility/checksum,
+`StreamConfig`, and `ResourceEncoding::{Uncompressed,Brotli,Shared}`. Slice
+conversion chooses Exact length; explicit Unknown is preserved. Metadata and
+hidden resources remain in input order. References are absolute offsets from the
+new container's start, independent of any destination prefix.
 
-Internal pointers must name previously emitted content chunks; complete-resource
-pointers must name type 2 or 3. Serialized references are limited to one and
-prefix references to fifteen. Resource starts require stream offset zero.
-Large Window resources without dictionaries use Shared Brotli with zero
-references; ordinary Brotli uses codec 2.
-
-## Wire representation
-
-The main header is `91 0a 42 52 FLAGS`. Bit 2 is **set** for the full container
-profile with a footer, and clear for the single-resource profile. Independent
-wire fixture tests assert both profiles.
-
-Every chunk uses a canonical 63-bit varint length followed by type-specific
-header and content. Content chunk headers, including the length varint, are
-retained verbatim for the central directory.
-
-| Type | Emission |
-| --- | --- |
-| 0 | Explicit zero-filled padding |
-| 1 | Resource metadata before the resource |
-| 2 | Single-chunk resource |
-| 3 / 4 / 5 | First / middle / last partial resource |
-| 6 | Footer metadata after a resource |
-| 7 | Global metadata |
-| 8 | Complete or field-selected copies of resource/footer metadata in original order, with independent compression |
-| 9 | Central directory: repeated-metadata offset and all type 1–8 content headers, including repeated metadata |
-| 10 | Final footer: reversed varints for total file size and directory offset |
-
-Metadata defaults to uncompressed. Uppercase field codes are application data;
-resource-only `id` must be UTF-8 and `mt` exactly eight bytes. Duplicate reserved
-fields and misplaced metadata are rejected. Padding does not break metadata
-adjacency. Repeated metadata requires a central directory. The single-resource
-profile forbids the directory, repetition and all metadata, and requires exactly
-one resource.
+`compress`, append/rollback `compress_into`, `compress_to_slice` and
+`framed_reader` use one lazy `core::driver::Driver`. It stores item/offset cursors
+and advances the same engine as native guards. No destination stages the entire
+container. Append restores length and prefix on every error. Slice failure keeps
+the written prefix and untouched tail, reporting cumulative progress. Reader
+returns already produced bytes before a deferred terminal error; nonempty reads
+return EOF only after full suffix delivery. Its `into_inner` returns the original
+input description and cancels.
 
 ```mermaid
 sequenceDiagram
     participant Caller
-    participant Container
-    participant Metadata as core::metadata
-    participant Compressor
-    Caller->>Container: metadata_with_options(fields, encodings)
-    Container->>Container: validate order, fields, references and peak staging budget
-    Container->>Metadata: serialize original and globally selected repeated fields
-    Metadata->>Compressor: bounded one-shot compression where requested
-    Compressor-->>Metadata: independent streams
-    Metadata-->>Container: original and repeat headers/payloads
-    Container->>Container: queue original; retain encoded repeat with its full capacity
-    Caller->>Container: try_finish
-    Container->>Container: queue each repeat once and record its header
-    Container->>Container: emit directory over original AND repeat records
+    participant API as Session / borrowed-input driver
+    participant Engine
+    participant Raw as Shared raw operation
+    participant Out as Caller slice / std transport
+    Caller->>API: start(stream aggregate)
+    API->>Engine: queue main header; set active owner
+    Caller->>API: process(output, Process)
+    Engine->>Out: deliver header prefix
+    Caller->>API: resource(options, stream, dictionary)
+    API->>Engine: validate and commit resource
+    Caller->>API: process(input, output, Finish)
+    Engine->>Raw: Flush complete nonfinal chunks; Finish final chunk
+    Raw-->>Engine: compressed bounded chunk
+    Engine->>Out: framing header and content prefixes
+    Caller->>API: container Finish
+    Engine->>Out: repeats, directory, footer
 ```
 
-Repeated chunks are pre-encoded while queuing their originals, so dictionaries
-are borrowed only for that call. Shared repeated metadata accepts external IDs
-only: it cannot accidentally depend on resource chunks unavailable to a reader
-of the terminal metadata series. Original metadata may use earlier internal
-resources or chunks. Each compressed metadata chunk starts a new decoder;
-Large Window without an attached dictionary uses Shared Brotli with zero
-references. Resource partial chunks continue to use keep-decoder semantics.
+Container `process` consumes zero payload. Its NeedsInput admits the next command;
+NeedsOutput requires draining. Structural methods reject OutputPending before
+commit and retain no borrowed metadata/reference lists. Container Exact counts
+accepted payload across all resources, including hidden ones, excluding metadata
+and padding. It is independent of the raw per-resource size hint; new resources
+require zero stream offset. Exceeding a size contract is rejected before accepting
+the offered bytes, and underflow prevents successful Finish.
 
-## Streaming and transactional emission
+## State, cancellation and retry
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Idle: queue main header
-    Idle --> Active: start resource
-    Active --> Active: accept bounded input / queue partial chunk
-    Active --> Idle: try_finish resource / mark resource complete
-    Active --> Abandoned: drop unfinished resource
-    Idle --> Finishing: try_finish container
-    Finishing --> Finishing: repeated metadata, directory, footer
-    Finishing --> Finished: drain suffix and flush sink
-    Abandoned --> [*]: explicit abort / drop
-    Finished --> Finished: retry finish without emitting bytes
+    [*] --> HeaderPending: start
+    HeaderPending --> Idle: drain header
+    Idle --> Pending: metadata or padding committed
+    Pending --> Idle: drain output
+    Idle --> Resource: commit resource guard
+    Resource --> Resource: Process or Flush
+    Resource --> Idle: final chunk delivered and guard released
+    Resource --> Abandoned: unfinished guard dropped or forgotten
+    Idle --> Finishing: Finish
+    Finishing --> Finishing: drain suffix chunks
+    Finishing --> Complete: footer delivered
+    Resource --> Failed: process error
+    Finishing --> Failed: process error
+    Abandoned --> Cancelled: container Drop
+    Failed --> Cancelled: container Drop
+    Complete --> Cancelled: container Drop applies retention
+    Cancelled --> [*]
 ```
 
-One resource buffers at most `chunk_bytes` input. On the next write after it is
-full, or on explicit flush, the session flushes that chunk. The first compressed
-chunk uses Brotli (2) or Shared Brotli (3); following chunks use keep-decoder (1).
-All partial chunks belong to the same session. The final chunk finishes that
-session and carries any checksum for the whole resource. Uncompressed resources
-use codec 0 throughout. A resource that fits one chunk uses type 2, including
-empty resources.
+A full input chunk stays staged until another byte, Flush or Finish determines
+whether it is partial. Exact first-chunk fills followed by Finish remain type 2.
+Flush/Finish record absolute input boundaries; retries must keep the operation and
+remaining suffix length. Repeated empty Flush emits nothing. Resource Finished
+means its final chunk was delivered; only then does the completed-resource count
+advance. Container Finished includes delivery of all suffix bytes.
 
-Sink writes advance a durable cursor only for bytes the sink accepted.
-`Interrupted` is retried, zero becomes `WriteZero`, and other errors retain the
-suffix. Writes accepting resource input return that accepted count before a
-later sink failure can occur. Encoding happens only after pending bytes drain.
-A non-I/O error after advancing the encoder poisons that resource; it cannot
-re-encode accepted input. Resource completion and directory/footer cursors
-advance when bytes are queued, not when the sink drains, preventing duplicate
-chunks on a retry. The compressor's ordinary abandoned-session recovery handles
-the next raw stream after a framing abort.
-
-The footer solves its self-inclusive file size by fixed-point iteration with
-checked addition and a 63-bit ceiling. Directory pointers count accepted queued
-bytes, so no seek or sink position query is needed.
-
-## Limits and errors
-
-Defaults are 64 KiB input per chunk, 1 MiB aggregate metadata, 8 MiB framing
-storage, 10,000 resources and 1,000,000 chunks (generated terminal chunks count).
-Chunk sizes must be 1..=16 MiB and fit the conservative staging budget. Checks
-precede chunk/metadata allocations and account for retained header records,
-record-vector capacity, repeated field selection, encoded repeat capacities and
-temporary compression buffers (using the compressor's output bound). Resource data
-is streamed, while the bounded directory grows with chunk count. These limits
-do not include the sink's storage, compressor workspace or separately prepared
-dictionaries; their owners control those budgets.
-
-`FramingError` is non-exhaustive and keeps typed `EncodeError` / `io::Error`
-sources. I/O conversion preserves the sink's original `ErrorKind`. Invalid
-ordering and resource-limit failures are distinct from wire arithmetic overflow.
-After a non-retryable resource failure, abort the container rather than emit a
-misleading successful footer.
-
-## Verification and known gaps
-
-`tests/framing.rs` independently parses wire fixtures for all eleven chunk
-types, all reference forms, directories and reversed footer fields. Compressed
-resource bytes decode with C. Fault injection covers short writes, interruption,
-zero and `WouldBlock` at 400 offsets each, including compressed originals and
-repeats, retryable finalization and abandoned
-resources. AFL generates resource/metadata sequences and compares output across
-caller write schedules; its committed corpus is replayed by `cargo afl test`.
-
-The pinned C library has no RFC 9841 container implementation. Whole-container
-verification uses independent structural fixtures and round trips through this
-crate's framed decoder, including the `framed_roundtrip` AFL target; there is no
-C framing oracle. Metadata streams and selected repeats are independently decoded
-with C; directory tests require every type 1–8 header. See
-[decoder verification](framed-decoder.md#verification-artifacts) for its test scope.
-Metadata emits independent streams, not cross-chunk keep-decoder streams, and
-pre-encoded repeated metadata does not use internal repeat-to-repeat dictionaries.
-The writer does not calculate checksums or resolve dictionaries; the decoder
-records resource checksums without verifying them and accepts a caller-supplied
-resolver for external dictionaries.
-
-## Codec-neutral types and decoder
-
-`DictionaryId`, `DictionaryReference`, `MetadataKind`, and `MetadataField` live
-in `src/framing/mod.rs`. Existing `compressor::framing` imports re-export the
-same types. `mbrotli::framing` exposes the writer when compression/std are
-available and the [structured decoder](framed-decoder.md) independently with
-`decompression,experimental`, including alloc-only builds.
+Process errors are terminal, with exact per-call accepted/produced counts and
+location. Correctable structural errors before commit do not poison the engine.
+Locations distinguish resource index/input offset, structured item index, and
+container-relative delivered wire offset. Limits include category and maximum;
+allocation/overflow/size-contract/raw-codec errors remain distinct and typed.
+`FramingError` aliases `FramedEncodeError`; owning `FramingFinishError` retains a
+whole std writer for retry. Transport conversion preserves original ErrorKind.
 
 ```mermaid
-graph LR
-    Common[framing: shared wire types] --> Writer[compressor::framing re-exports]
-    Common --> Decoder[decompressor::framing]
-    Writer --> Public[mbrotli::framing facade]
-    Decoder --> Public
+flowchart TD
+    Commit[Engine queues one complete wire chunk] --> Q[Advance logical queued offset once]
+    Q --> Copy[Copy bounded prefix into caller output]
+    Copy --> Native[Advance delivered wire count]
+    Native --> Transport[Writer holds fixed 8192-byte inline buffer]
+    Transport --> Write[Sink write]
+    Write -->|short write| Cursor[Advance transport cursor by accepted count]
+    Cursor --> Write
+    Write -->|Interrupted| Write
+    Write -->|WouldBlock, zero, oversized count, error| Retain[Keep unwritten suffix for retry]
+    Retain --> Write
+    Write -->|all accepted| Next[Request next engine prefix]
+    Next --> Copy
+    Next -->|container complete| Flush[Flush sink; retry failure without new suffix]
 ```
+
+`ResourceWriter::write` returns accepted payload before reporting a later codec
+failure; pending wire bytes and a deferred error survive. Sink failures retain
+transport cursors. Structural writer methods drain previous output before issuing
+a command. Resource flush drives raw Flush then transport flush; container flush
+only drains and flushes transport. No destructor writes. `finish` preserves the
+complete writer on error; `into_inner` cancels. `get_mut` is for sink repair:
+inserting/removing wire bytes would invalidate offsets.
+
+Normal container Drop releases the owner for reuse. Forgotten container guards
+leave abandoned protection; trim does not clear it. Recover releases raw and
+framing storage, preserving policy/backend. Reconfigure validates first, so a bad
+configuration preserves both old policy and abandoned protection. A successful
+reconfigure cancels and applies the new policy. Raw retention remains Aggressive
+within a container; outer ReleaseAll/Bounded applies at the container boundary.
+
+## Wire serialization
+
+The main header is `91 0a 42 52 FLAGS`; bit 2 is set for the full profile and clear
+for footerless single-resource framing, preserving the repository's established
+interpretation. Varints are minimal and bounded to 63 bits. All content offsets
+are relative to the container, independent of transport writes.
+
+| Type | Emission |
+| --- | --- |
+| 0 | Zero-filled explicit padding; metadata adjacency is preserved |
+| 1 | Resource metadata preceding its resource |
+| 2 | Single complete resource, including empty payload |
+| 3 / 4 / 5 | First / middle / last chunks of one continuing resource |
+| 6 | Footer metadata following its resource |
+| 7 | Global metadata |
+| 8 | Repeated resource/footer metadata, preserving order and selected fields |
+| 9 | Repeated-metadata offset and exact type 1–8 content headers/offsets |
+| 10 | Reversed file-size/directory varints; size includes the footer itself |
+
+Codec 0 is verbatim, codec 2 starts ordinary Brotli, codec 3 starts Shared Brotli,
+and codec 1 retains decoder state across compressed partial chunks. Large Window
+without a dictionary uses Shared Brotli with zero references. Compressed partials
+share one raw operation. Metadata compression starts independent streams;
+original and repeated copies can have different encodings. None selects all
+repeated fields; an empty selection still emits each required empty repeated
+chunk. Reserved metadata codes, UTF-8 `id`, eight-byte `mt`, field multiplicity,
+ordering, profile restrictions and reference limits remain validated.
+
+Reference serialization permits at most one serialized and fifteen prefix
+attachments. Internal pointers must address earlier recorded content, with whole
+resources starting at type 2/3. Resource commands can only follow complete earlier
+resources. Shared repeated metadata permits external references only.
+
+## Memory and verification
+
+Framing allocations use fallible reservations and checked/budgeted sizes. Storage
+comprises bounded input/content buffers, pending output/cursor, exact directory
+records, encoded repeats and field selection. Directory/repeats scale with the
+number and content of commands; there is no O(1) promise for a whole container.
+Raw encoder workspace, external dictionaries and caller destinations are separate
+from the framing budget. Owner retention sums raw and framing owned capacities.
+The fixed inline writer transport buffer has no heap allocation.
+
+Legacy fixtures in `testdata/framing-legacy` were captured at `910653f` before
+serializer changes. `tests/framing.rs` compares them before independent wire
+parsing and retains sink fault injection. `tests/framed_encoder.rs` compares
+native/one-shot/slice/reader/writer schedules, lifecycle, dictionaries and metadata.
+`tests/framed_encoder_memory.rs` measures retained/peak requested heap and
+injects framing allocation failures. `framed_encode` adds AFL schedules, tiny
+output and invalid command/reference coverage. `benches/framed_compress.rs`
+measures owner reuse and validates bytes outside timing; C only oracles raw output.
+See the [validation record](../benchmarks/framed-compressor-validation.md).
+
+Known boundaries: there is no C whole-container oracle, checksum computation,
+automatic dictionary resolver or symbolic resource-index references. Metadata
+emission uses independent streams rather than decoder-only exotic continuation
+forms. Reader consumes borrowed complete slices; gradually arriving payload uses
+native guards or ResourceWriter. Retained-byte accounting is requested heap
+storage, not allocator overhead or an RSS ceiling.

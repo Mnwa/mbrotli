@@ -92,7 +92,7 @@ assembles independent parts of one input.
 
 ## Framing containers
 
-`Compressor::framed_writer` creates an experimental Shared Brotli container
+`FramedCompressor::framed_writer` creates an experimental Shared Brotli container
 writer over a non-seekable `Write` sink. It supports compressed and uncompressed
 resources, dictionary references, metadata, padding, repeated metadata, a central
 directory, and a footer.
@@ -115,12 +115,30 @@ structure; `start` exposes incremental events, and `framed_reader` adapts a
 `BufRead` source. The default input mode is `FramedOnly`; `InputMode::Auto` also
 accepts a raw Brotli member. Raw `Decompressor` entry points do not parse containers.
 
-The framing writer requires std APIs. The decoder's owned and incremental APIs
+The framed owner, one-shot encoder and native sessions support alloc builds.
+The framing writer and encoded reader require std APIs. The decoder's owned and incremental APIs
 also work with `no_std` and `alloc`; `FramedReader` requires std APIs. External
 dictionaries use a caller-supplied resolver, and resource checksums are recorded
 without verification. Tests check independent wire fixtures, writer/decoder
 round trips and compressed payload decoding with C; the pinned C library has no
 container codec.
 
-See [framing writer mechanics](../architecture/framing.md) and
+See [framed compressor mechanics](../architecture/framing.md) and
 [framed decoder APIs, validation and limits](../architecture/framed-decoder.md).
+
+
+The experimental writer constructor moved from the raw owner:
+
+```rust
+use mbrotli::{EncoderConfig, framing::{FramedCompressor, FramedEncodeConfig, FramingConfig}};
+let config = FramedEncodeConfig::default()
+    .with_encoder_config(EncoderConfig::default())
+    .with_framing_config(FramingConfig::default());
+let mut encoder = FramedCompressor::new(config)?;
+let writer = encoder.framed_writer(Vec::new(), Default::default())?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+The second writer argument is now a per-container `FramedEncodeStreamConfig`.
+See [runnable API examples](https://docs.rs/mbrotli/latest/mbrotli/framing/struct.FramedCompressor.html)
+for borrowed inputs, native output buffers, metadata and owner reuse.

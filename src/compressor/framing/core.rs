@@ -1,17 +1,26 @@
 //! Container ordering, checked wire sizes, and durable output cursors.
 
-use std::io::{self, Write};
+#[cfg(test)]
+use alloc::vec;
+use alloc::{boxed::Box, vec::Vec};
+pub(super) mod driver;
+pub(super) mod engine;
 mod metadata;
-mod resource;
+pub(super) mod resource;
 use super::{
     DictionaryReference, FramingConfig, FramingError, MetadataEncoding, MetadataField,
     MetadataKind, MetadataOptions,
 };
 use crate::compressor::Compressor;
 use crate::compressor::core::rfc9841::varint;
-pub(super) use resource::Resource;
 
 pub(super) fn number(value: u64, output: &mut Vec<u8>) -> Result<(), FramingError> {
+    if value > varint::MAX_VARINT {
+        return Err(FramingError::Overflow);
+    }
+    output
+        .try_reserve(varint::encoded_len(value))
+        .map_err(|_| FramingError::AllocationFailed)?;
     varint::write(value, output).map_err(|_| FramingError::Overflow)
 }
 
@@ -25,8 +34,7 @@ struct Record {
 }
 
 #[derive(Debug)]
-pub(super) struct Container<W> {
-    pub(super) writer: W,
+pub(super) struct Container {
     pub(super) config: FramingConfig,
     pending: Vec<u8>,
     cursor: usize,
@@ -48,11 +56,11 @@ pub(super) struct Container<W> {
     repeat_fields: Option<Box<[[u8; 2]]>>,
 }
 
-impl<W: Write> Container<W> {
+impl Container {
     pub(super) const fn offset(&self) -> u64 {
         self.offset
     }
-    pub(super) fn new(writer: W, config: FramingConfig) -> Result<Self, FramingError> {
+    pub(super) fn validate(config: FramingConfig) -> Result<(), FramingError> {
         if !config.container && (config.central_directory || config.repeat_metadata) {
             return Err(FramingError::Invalid(
                 "a single-resource profile cannot contain a directory or repeated metadata",
@@ -67,14 +75,16 @@ impl<W: Write> Container<W> {
             || config.chunk_bytes > (1 << 24)
             || config.max_buffer_bytes < config.chunk_bytes.saturating_mul(4).saturating_add(8192)
         {
-            return Err(FramingError::Limit(
+            return Err(FramingError::Invalid(
                 "chunk size must be 1..=16 MiB and fit four times plus 8 KiB in the buffer budget",
             ));
         }
-        Ok(Self {
-            writer,
+        Ok(())
+    }
+    pub(super) fn new(config: FramingConfig) -> Self {
+        Self {
             config,
-            pending: vec![0x91, 0x0a, 0x42, 0x52, if config.container { 4 } else { 0 }],
+            pending: Vec::new(),
             cursor: 0,
             offset: 5,
             chunks: 0,
@@ -92,34 +102,77 @@ impl<W: Write> Container<W> {
             directory_done: false,
             finished: false,
             repeat_fields: None,
-        })
+        }
     }
 
     pub(super) fn check_buffer(&self, extra: usize) -> Result<(), FramingError> {
         if self.retained.saturating_add(extra) > self.config.max_buffer_bytes {
-            Err(FramingError::Limit("retained framing bytes"))
+            Err(FramingError::Limit {
+                kind: "retained framing bytes",
+                limit: self.config.max_buffer_bytes as u64,
+            })
         } else {
             Ok(())
         }
     }
 
-    pub(super) fn drain(&mut self) -> Result<(), FramingError> {
-        while self.cursor < self.pending.len() {
-            match self.writer.write(&self.pending[self.cursor..]) {
-                Ok(0) => return Err(io::Error::from(io::ErrorKind::WriteZero).into()),
-                Ok(count) if count <= self.pending.len() - self.cursor => self.cursor += count,
-                Ok(_) => return Err(io::Error::other("sink reported an oversized write").into()),
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(error) => return Err(error.into()),
-            }
-        }
+    pub(super) fn reset(&mut self) {
+        let pending = ::core::mem::take(&mut self.pending);
+        let records = ::core::mem::take(&mut self.records);
+        *self = Self::new(self.config);
+        self.pending = pending;
         self.pending.clear();
-        self.cursor = 0;
+        self.records = records;
+        self.records.clear();
+        self.retained = self.records.capacity() * size_of::<Record>();
+    }
+    pub(super) fn start(&mut self) -> Result<(), FramingError> {
+        self.reset();
+        self.pending
+            .try_reserve_exact(5)
+            .map_err(|_| FramingError::AllocationFailed)?;
+        self.pending.extend_from_slice(&[
+            0x91,
+            10,
+            66,
+            82,
+            if self.config.container { 4 } else { 0 },
+        ]);
         Ok(())
+    }
+    pub(super) fn retained_bytes(&self) -> usize {
+        self.retained + self.pending.capacity()
+    }
+    pub(super) const fn has_pending(&self) -> bool {
+        self.cursor < self.pending.len()
+    }
+    pub(super) fn drain(&self) -> Result<(), FramingError> {
+        if self.has_pending() {
+            Err(FramingError::OutputPending)
+        } else {
+            Ok(())
+        }
+    }
+    pub(super) fn output(&mut self, output: &mut [u8]) -> usize {
+        let n = output.len().min(self.pending.len() - self.cursor);
+        output[..n].copy_from_slice(&self.pending[self.cursor..self.cursor + n]);
+        self.cursor += n;
+        if self.cursor == self.pending.len() {
+            self.pending.clear();
+            self.cursor = 0;
+        }
+        n
+    }
+    pub(super) const fn is_finished(&self) -> bool {
+        self.finished && !self.has_pending()
     }
 
     fn idle(&self) -> Result<(), FramingError> {
-        if self.active || self.finishing {
+        self.drain()?;
+        if self.active {
+            return Err(FramingError::AbandonedResource);
+        }
+        if self.finishing {
             return Err(FramingError::Invalid(
                 "resource is unfinished, abandoned, or container is finishing",
             ));
@@ -130,12 +183,18 @@ impl<W: Write> Container<W> {
     pub(super) fn begin(&mut self) -> Result<(), FramingError> {
         self.idle()?;
         if self.chunks >= self.config.max_chunks {
-            return Err(FramingError::Limit("chunk count"));
+            return Err(FramingError::Limit {
+                kind: "chunk count",
+                limit: self.config.max_chunks,
+            });
         }
         if self.resources >= self.config.max_resources
             || (!self.config.container && self.resources != 0)
         {
-            return Err(FramingError::Limit("resource count"));
+            return Err(FramingError::Limit {
+                kind: "resource count",
+                limit: self.config.max_resources,
+            });
         }
         self.check_buffer(
             self.config
@@ -157,7 +216,10 @@ impl<W: Write> Container<W> {
             return Err(FramingError::Invalid("pending chunk must be drained"));
         }
         if self.chunks >= self.config.max_chunks {
-            return Err(FramingError::Limit("chunk count"));
+            return Err(FramingError::Limit {
+                kind: "chunk count",
+                limit: self.config.max_chunks,
+            });
         }
         let length = header
             .len()
@@ -191,16 +253,17 @@ impl<W: Write> Container<W> {
                 .saturating_add(record_bytes)
                 .saturating_add(self.config.chunk_bytes * 2),
         )?;
-        let mut complete_header = Vec::with_capacity(header.len() + 9);
+        let mut complete_header = bytes(header.len() + 9)?;
         number(length as u64, &mut complete_header)?;
         complete_header.extend_from_slice(&header);
-        self.pending = Vec::with_capacity(total);
-        self.pending.extend_from_slice(&complete_header);
-        self.pending.extend_from_slice(content);
+        let mut pending = bytes(total)?;
+        pending.extend_from_slice(&complete_header);
+        pending.extend_from_slice(content);
         if record {
             if record_capacity > self.records.capacity() {
                 self.records
-                    .reserve_exact(record_capacity - self.records.len());
+                    .try_reserve_exact(record_capacity - self.records.len())
+                    .map_err(|_| FramingError::AllocationFailed)?;
             }
             self.records.push(Record {
                 offset: self.offset,
@@ -211,6 +274,7 @@ impl<W: Write> Container<W> {
             });
             self.retained += record_bytes;
         }
+        self.pending = pending;
         self.offset = next_offset;
         self.chunks += 1;
         Ok(())
@@ -227,7 +291,9 @@ impl<W: Write> Container<W> {
         }
         let mut serialized = 0;
         let mut prefixes = 0;
-        let mut bytes = vec![references.len() as u8];
+        self.check_buffer(1 + references.len() * 35)?;
+        let mut bytes = bytes(1 + references.len() * 35)?;
+        bytes.push(references.len() as u8);
         for reference in references {
             let (flag, id, pointer) = match *reference {
                 DictionaryReference::PrefixId(id) => (2, Some(id), None),
@@ -276,7 +342,10 @@ impl<W: Write> Container<W> {
             ));
         }
         if codes.len() > 678 {
-            return Err(FramingError::Limit("repeated field codes"));
+            return Err(FramingError::Limit {
+                kind: "repeated field codes",
+                limit: 678,
+            });
         }
         for (i, code) in codes.iter().enumerate() {
             if !(code.iter().all(u8::is_ascii_uppercase) || matches!(code, b"id" | b"mt"))
@@ -289,8 +358,13 @@ impl<W: Write> Container<W> {
         }
         let bytes = size_of_val(codes);
         self.check_buffer(bytes)?;
+        let mut selection = Vec::new();
+        selection
+            .try_reserve_exact(codes.len())
+            .map_err(|_| FramingError::AllocationFailed)?;
+        selection.extend_from_slice(codes);
         self.retained -= self.repeat_fields.as_ref().map_or(0, |v| size_of_val(&**v));
-        self.repeat_fields = Some(codes.into());
+        self.repeat_fields = Some(selection.into_boxed_slice());
         self.retained += bytes;
         Ok(())
     }
@@ -345,7 +419,7 @@ impl<W: Write> Container<W> {
                 true
             } else if kind == MetadataKind::Resource && field.code == *b"id" && !name {
                 name = true;
-                std::str::from_utf8(field.value).is_ok()
+                ::core::str::from_utf8(field.value).is_ok()
             } else if kind == MetadataKind::Resource && field.code == *b"mt" && !modified {
                 modified = true;
                 field.value.len() == 8
@@ -367,7 +441,10 @@ impl<W: Write> Container<W> {
             .checked_add(length)
             .ok_or(FramingError::Overflow)?;
         if total > self.config.max_metadata_bytes {
-            return Err(FramingError::Limit("metadata bytes"));
+            return Err(FramingError::Limit {
+                kind: "metadata bytes",
+                limit: self.config.max_metadata_bytes as u64,
+            });
         }
         let bound = Compressor::max_compressed_size(length).map_err(|_| FramingError::Overflow)?;
         // Original and repeated inputs/outputs, pending storage and queue copies
@@ -380,7 +457,10 @@ impl<W: Write> Container<W> {
                 .saturating_add(8192),
         )?;
         if self.chunks >= self.config.max_chunks {
-            return Err(FramingError::Limit("chunk count"));
+            return Err(FramingError::Limit {
+                kind: "chunk count",
+                limit: self.config.max_chunks,
+            });
         }
         let repeat = self.config.repeat_metadata && kind != MetadataKind::Global;
         let references = self.metadata_references(options.encoding, false)?;
@@ -418,12 +498,15 @@ impl<W: Write> Container<W> {
                 .saturating_add(content.capacity())
                 .saturating_add(8192),
         )?;
-        self.queue(header, &content, true)?;
+        self.retained += repeat_bytes;
+        if let Err(error) = self.queue(header, &content, true) {
+            self.retained -= repeat_bytes;
+            return Err(error);
+        }
         if let Some(record) = self.records.last_mut() {
             record.metadata = repeated;
             record.repeat_header = repeat_header;
         }
-        self.retained += repeat_bytes;
         self.metadata_bytes = total;
         self.metadata_pending = kind == MetadataKind::Resource;
         self.after_resource = false;
@@ -434,7 +517,9 @@ impl<W: Write> Container<W> {
         self.idle()?;
         self.check_buffer(bytes.saturating_mul(3).saturating_add(8192))?;
         self.drain()?;
-        self.queue(vec![0], &vec![0; bytes], false)
+        let mut content = self::bytes(bytes)?;
+        content.resize(bytes, 0);
+        self.queue(copy(&[0])?, &content, false)
     }
 
     pub(super) fn finish(&mut self) -> Result<(), FramingError> {
@@ -448,8 +533,8 @@ impl<W: Write> Container<W> {
                 "single-resource profile requires exactly one resource",
             ));
         }
-        self.finishing = true;
         self.drain()?;
+        self.finishing = true;
         if self.config.container && !self.finished {
             if self.config.repeat_metadata {
                 while self.repeat_cursor < self.records.len() {
@@ -463,8 +548,8 @@ impl<W: Write> Container<W> {
                                 .saturating_add(record.repeat_header.len())
                                 .saturating_add(8192),
                         )?;
-                        let header = record.repeat_header.clone();
-                        let content = record.metadata.clone();
+                        let header = copy(&record.repeat_header)?;
+                        let content = copy(&record.metadata)?;
                         let offset = self.offset;
                         self.queue(header, &content, true)?;
                         if self.repeat_offset == 0 {
@@ -472,7 +557,9 @@ impl<W: Write> Container<W> {
                         }
                     }
                     self.repeat_cursor += 1;
-                    self.drain()?;
+                    if self.has_pending() {
+                        return Ok(());
+                    }
                 }
             }
             if self.config.central_directory && !self.directory_done {
@@ -482,7 +569,7 @@ impl<W: Write> Container<W> {
                     .try_fold(9usize, |sum, r| sum.checked_add(18 + r.header.len()))
                     .ok_or(FramingError::Overflow)?;
                 self.check_buffer(bound.saturating_mul(3).saturating_add(8192))?;
-                let mut content = Vec::with_capacity(bound);
+                let mut content = bytes(bound)?;
                 number(self.repeat_offset, &mut content)?;
                 for record in &self.records {
                     number(record.offset, &mut content)?;
@@ -490,18 +577,16 @@ impl<W: Write> Container<W> {
                     content.extend_from_slice(&record.header);
                 }
                 let offset = self.offset;
-                self.queue(vec![9], &content, false)?;
+                self.queue(copy(&[9])?, &content, false)?;
                 self.directory_offset = offset;
                 self.directory_done = true;
-                self.drain()?;
+                return Ok(());
             }
             let content = footer(self.offset, self.directory_offset)?;
-            self.queue(vec![10], &content, false)?;
+            self.queue(copy(&[10])?, &content, false)?;
             self.finished = true;
-            self.drain()?;
         }
         self.finished = true;
-        self.writer.flush()?;
         Ok(())
     }
 }
@@ -520,7 +605,7 @@ fn footer(offset: u64, directory: u64) -> Result<Vec<u8>, FramingError> {
         }
         size = next;
     }
-    let mut bytes = Vec::new();
+    let mut bytes = bytes(18)?;
     number(size, &mut bytes)?;
     bytes.reverse();
     let start = bytes.len();
@@ -529,9 +614,55 @@ fn footer(offset: u64, directory: u64) -> Result<Vec<u8>, FramingError> {
     Ok(bytes)
 }
 
+/// Fallible bounded staging allocation.
+pub(super) fn bytes(capacity: usize) -> Result<Vec<u8>, FramingError> {
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(|_| FramingError::AllocationFailed)?;
+    Ok(bytes)
+}
+pub(super) fn copy(source: &[u8]) -> Result<Vec<u8>, FramingError> {
+    let mut bytes = bytes(source.len())?;
+    bytes.extend_from_slice(source);
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scalar_and_each_host_backend_preserve_framed_bytes() {
+        use crate::compressor::framing::{
+            FramedCompressor, FramedEncodeConfig, FramedInput, FramedItem, FramedResource,
+        };
+        use crate::{Backend, EncoderConfig, Quality};
+        let data = b"same framing and raw resource bytes across backends".repeat(20);
+        let items = [FramedItem::Resource(FramedResource::from(data.as_slice()))];
+        let input = FramedInput::from(items.as_slice());
+        for quality in [Quality::Q0, Quality::Q5, Quality::Q11] {
+            let config = FramedEncodeConfig::default()
+                .with_encoder_config(EncoderConfig::default().with_quality(quality));
+            let expected = FramedCompressor::builder(config)
+                .with_backend(Backend::SCALAR)
+                .build()
+                .unwrap()
+                .compress(input)
+                .unwrap();
+            for backend in Backend::available() {
+                assert_eq!(
+                    FramedCompressor::builder(config)
+                        .with_backend(backend)
+                        .build()
+                        .unwrap()
+                        .compress(input)
+                        .unwrap(),
+                    expected
+                );
+            }
+        }
+    }
 
     #[test]
     fn footer_size_converges_across_varint_width_boundaries() {
@@ -560,19 +691,18 @@ mod tests {
 
     #[test]
     fn chunk_limits_and_offset_overflow_fail_without_queuing() {
-        let mut container = Container::new(
-            Vec::new(),
-            FramingConfig {
-                max_chunks: 0,
-                ..Default::default()
-            },
-        )
-        .expect("container");
+        let mut container = Container::new(FramingConfig {
+            max_chunks: 0,
+            ..Default::default()
+        });
         assert!(matches!(
             container.begin(),
-            Err(FramingError::Limit("chunk count"))
+            Err(FramingError::Limit {
+                kind: "chunk count",
+                limit: 0
+            })
         ));
-        container.drain().expect("header");
+        container.output(&mut [0; 5]);
         container.config.max_chunks = 1;
         container.offset = varint::MAX_VARINT;
         assert!(matches!(

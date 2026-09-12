@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+- Document framed decoding in README and crate docs, with a one-shot example,
+  event-reader semantics, feature availability and decoder configuration.
+
+- Add an independent experimental `FramedCompressor` with retained raw/framing
+  workspaces, alloc-backed structured one-shot input and native sessions, lazy
+  encoded reader and retryable writer over one I/O-independent framing engine.
+  Preserve legacy wire fixtures, partial raw streams, dictionaries and metadata.
+  Add typed progress, input-size contracts, rollback, lifecycle/memory checks,
+  runnable API examples, feature probes and native AFL schedules.
+- Move the experimental writer factory off raw `Compressor`:
+  before: `Compressor::new(encoder_config)?.framed_writer(sink, framing_config)`;
+  after: construct `FramedCompressor::new(FramedEncodeConfig::default()
+  .with_encoder_config(encoder_config).with_framing_config(framing_config))?`,
+  then call `owner.framed_writer(sink, FramedEncodeStreamConfig::default())`.
+  Stable raw codec APIs are unchanged.
+
 - Correct framing documentation to describe the implemented framed decoder,
   its alloc-only support, and container validation alongside the std writer.
 

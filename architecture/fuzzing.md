@@ -498,3 +498,26 @@ Build with `cargo afl build --release --features experimental --bin framed_decod
 -o /tmp/UNIQUE-FINDINGS -S smoke -V 30 -c - -- target/release/TARGET`. Findings
 remain local; deterministic seeds use `.bin` so regression replay includes them.
 No system-wide AFL tuning is required by these commands.
+
+
+## Native framed encoding schedules
+
+`framed_encode` is experimental in its binary, body, registry and seeds. It caps
+payload to 1024 bytes and compares native output of widths 1/2/7/31 with writer
+output under identical Flush/Finish boundaries. Without explicit flush it also
+compares borrowed one-shot and lazy Read. Modes cover stored/Brotli/Shared,
+hidden/checksum flags, zero output, rejected metadata and internal references.
+Non-shared results round-trip through FramedDecompressor. CI runs the target from
+its committed regression seeds; generated campaigns remain local artifacts.
+
+```mermaid
+flowchart LR
+    Seed[bounded selector and payload] --> Native[native resource schedule]
+    Seed --> Writer[Write with matching Flush]
+    Native --> Equal[wire equality]
+    Writer --> Equal
+    Seed --> NoFlush{no explicit Flush}
+    NoFlush --> OneShot[one-shot and lazy Read]
+    OneShot --> Equal
+    Equal --> Decode[framed decode oracle for non-shared modes]
+```

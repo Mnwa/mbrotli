@@ -349,16 +349,16 @@ fn metadata_validation_rejects_reserved_duplicates_and_broken_lengths() {
 #[test]
 fn existing_writer_compressed_partials_metadata_and_repeats_decode() {
     use std::io::Write;
-    let mut encoder = mbrotli::Compressor::new(Default::default()).unwrap();
-    let mut writer = encoder
-        .framed_writer(
-            Vec::new(),
-            FramingConfig {
-                chunk_bytes: 17,
-                repeat_metadata: true,
-                ..Default::default()
-            },
-        )
+    let mut framed_encoder = mbrotli::framing::FramedCompressor::new(
+        mbrotli::framing::FramedEncodeConfig::default().with_framing_config(FramingConfig {
+            chunk_bytes: 17,
+            repeat_metadata: true,
+            ..Default::default()
+        }),
+    )
+    .expect("framed configuration");
+    let mut writer = framed_encoder
+        .framed_writer(Vec::new(), Default::default())
         .unwrap();
     writer
         .metadata(

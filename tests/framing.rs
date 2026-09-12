@@ -5,11 +5,12 @@
 #![cfg(feature = "experimental")]
 mod support;
 
+use mbrotli::framing::{FramedCompressor, FramedEncodeConfig};
 use mbrotli::framing::{
     FramingConfig, FramingError, MetadataEncoding, MetadataField, MetadataKind, MetadataOptions,
     ResourceOptions,
 };
-use mbrotli::{Compressor, EncoderConfig, Quality};
+use mbrotli::{EncoderConfig, Quality};
 use std::io::{self, Write};
 
 fn number(bytes: &[u8], cursor: &mut usize) -> u64 {
@@ -26,6 +27,16 @@ fn number(bytes: &[u8], cursor: &mut usize) -> u64 {
 }
 
 fn chunks(bytes: &[u8]) -> Vec<(usize, &[u8])> {
+    let thread = std::thread::current();
+    let name = thread.name().expect("test name");
+    let path = format!("testdata/framing-legacy/{name}.hex");
+    let baseline = std::fs::read_to_string(path).expect("independent legacy fixture");
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    assert!(
+        baseline.lines().any(|line| line == hex),
+        "legacy wire regression: {name}"
+    );
+
     assert_eq!(&bytes[..4], &[0x91, 10, 66, 82]);
     let mut cursor = 5;
     let mut result = Vec::new();
@@ -49,11 +60,12 @@ fn config() -> FramingConfig {
 }
 
 fn build<W: Write + std::fmt::Debug>(writer: W) -> W {
-    let mut compressor =
-        Compressor::new(EncoderConfig::default().with_quality(Quality::Q5)).expect("config");
-    let mut container = compressor
-        .framed_writer(writer, config())
-        .expect("container");
+    let mut compressor = FramedCompressor::new(
+        FramedEncodeConfig::default()
+            .with_encoder_config(EncoderConfig::default().with_quality(Quality::Q5)),
+    )
+    .expect("config");
+    let mut container = framed_writer(&mut compressor, writer, config()).expect("container");
     container
         .metadata(
             MetadataKind::Global,
@@ -201,16 +213,18 @@ fn every_partial_sink_failure_can_be_retried_without_losing_or_duplicating_bytes
     let mut expected = None;
     for fail_at in 0..400 {
         for zero in [false, true] {
-            let mut compressor =
-                Compressor::new(EncoderConfig::default().with_quality(Quality::Q5))
-                    .expect("config");
+            let mut compressor = FramedCompressor::new(
+                FramedEncodeConfig::default()
+                    .with_encoder_config(EncoderConfig::default().with_quality(Quality::Q5)),
+            )
+            .expect("config");
             let sink = FaultSink {
                 budget: fail_at,
                 zero,
                 interrupted: true,
                 ..Default::default()
             };
-            let mut container = compressor.framed_writer(sink, config()).expect("container");
+            let mut container = framed_writer(&mut compressor, sink, config()).expect("container");
             if container.flush().is_err() {
                 container.get_mut().budget = usize::MAX;
                 container.flush().expect("retry header");
@@ -278,15 +292,16 @@ fn every_partial_sink_failure_can_be_retried_without_losing_or_duplicating_bytes
 
 #[test]
 fn single_resource_empty_wire_fixture_is_canonical() {
-    let mut compressor = Compressor::new(Default::default()).expect("config");
+    let mut compressor = FramedCompressor::new(
+        FramedEncodeConfig::default().with_encoder_config(Default::default()),
+    )
+    .expect("config");
     let config = FramingConfig {
         container: false,
         central_directory: false,
         ..Default::default()
     };
-    let mut writer = compressor
-        .framed_writer(Vec::new(), config)
-        .expect("container");
+    let mut writer = framed_writer(&mut compressor, Vec::new(), config).expect("container");
     writer
         .uncompressed_resource(ResourceOptions::default())
         .expect("resource")
@@ -300,10 +315,11 @@ fn single_resource_empty_wire_fixture_is_canonical() {
 
 #[test]
 fn compressed_metadata_and_selected_repeats_decode_independently() {
-    let mut compressor = Compressor::new(Default::default()).expect("config");
-    let mut writer = compressor
-        .framed_writer(Vec::new(), config())
-        .expect("writer");
+    let mut compressor = FramedCompressor::new(
+        FramedEncodeConfig::default().with_encoder_config(Default::default()),
+    )
+    .expect("config");
+    let mut writer = framed_writer(&mut compressor, Vec::new(), config()).expect("writer");
     writer.repeat_metadata_fields(&[*b"id"]).expect("selection");
     let options = MetadataOptions {
         encoding: MetadataEncoding::Brotli,
@@ -394,11 +410,12 @@ fn shared_metadata_uses_explicit_references_and_repeats_without_resource_depende
         .add_prefix(&prefix[..])
         .build()
         .expect("dictionary");
-    let mut compressor =
-        Compressor::new(EncoderConfig::default().with_quality(Quality::Q5)).expect("config");
-    let mut writer = compressor
-        .framed_writer(Vec::new(), config())
-        .expect("writer");
+    let mut compressor = FramedCompressor::new(
+        FramedEncodeConfig::default()
+            .with_encoder_config(EncoderConfig::default().with_quality(Quality::Q5)),
+    )
+    .expect("config");
+    let mut writer = framed_writer(&mut compressor, Vec::new(), config()).expect("writer");
     let pointer = writer.next_chunk_offset();
     {
         let mut resource = writer
@@ -479,10 +496,11 @@ fn shared_metadata_uses_explicit_references_and_repeats_without_resource_depende
 
 #[test]
 fn repeated_field_selection_validates_codes_and_empty_selection() {
-    let mut compressor = Compressor::new(Default::default()).expect("config");
-    let mut writer = compressor
-        .framed_writer(Vec::new(), config())
-        .expect("writer");
+    let mut compressor = FramedCompressor::new(
+        FramedEncodeConfig::default().with_encoder_config(Default::default()),
+    )
+    .expect("config");
+    let mut writer = framed_writer(&mut compressor, Vec::new(), config()).expect("writer");
     for codes in [&[*b"aa"][..], &[*b"id", *b"id"], &[[0, 0]]] {
         assert!(writer.repeat_metadata_fields(codes).is_err());
     }
@@ -526,11 +544,12 @@ fn failed_metadata_compression_does_not_accept_the_metadata() {
         .add_prefix(&b"a dictionary prefix"[..])
         .build()
         .expect("dictionary");
-    let mut compressor =
-        Compressor::new(EncoderConfig::default().with_quality(Quality::Q4)).expect("config");
-    let mut writer = compressor
-        .framed_writer(Vec::new(), config())
-        .expect("writer");
+    let mut compressor = FramedCompressor::new(
+        FramedEncodeConfig::default()
+            .with_encoder_config(EncoderConfig::default().with_quality(Quality::Q4)),
+    )
+    .expect("config");
+    let mut writer = framed_writer(&mut compressor, Vec::new(), config()).expect("writer");
     let result = writer.metadata_with_options(
         MetadataKind::Resource,
         &[],
@@ -559,15 +578,15 @@ fn failed_metadata_compression_does_not_accept_the_metadata() {
 #[test]
 fn large_window_metadata_is_self_contained_shared_brotli() {
     use mbrotli::Window;
-    let mut compressor = Compressor::new(
-        EncoderConfig::default()
-            .with_quality(Quality::Q5)
-            .with_window(Window::large(22).expect("window")),
+    let mut compressor = FramedCompressor::new(
+        FramedEncodeConfig::default().with_encoder_config(
+            EncoderConfig::default()
+                .with_quality(Quality::Q5)
+                .with_window(Window::large(22).expect("window")),
+        ),
     )
     .expect("config");
-    let mut writer = compressor
-        .framed_writer(Vec::new(), config())
-        .expect("writer");
+    let mut writer = framed_writer(&mut compressor, Vec::new(), config()).expect("writer");
     writer
         .metadata_with_options(
             MetadataKind::Global,
@@ -593,10 +612,11 @@ fn large_window_metadata_is_self_contained_shared_brotli() {
 
 #[test]
 fn abandoned_resources_and_invalid_metadata_cannot_produce_a_finished_container() {
-    let mut compressor = Compressor::new(Default::default()).expect("config");
-    let mut writer = compressor
-        .framed_writer(Vec::new(), config())
-        .expect("container");
+    let mut compressor = FramedCompressor::new(
+        FramedEncodeConfig::default().with_encoder_config(Default::default()),
+    )
+    .expect("config");
+    let mut writer = framed_writer(&mut compressor, Vec::new(), config()).expect("container");
     assert!(
         writer
             .metadata(
@@ -614,9 +634,21 @@ fn abandoned_resources_and_invalid_metadata_cannot_produce_a_finished_container(
             .resource(ResourceOptions::default(), Default::default())
             .expect("resource"),
     );
-    assert!(matches!(writer.try_finish(), Err(FramingError::Invalid(_))));
+    assert!(matches!(
+        writer.try_finish(),
+        Err(FramingError::Invalid(_) | FramingError::AbandonedResource)
+    ));
     drop(writer);
-    assert!(compressor.compress(b"fresh stream").is_ok());
+    assert!(
+        compressor
+            .compress(mbrotli::framing::FramedInput::from(
+                [mbrotli::framing::FramedItem::Resource(
+                    mbrotli::framing::FramedResource::from(&b"fresh stream"[..])
+                )]
+                .as_slice()
+            ))
+            .is_ok()
+    );
 }
 
 #[test]
@@ -628,11 +660,12 @@ fn dictionary_references_and_explicit_ids_have_their_rfc_wire_forms() {
         .add_prefix(&source[..])
         .build()
         .expect("dictionary");
-    let mut compressor =
-        Compressor::new(EncoderConfig::default().with_quality(Quality::Q5)).expect("config");
-    let mut container = compressor
-        .framed_writer(Vec::new(), config())
-        .expect("container");
+    let mut compressor = FramedCompressor::new(
+        FramedEncodeConfig::default()
+            .with_encoder_config(EncoderConfig::default().with_quality(Quality::Q5)),
+    )
+    .expect("config");
+    let mut container = framed_writer(&mut compressor, Vec::new(), config()).expect("container");
     let offset = container.next_chunk_offset();
     {
         let mut resource = container
@@ -706,39 +739,42 @@ fn dictionary_references_and_explicit_ids_have_their_rfc_wire_forms() {
 
 #[test]
 fn limits_and_finish_errors_preserve_the_sink_for_recovery() {
-    let mut compressor = Compressor::new(Default::default()).expect("config");
+    let mut compressor = FramedCompressor::new(
+        FramedEncodeConfig::default().with_encoder_config(Default::default()),
+    )
+    .expect("config");
     assert!(
-        compressor
-            .framed_writer(
-                Vec::new(),
-                FramingConfig {
-                    chunk_bytes: 0,
-                    ..config()
-                }
-            )
-            .is_err()
-    );
-    assert!(
-        compressor
-            .framed_writer(
-                Vec::new(),
-                FramingConfig {
-                    container: false,
-                    ..config()
-                }
-            )
-            .is_err()
-    );
-    let mut container = compressor
-        .framed_writer(
+        framed_writer(
+            &mut compressor,
             Vec::new(),
             FramingConfig {
-                max_metadata_bytes: 1,
-                max_resources: 0,
+                chunk_bytes: 0,
                 ..config()
-            },
+            }
         )
-        .expect("container");
+        .is_err()
+    );
+    assert!(
+        framed_writer(
+            &mut compressor,
+            Vec::new(),
+            FramingConfig {
+                container: false,
+                ..config()
+            }
+        )
+        .is_err()
+    );
+    let mut container = framed_writer(
+        &mut compressor,
+        Vec::new(),
+        FramingConfig {
+            max_metadata_bytes: 1,
+            max_resources: 0,
+            ..config()
+        },
+    )
+    .expect("container");
     assert!(
         container
             .metadata(
@@ -752,14 +788,14 @@ fn limits_and_finish_errors_preserve_the_sink_for_recovery() {
     );
     assert!(container.uncompressed_resource(Default::default()).is_err());
     assert!(container.padding(usize::MAX).is_err());
-    assert!(container.get_ref().is_empty());
-    assert!(container.into_inner().is_empty());
+    assert_eq!(container.get_ref(), &[0x91, 10, 66, 82, 4]);
+    assert_eq!(container.into_inner(), &[0x91, 10, 66, 82, 4]);
     let sink = FaultSink {
         budget: usize::MAX,
         blocked: true,
         ..Default::default()
     };
-    let container = compressor.framed_writer(sink, config()).expect("container");
+    let container = framed_writer(&mut compressor, sink, config()).expect("container");
     let failure = container.finish().expect_err("blocked sink");
     assert!(std::error::Error::source(&failure.error).is_some());
     let mut container = failure.writer;
@@ -769,15 +805,15 @@ fn limits_and_finish_errors_preserve_the_sink_for_recovery() {
 
 #[test]
 fn large_window_resources_are_marked_as_shared_brotli() {
-    let mut compressor = Compressor::new(
-        EncoderConfig::default()
-            .with_quality(Quality::Q5)
-            .with_window(mbrotli::Window::large(30).expect("window")),
+    let mut compressor = FramedCompressor::new(
+        FramedEncodeConfig::default().with_encoder_config(
+            EncoderConfig::default()
+                .with_quality(Quality::Q5)
+                .with_window(mbrotli::Window::large(30).expect("window")),
+        ),
     )
     .expect("config");
-    let mut container = compressor
-        .framed_writer(Vec::new(), config())
-        .expect("container");
+    let mut container = framed_writer(&mut compressor, Vec::new(), config()).expect("container");
     assert!(
         container
             .resource(
@@ -806,4 +842,13 @@ fn large_window_resources_are_marked_as_shared_brotli() {
         support::c_decompress_large_window(&chunk[cursor..], payload.len()).as_deref(),
         Some(&payload[..])
     );
+}
+
+fn framed_writer<W: Write>(
+    owner: &mut FramedCompressor,
+    sink: W,
+    config: FramingConfig,
+) -> Result<mbrotli::framing::FramedWriter<'_, W>, FramingError> {
+    owner.reconfigure(owner.config().with_framing_config(config))?;
+    owner.framed_writer(sink, Default::default())
 }

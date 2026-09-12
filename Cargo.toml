@@ -157,3 +157,8 @@ required-features = ["compression", "decompression"]
 [[example]]
 name = "profile_framed_decoder"
 required-features = ["compression", "decompression", "experimental"]
+
+[[bench]]
+name = "framed_compress"
+harness = false
+required-features = ["compression", "experimental"]

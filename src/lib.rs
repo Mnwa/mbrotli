@@ -281,6 +281,59 @@
 //! not a total process-memory limit. Retain the decoder across calls when reuse matters.
 //! See [decoder configuration and semantics][decoder] and [compatibility evidence][decoder-checks].
 //!
+//! # Structured framing
+//!
+//! With `compression,experimental`, `framing::FramedCompressor` owns reusable
+//! raw and container storage. Borrowed input preserves resource/metadata order.
+//! Native sessions and one-shot operations support alloc; framed Read/Write
+//! adapters require std APIs.
+//!
+//! ```
+//! # #[cfg(all(feature = "compression", feature = "experimental"))]
+//! # {
+//! use mbrotli::framing::{FramedCompressor, FramedInput, FramedItem, FramedResource};
+//! let items = [FramedItem::Resource(FramedResource::from(&b"hello"[..]))];
+//! let mut encoder = FramedCompressor::new(Default::default())?;
+//! let bytes = encoder.compress(FramedInput::from(items.as_slice()))?;
+//! assert_eq!(&bytes[..4], &[0x91, 10, 66, 82]);
+//! # }
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! With `decompression,experimental`, `FramedDecompressor` decodes a container into
+//! `FramedOutput`: resources in wire order with their metadata, global metadata, and
+//! the validated container layout. Keep the decoder across calls to reuse its storage.
+//! Compression support is optional; the decoder can be built on its own.
+//!
+//! To decode a container in `bytes`:
+//!
+//! ```
+//! # #[cfg(all(feature = "decompression", feature = "experimental"))]
+//! # {
+//! # let bytes = *b"\x91\x0aBR\x00\x08\x02\x00\x00hello";
+//! use mbrotli::framing::FramedDecompressor;
+//! let mut decoder = FramedDecompressor::new(Default::default())?;
+//! let output = decoder.decompress(&bytes)?;
+//! assert_eq!(output.resources.len(), 1);
+//! assert_eq!(output.resources[0].data, b"hello");
+//! # }
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! For incremental input, `decoder.start(stream_config)` exposes resource and metadata
+//! events with payload fragments. With std APIs, `decoder.framed_reader(source,
+//! stream_config)` wraps a `BufRead` source and exposes `next_event()`. This event
+//! reader preserves resource boundaries; it does not flatten the container into one
+//! `Read` stream.
+//!
+//! `FramedDecodeConfig` defaults to `InputMode::FramedOnly`; `InputMode::Auto` also
+//! accepts a raw Brotli member. `FramedDecodeLimits` configures resource, input, output,
+//! metadata and workspace budgets. External dictionary references use an explicit
+//! `DictionaryResolver`; resource checksums are recorded without verification.
+//! The owner, one-shot APIs and native sessions also work with `no_std` and `alloc`;
+//! `FramedReader` requires std APIs. See [framed decoder mechanics][framed-decoder]
+//! for validation, dictionaries and streaming semantics.
+//!
 //! # Select only the codecs you need
 //!
 //! The default feature set is `std`, `compression`, and `decompression`. Disable default
@@ -293,12 +346,13 @@
 //!
 //! Add `"compression"` for both codecs, or use `"std"` instead of `"no_std"` for standard
 //! I/O support. `no_std` requires a global allocator; it excludes I/O adapters, parallel
-//! compression, the experimental framing writer, and profiling, and uses compile-time SIMD selection.
+//! compression, framed I/O adapters, and profiling, and uses compile-time SIMD selection.
 //! Cargo features are additive: another dependency can re-enable a codec or `std`.
 //! Leave `std` and `hotpath*` disabled throughout the dependency graph for a std-free build.
 //!
 //! [parallel]: https://github.com/Mnwa/mbrotli/blob/master/docs/parallel.md
 //! [decoder]: https://github.com/Mnwa/mbrotli/blob/master/architecture/decompressor.md
+//! [framed-decoder]: https://github.com/Mnwa/mbrotli/blob/master/architecture/framed-decoder.md
 //! [decoder-checks]: https://github.com/Mnwa/mbrotli/blob/master/architecture/decompressor-compatibility.md
 // Resolve available APIs locally; unavailable APIs link to feature selection.
 #![cfg_attr(
@@ -406,7 +460,7 @@ use mbrotli::compressor::parallel::ParallelCompressor;
 ```
 
 ```compile_fail
-use mbrotli::framing::FramingConfig;
+use mbrotli::framing::FramedWriter;
 ```"
 )]
 #![deny(missing_docs)]
@@ -478,4 +532,11 @@ pub use compressor::{
     BlockBits, BlockSize, CompressionMode, Compressor, CompressorBuilder, DistanceParams,
     EncodeError, EncoderConfig, EncoderSession, EncoderStatus, InputSize, LiteralContextMode,
     Operation, Progress, Quality, SizeOverflow, StreamConfig,
+};
+
+#[cfg(all(feature = "experimental", feature = "compression"))]
+pub use compressor::framing::{
+    FramedCompressor, FramedCompressorBuilder, FramedEncodeConfig, FramedEncodeError,
+    FramedEncodeFailure, FramedEncodeLocation, FramedEncodeOperation, FramedEncodeProgress,
+    FramedEncodeStreamConfig, FramedEncoderSession, FramedEncoderStatus, FramedResourceSession,
 };

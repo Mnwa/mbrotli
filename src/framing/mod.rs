@@ -39,11 +39,8 @@ pub struct MetadataField<'a> {
     pub value: &'a [u8],
 }
 
-#[cfg(all(feature = "compression", not(feature = "no_std")))]
-pub use crate::compressor::framing::{
-    FramedWriter, FramingConfig, FramingError, FramingFinishError, MetadataEncoding,
-    MetadataOptions, ResourceOptions, ResourceWriter,
-};
+#[cfg(feature = "compression")]
+pub use crate::compressor::framing::*;
 
 #[cfg(feature = "decompression")]
 pub use crate::decompressor::framing::*;

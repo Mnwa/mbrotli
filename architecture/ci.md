@@ -52,7 +52,7 @@ seed selection uses generated corpora or committed lifecycle, framing and parall
 regressions. Base decoder targets run in both feature profiles; custom targets
 require `experimental`.
 
-The experimental matrix includes `framed_decode` and `framed_roundtrip`, each
+The experimental matrix includes `framed_decode`, `framed_roundtrip` and `framed_encode`, each
 using its committed `regressions/TARGET` seeds. The arbitrary-byte framed decoder
 also uses `dictionaries/framed.dict`. Campaigns run for ten minutes, with a
 five-second per-input timeout for decoder targets and a one-second default for
@@ -63,8 +63,10 @@ flowchart LR
     Matrix[experimental framed targets] --> Seeds[committed regression seeds]
     Seeds --> Parser[framed_decode with framing dictionary]
     Seeds --> Roundtrip[framed_roundtrip]
+    Seeds --> Encode[framed_encode: native and I/O schedule agreement]
     Parser --> Campaign[ten-minute AFL campaign]
     Roundtrip --> Campaign
+    Encode --> Campaign
     Campaign --> Check[fail on saved crashes or hangs]
     Campaign --> Archive[upload archived findings even on failure]
 ```

@@ -315,6 +315,56 @@ The workspace budget excludes caller-owned output and borrowed dictionaries; it 
 not a total process-memory limit. Retain the decoder across calls when reuse matters.
 See [decoder configuration and semantics][decoder] and [compatibility evidence][decoder-checks].
 
+## Structured framing
+
+With `compression,experimental`, a separate reusable owner encodes ordered
+resources and metadata into one container. It supports alloc-backed one-shot
+and native sessions; its writer and encoded reader require std APIs.
+
+```rust
+use mbrotli::framing::{FramedCompressor, FramedInput, FramedItem, FramedResource};
+let items = [FramedItem::Resource(FramedResource::from(&b"hello"[..]))];
+let mut encoder = FramedCompressor::new(Default::default())?;
+let bytes = encoder.compress(FramedInput::from(items.as_slice()))?;
+assert_eq!(&bytes[..4], &[0x91, 10, 66, 82]);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Use `encoder.framed_writer(sink, stream_config)` for gradually arriving resource
+payload, or `encoder.framed_reader(input, stream_config)` to read encoded bytes
+lazily. [API examples and migration](docs/dictionaries.md) cover metadata,
+dictionaries and the move from the experimental raw-owner factory.
+
+With `decompression,experimental`, `FramedDecompressor` decodes a container into
+`FramedOutput`: resources in wire order with their metadata, global metadata, and
+the validated container layout. Keep the decoder across calls to reuse its storage.
+Compression support is optional; the decoder can be built on its own.
+
+To decode `bytes` from the encoding example above:
+
+```rust
+use mbrotli::framing::FramedDecompressor;
+let mut decoder = FramedDecompressor::new(Default::default())?;
+let output = decoder.decompress(&bytes)?;
+assert_eq!(output.resources.len(), 1);
+assert_eq!(output.resources[0].data, b"hello");
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+For incremental input, `decoder.start(stream_config)` exposes resource and metadata
+events with payload fragments. With std APIs, `decoder.framed_reader(source,
+stream_config)` wraps a `BufRead` source and exposes `next_event()`. This event
+reader preserves resource boundaries; it does not flatten the container into one
+`Read` stream.
+
+`FramedDecodeConfig` defaults to `InputMode::FramedOnly`; `InputMode::Auto` also
+accepts a raw Brotli member. `FramedDecodeLimits` configures resource, input, output,
+metadata and workspace budgets. External dictionary references use an explicit
+`DictionaryResolver`; resource checksums are recorded without verification.
+The owner, one-shot APIs and native sessions also work with `no_std` and `alloc`;
+`FramedReader` requires std APIs. See [framed decoder mechanics](architecture/framed-decoder.md)
+for validation, dictionaries and streaming semantics.
+
 ## Select only the codecs you need
 
 The default feature set is `std`, `compression`, and `decompression`. Disable default
@@ -327,7 +377,7 @@ mbrotli = { version = "0.3", default-features = false, features = ["no_std", "de
 
 Add `"compression"` for both codecs, or use `"std"` instead of `"no_std"` for standard
 I/O support. `no_std` requires a global allocator; it excludes I/O adapters, parallel
-compression, the experimental framing writer, and profiling, and uses compile-time
+compression, framed I/O adapters, and profiling, and uses compile-time
 SIMD selection. The experimental framed decoder supports `no_std` with `alloc`;
 its `FramedReader` I/O adapter requires std APIs.
 Cargo features are additive: another dependency can re-enable a codec or `std`.
@@ -346,14 +396,17 @@ schedules can produce different bytes. Within mbrotli's serial APIs, matching th
 settings preserves output across input chunk sizes, SIMD backends, and buffer reuse.
 This is format compatibility, not a drop-in replacement for another crate's Rust API.
 
-| Encoding feature | Availability |
+| Codec capability | Availability |
 | --- | --- |
 | Standard Brotli (RFC 7932) | Qualities 0–11 |
 | Large Window Brotli | Qualities 3–11 |
 | Prepared LZ77 prefix dictionaries | Qualities 5–11 |
 | Serialized dictionaries and custom static dictionary encoding | `experimental`; qualities 5–11 |
 | Headerless stream continuations | `experimental`; qualities 2–11 |
-| Shared Brotli framing container writer | `experimental`; not available with `no_std` |
+| Shared Brotli framed compressor, structured input and native sessions | `compression,experimental`; std or alloc |
+| Framed encoder writer/reader adapters | `compression,experimental`; not available with `no_std` |
+| Framed decoder, structured output and native events | `decompression,experimental`; std or alloc |
+| Framed decoder event reader | `decompression,experimental`; not available with `no_std` |
 
 Unsupported combinations return errors. External dictionary references require the
 same dictionaries at the decoder. Large Window and shared-dictionary streams require

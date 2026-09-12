@@ -24,7 +24,7 @@ mod session;
 mod shared;
 
 pub mod dictionary;
-#[cfg(all(feature = "experimental", not(feature = "no_std")))]
+#[cfg(feature = "experimental")]
 pub mod framing;
 #[cfg(not(feature = "no_std"))]
 pub mod io;

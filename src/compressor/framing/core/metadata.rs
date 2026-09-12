@@ -1,4 +1,5 @@
-//! Bounded, self-contained metadata streams; no borrowed dictionary is retained.
+use alloc::vec::Vec;
+// Bounded independent metadata streams.
 
 use super::number;
 use crate::compressor::framing::{FramingError, MetadataEncoding, MetadataField};
@@ -9,7 +10,7 @@ pub(super) fn serialize(
     codes: Option<&[[u8; 2]]>,
     capacity: usize,
 ) -> Result<Vec<u8>, FramingError> {
-    let mut content = Vec::with_capacity(capacity);
+    let mut content = super::bytes(capacity)?;
     for field in fields {
         if codes.is_none_or(|codes| codes.contains(&field.code)) {
             content.extend_from_slice(&field.code);
@@ -27,13 +28,24 @@ pub(super) fn encode(
     encoding: MetadataEncoding<'_>,
     references: Vec<u8>,
 ) -> Result<(Vec<u8>, Vec<u8>), FramingError> {
-    let mut header = vec![kind];
+    let compressed = !matches!(encoding, MetadataEncoding::Uncompressed);
+    let shared = compressed
+        && (matches!(encoding, MetadataEncoding::Shared { .. })
+            || compressor.config().window().encoding() == WindowEncoding::Large);
+    // Include the repeated-kind byte before commit, without reserving the maximum
+    // reference header for every small metadata chunk.
+    let capacity =
+        3 + if compressed {
+            super::varint::encoded_len(content.len() as u64)
+        } else {
+            0
+        } + if shared { references.len().max(1) } else { 0 };
+    let mut header = super::bytes(capacity)?;
+    header.push(kind);
     if matches!(encoding, MetadataEncoding::Uncompressed) {
         header.push(0);
         return Ok((header, content));
     }
-    let shared = matches!(encoding, MetadataEncoding::Shared { .. })
-        || compressor.config().window().encoding() == WindowEncoding::Large;
     header.push(if shared { 3 } else { 2 });
     number(content.len() as u64, &mut header)?;
     if shared {
@@ -45,7 +57,8 @@ pub(super) fn encode(
     }
     let bound =
         Compressor::max_compressed_size(content.len()).map_err(|_| FramingError::Overflow)?;
-    let mut encoded = vec![0; bound];
+    let mut encoded = super::bytes(bound)?;
+    encoded.resize(bound, 0);
     let written = match encoding {
         MetadataEncoding::Shared { dictionary, .. } => {
             compressor.compress_with_dictionary_to_slice(dictionary, &content, &mut encoded)?

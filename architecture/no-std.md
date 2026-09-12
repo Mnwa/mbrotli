@@ -19,7 +19,7 @@ resolved dependency graph. Disabling defaults alone does not select `no_std`.
 ```mermaid
 flowchart TD
     Feature{no_std enabled?}
-    Feature -->|no| Std[std API: I/O, parallel tasks, optional framing]
+    Feature -->|no| Std[std API: I/O, parallel tasks, framed adapters]
     Feature -->|yes| Alloc[core + alloc: compressor, sessions, dictionaries]
     Feature -->|yes| Portable[enable libm and fearless_simd/libm]
     Std --> Engine[private compressor::core encoder state machines]
@@ -47,7 +47,9 @@ The `io` module, its compressor reader/writer constructors, the conversion from
 `EncodeError` to `std::io::Error`, and the private I/O error variant are omitted.
 The entire `parallel` module and its private independent-fragment adapter are
 omitted because they depend on I/O, files, synchronization, clocks, and unwinding.
-The framing writer is omitted because it depends on `std::io`; codec-neutral
+Framed writer/reader adapters are omitted because they depend on `std::io`;
+`FramedCompressor`, structured input and native sessions remain available with
+`compression,experimental`. Codec-neutral
 framing types and the experimental framed decoder remain available.
 Hotpath measurement attributes are inactive under `no_std`.
 

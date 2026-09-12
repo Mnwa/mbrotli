@@ -706,7 +706,7 @@ impl Compressor {
     }
 
     /// Prepares the compressor for a new session and returns its block size.
-    fn begin(
+    pub(crate) fn begin(
         &mut self,
         dictionary: Option<&PreparedDictionary>,
         stream: StreamConfig,
