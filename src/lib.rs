@@ -4,7 +4,7 @@
 //! features and select either codec alongside `std` or `no_std`. For example:
 //!
 //! ```toml
-//! mbrotli = { version = "0.3", default-features = false, features = ["std", "decompression"] }
+//! mbrotli = { version = "0.4", default-features = false, features = ["std", "decompression"] }
 //! ```
 //!
 //! A disabled codec has no module, API re-exports, dictionaries or I/O adapters.
@@ -283,8 +283,8 @@
 //!
 //! # Structured framing
 //!
-//! With `compression,experimental`, `framing::FramedCompressor` owns reusable
-//! raw and container storage. Borrowed input preserves resource/metadata order.
+//! With `compression,experimental`, [`framing::FramedCompressor`][framed-compressor]
+//! owns reusable raw and container storage. Borrowed input preserves resource/metadata order.
 //! Native sessions and one-shot operations support alloc; framed Read/Write
 //! adapters require std APIs.
 //!
@@ -300,9 +300,10 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
-//! With `decompression,experimental`, `FramedDecompressor` decodes a container into
-//! `FramedOutput`: resources in wire order with their metadata, global metadata, and
-//! the validated container layout. Keep the decoder across calls to reuse its storage.
+//! With `decompression,experimental`, [`FramedDecompressor`][framed-decompressor]
+//! decodes a container into [`FramedOutput`][framed-output]: resources in wire order
+//! with their metadata, global metadata, and the validated container layout.
+//! Keep the decoder across calls to reuse its storage.
 //! Compression support is optional; the decoder can be built on its own.
 //!
 //! To decode a container in `bytes`:
@@ -320,18 +321,21 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
-//! For incremental input, `decoder.start(stream_config)` exposes resource and metadata
-//! events with payload fragments. With std APIs, `decoder.framed_reader(source,
-//! stream_config)` wraps a `BufRead` source and exposes `next_event()`. This event
-//! reader preserves resource boundaries; it does not flatten the container into one
-//! `Read` stream.
+//! For incremental input, [`decoder.start(stream_config)`][framed-decompressor-start]
+//! exposes resource and metadata events with payload fragments. With std APIs,
+//! [`decoder.framed_reader(source, stream_config)`][framed-decompressor-reader]
+//! wraps a `BufRead` source and exposes [`next_event()`][framed-reader-next-event].
+//! This event reader preserves resource boundaries; it does not flatten the container
+//! into one `Read` stream.
 //!
-//! `FramedDecodeConfig` defaults to `InputMode::FramedOnly`; `InputMode::Auto` also
-//! accepts a raw Brotli member. `FramedDecodeLimits` configures resource, input, output,
-//! metadata and workspace budgets. External dictionary references use an explicit
-//! `DictionaryResolver`; resource checksums are recorded without verification.
+//! [`FramedDecodeConfig`][framed-decode-config] defaults to
+//! [`InputMode::FramedOnly`][framed-only]; [`InputMode::Auto`][framed-auto] also
+//! accepts a raw Brotli member. [`FramedDecodeLimits`][framed-decode-limits] configures
+//! resource, input, output, metadata and workspace budgets. External dictionary
+//! references use an explicit [`DictionaryResolver`][dictionary-resolver]; resource
+//! checksums are recorded without verification.
 //! The owner, one-shot APIs and native sessions also work with `no_std` and `alloc`;
-//! `FramedReader` requires std APIs. See [framed decoder mechanics][framed-decoder]
+//! [`FramedReader`][framed-reader] requires std APIs. See [framed decoder mechanics][framed-decoder]
 //! for validation, dictionaries and streaming semantics.
 //!
 //! # Select only the codecs you need
@@ -341,7 +345,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! mbrotli = { version = "0.3", default-features = false, features = ["no_std", "decompression"] }
+//! mbrotli = { version = "0.4", default-features = false, features = ["no_std", "decompression"] }
 //! ```
 //!
 //! Add `"compression"` for both codecs, or use `"std"` instead of `"no_std"` for standard
@@ -355,6 +359,64 @@
 //! [framed-decoder]: https://github.com/Mnwa/mbrotli/blob/master/architecture/framed-decoder.md
 //! [decoder-checks]: https://github.com/Mnwa/mbrotli/blob/master/architecture/decompressor-compatibility.md
 // Resolve available APIs locally; unavailable APIs link to feature selection.
+#![cfg_attr(
+    all(feature = "compression", feature = "experimental"),
+    doc = "[framed-compressor]: crate::framing::FramedCompressor"
+)]
+#![cfg_attr(
+    not(all(feature = "compression", feature = "experimental")),
+    doc = "[framed-compressor]: #select-only-the-codecs-you-need"
+)]
+#![cfg_attr(
+    all(feature = "decompression", feature = "experimental"),
+    doc = r#"
+[framed-decompressor]: crate::framing::FramedDecompressor
+[framed-output]: crate::framing::FramedOutput
+[framed-decompressor-start]: crate::framing::FramedDecompressor::start
+[framed-decode-config]: crate::framing::FramedDecodeConfig
+[framed-only]: crate::framing::InputMode::FramedOnly
+[framed-auto]: crate::framing::InputMode::Auto
+[framed-decode-limits]: crate::framing::FramedDecodeLimits
+[dictionary-resolver]: crate::framing::DictionaryResolver
+"#
+)]
+#![cfg_attr(
+    not(all(feature = "decompression", feature = "experimental")),
+    doc = r#"
+[framed-decompressor]: #select-only-the-codecs-you-need
+[framed-output]: #select-only-the-codecs-you-need
+[framed-decompressor-start]: #select-only-the-codecs-you-need
+[framed-decode-config]: #select-only-the-codecs-you-need
+[framed-only]: #select-only-the-codecs-you-need
+[framed-auto]: #select-only-the-codecs-you-need
+[framed-decode-limits]: #select-only-the-codecs-you-need
+[dictionary-resolver]: #select-only-the-codecs-you-need
+"#
+)]
+#![cfg_attr(
+    all(
+        feature = "decompression",
+        feature = "experimental",
+        not(feature = "no_std")
+    ),
+    doc = r#"
+[framed-decompressor-reader]: crate::framing::FramedDecompressor::framed_reader
+[framed-reader-next-event]: crate::framing::FramedReader::next_event
+[framed-reader]: crate::framing::FramedReader
+"#
+)]
+#![cfg_attr(
+    not(all(
+        feature = "decompression",
+        feature = "experimental",
+        not(feature = "no_std")
+    )),
+    doc = r#"
+[framed-decompressor-reader]: #select-only-the-codecs-you-need
+[framed-reader-next-event]: #select-only-the-codecs-you-need
+[framed-reader]: #select-only-the-codecs-you-need
+"#
+)]
 #![cfg_attr(
     feature = "compression",
     doc = r#"

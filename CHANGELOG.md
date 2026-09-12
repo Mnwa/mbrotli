@@ -2,8 +2,12 @@
 
 ## [Unreleased]
 
+## [v0.4.0](https://github.com/Mnwa/mbrotli/releases/tag/v0.4.0) - 2026-09-12
+
 - Document framed decoding in README and crate docs, with a one-shot example,
   event-reader semantics, feature availability and decoder configuration.
+  Link structured framing APIs in crate docs, with feature-selection fallbacks
+  when the corresponding APIs are disabled.
 
 - Add an independent experimental `FramedCompressor` with retained raw/framing
   workspaces, alloc-backed structured one-shot input and native sessions, lazy
