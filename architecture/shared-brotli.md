@@ -10,7 +10,7 @@ features:
 | LZ77 prefix dictionaries: preparation, indexes, addressing, search | **implemented** |
 | LZ77 prefix dictionaries: use by an encoder | **implemented** for qualities 5 to 11 — refused below, not ignored |
 | Serialized shared dictionaries and custom static encoding | implemented behind `experimental`; see [rfc9841-encoding.md](rfc9841-encoding.md) |
-| Framing container format | experimental writer; see [framing.md](framing.md) |
+| Framing container format | experimental [writer](framing.md) and [decoder](framed-decoder.md) |
 
 This file covers Large Window and prefix mechanics. The linked specifications
 cover the experimental extensions; remaining limitations are recorded below.
@@ -670,9 +670,10 @@ has to prove it.
   search, context selection, transformed-index limits and checked stream offsets
   are specified in [rfc9841-encoding.md](rfc9841-encoding.md). Parser mechanics
   remain in [serialized-dictionary.md](serialized-dictionary.md).
-- **Framing has no pinned C container oracle.** The experimental writer emits
-  RFC fixtures and independently decodable resource streams; see
-  [framing.md](framing.md) for supported forms and limits.
+- **Framing has no pinned C container oracle.** Independent wire fixtures and
+  writer/decoder round trips validate containers; C checks compressed payload
+  streams. See the [writer](framing.md) and [decoder](framed-decoder.md) for
+  supported forms, verification and limits.
 - **Large window is refused at qualities 0, 1 and 2.** See §6.
 - **Declared windows above 30 bits lack independent end-to-end decoding.**
   The pinned C decoder rejects their original headers. Tests check those headers

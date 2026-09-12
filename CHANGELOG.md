@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Correct framing documentation to describe the implemented framed decoder,
+  its alloc-only support, and container validation alongside the std writer.
+
 ## [v0.3.1](https://github.com/Mnwa/mbrotli/releases/tag/v0.3.1) - 2026-09-12
 
 - Add experimental structured framed decoding with strict/Auto detection,

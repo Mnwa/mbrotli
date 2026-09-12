@@ -109,6 +109,18 @@ checksums. The writer does not calculate hashes or fetch dictionaries.
 `FramingConfig` bounds chunk input, metadata, framing storage, resources, and
 chunk count. The single-resource profile has no metadata or directory.
 
-The repository has no container decoder. Tests check the container structure
-independently and decode compressed payloads with C.
-See [framing mechanics and supported forms](../architecture/framing.md).
+`mbrotli::framing::FramedDecompressor` reads these containers with
+`decompression,experimental` enabled. `decompress` returns resources and container
+structure; `start` exposes incremental events, and `framed_reader` adapts a
+`BufRead` source. The default input mode is `FramedOnly`; `InputMode::Auto` also
+accepts a raw Brotli member. Raw `Decompressor` entry points do not parse containers.
+
+The framing writer requires std APIs. The decoder's owned and incremental APIs
+also work with `no_std` and `alloc`; `FramedReader` requires std APIs. External
+dictionaries use a caller-supplied resolver, and resource checksums are recorded
+without verification. Tests check independent wire fixtures, writer/decoder
+round trips and compressed payload decoding with C; the pinned C library has no
+container codec.
+
+See [framing writer mechanics](../architecture/framing.md) and
+[framed decoder APIs, validation and limits](../architecture/framed-decoder.md).

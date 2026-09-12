@@ -68,7 +68,7 @@ FFI do not appear in public signatures. Each codec compiles independently.
 | [Shared Brotli](shared-brotli.md) | Large Window declarations and prepared prefix dictionaries. |
 | [Serialized dictionaries](serialized-dictionary.md) | Experimental wire format, transforms and resource limits. |
 | [Custom encoding and continuations](rfc9841-encoding.md) | Static indexes, contexts and headerless stream offsets. |
-| [Framing](framing.md) | Experimental container resources, metadata and finalization. |
+| [Framing writer](framing.md) | Experimental container writing, metadata, finalization and framed decoder integration. |
 
 ## Development tools
 

@@ -9,6 +9,7 @@
 | Control allocations | [Output buffers](#output-buffers) and [reuse](#reusing-memory) |
 | Connect synchronous I/O or drive a session | [Streaming](#streaming-and-completion) |
 | Share a dictionary or use extended formats | [Dictionaries](dictionaries.md) |
+| Write or decode framing containers | [Framing containers](dictionaries.md#framing-containers) |
 | Split a job across workers | [Parallel compression](parallel.md) |
 | Compare libraries | [Benchmarks](benchmarks/README.md) |
 

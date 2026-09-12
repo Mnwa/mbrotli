@@ -1,7 +1,9 @@
 # Shared Brotli framing writer
 
-This subsystem is omitted when `no_std` is enabled. See
-[feature boundaries](no-std.md) for the alloc-backed API that remains available.
+The writer is omitted when `no_std` is enabled. The separate
+[framed decoder](framed-decoder.md) supports alloc-only builds with
+`decompression,experimental,no_std`; only its `FramedReader` requires std APIs.
+See [feature boundaries](no-std.md).
 
 `compressor::framing` is an `experimental`, separate container API. Raw
 compression never gains a container header implicitly. Its public adapters own
@@ -36,9 +38,12 @@ No destructor writes or implicitly finishes a resource.
 
 The public module example exercises resource metadata, an uncompressed resource,
 explicit resource finalization, padding, and container finalization. The
-`framed_writer` example covers compressed resources. These containers need a
-framing parser before their compressed resources can be fed to a raw decoder;
-this repository currently supplies no such parser.
+`framed_writer` example covers compressed resources. The separate
+`mbrotli::framing::FramedDecompressor` parses these containers and decodes their
+resources when `decompression,experimental` are enabled. It provides owned
+results, incremental events and a std `BufRead` adapter; see
+[framed decoder](framed-decoder.md). Raw decoder entry points accept raw Brotli
+streams rather than containers.
 
 `metadata_with_options` accepts independent `MetadataEncoding` values for the
 original chunk and its repeated copy: uncompressed, Brotli, or Shared Brotli
@@ -184,12 +189,16 @@ resources. AFL generates resource/metadata sequences and compares output across
 caller write schedules; its committed corpus is replayed by `cargo afl test`.
 
 The pinned C library has no RFC 9841 container implementation. Whole-container
-verification is therefore structural RFC fixture testing, not a C framing
-oracle. Metadata streams and selected repeats are independently decoded with C;
-directory tests require every type 1–8 header. Metadata emits independent streams,
-not cross-chunk keep-decoder streams, and pre-encoded repeated metadata does not
-use internal repeat-to-repeat dictionaries. No decompressor or automatic
-dictionary checksum policy is implemented.
+verification uses independent structural fixtures and round trips through this
+crate's framed decoder, including the `framed_roundtrip` AFL target; there is no
+C framing oracle. Metadata streams and selected repeats are independently decoded
+with C; directory tests require every type 1–8 header. See
+[decoder verification](framed-decoder.md#verification-artifacts) for its test scope.
+Metadata emits independent streams, not cross-chunk keep-decoder streams, and
+pre-encoded repeated metadata does not use internal repeat-to-repeat dictionaries.
+The writer does not calculate checksums or resolve dictionaries; the decoder
+records resource checksums without verifying them and accepts a caller-supplied
+resolver for external dictionaries.
 
 ## Codec-neutral types and decoder
 
