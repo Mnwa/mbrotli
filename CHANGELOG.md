@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v0.3.1](https://github.com/Mnwa/mbrotli/releases/tag/v0.3.1) - 2026-09-12
+
 - Add experimental structured framed decoding with strict/Auto detection,
   reusable owners, incremental borrowed events, owned/Vec/slice results, and a
   lending `BufRead` adapter. Validate metadata, continuation, dictionaries,
