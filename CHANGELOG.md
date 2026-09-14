@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- Optimize greedy match measurement and sparse-pool growth, and HQ command
+  pricing and sorted start insertion, using safe Rust and preserving encoded
+  bytes. Add differential coverage and 1 MiB random/repeated Criterion cases.
+  See the [encoder optimization measurements](docs/benchmarks/encoder-optimization-2026-09-14.md)
+  for per-workload speed, size, memory and competitor results.
+- Refresh all 111 encoder benchmark charts, quality tables and run provenance
+  from the final 432-case September 14 sweep.
+
 ## [v0.4.1](https://github.com/Mnwa/mbrotli/releases/tag/v0.4.1) - 2026-09-12
 
 - Add `ParallelCompressor::reconfigure(EncoderConfig)` for subsequent batches.

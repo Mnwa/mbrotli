@@ -264,6 +264,34 @@ the reference's decisions:
   node, instead of indexing `nodes[pos + l]` per length; the tree-match loop
   does the same over `pos + len ..= pos + max_match_len`.
 - A counted `while` walks the probe table with the loop state held by value.
+- `ZopfliCostModel` rearranges command-symbol prices into rows indexed by insert
+  code, last-distance policy, and copy code whenever either initializer rebuilds
+  a model for at least 128 bytes. Only insert codes reachable within the block
+  are rebuilt; all 24 copy codes are covered, including dictionary length codes.
+  Rows follow the 704 symbol prices in the same vector, whose capacity is
+  retained between blocks. Symbol pricing and minimum-cost reduction use only
+  the original prefix. A shorter block truncates the vector to that prefix and
+  uses one 32-slot stack row, filled when a useful match needs prices. This
+  avoids growing the price allocation for cold small inputs. Failed cached
+  probes and tree matches with no new copy lengths do not request a row.
+  The copy-length loop borrows the selected row, eliminating repeated
+  command-prefix construction. Rows have 32 slots to expose the five-bit
+  copy-code bound to the optimizer; the dynamic program reads codes below 24.
+
+```mermaid
+flowchart LR
+    Literal[Literal priors] --> Symbols[Command symbol prices]
+    Histogram[Previous-pass command histogram] --> Symbols
+    Symbols --> Size{Block has at least 128 bytes?}
+    Size -->|yes| Rows[Prepare reachable insert-code rows after symbol prices]
+    Size -->|no| Small[Keep symbol prefix; retain capacity]
+    Small --> Match[Useful match fills one stack row]
+    Rows --> Start[Borrow row outside copy-length loop]
+    Match --> Start
+    Start --> Length[Copy loop reads exact price by length code]
+    Length --> Compare[Original f32 addition order and strict comparison]
+    Compare --> Record[Record cheaper node]
+```
 
 Two shortcuts keep it tractable. `compute_minimum_copy_length` refuses to price
 a copy shorter than one already known to reach its destination more cheaply.
@@ -271,15 +299,24 @@ And a copy longer than `BROTLI_LONG_COPY_QUICK_STEP` lets the search stride past
 the positions it covers, evaluating them but not searching them.
 
 `StartPosQueue` keeps the eight cheapest command starts, sorted. It is a ring
-whose insertion restores order with adjacent swaps; which candidate is evicted
-when it is full depends on where those swaps have moved things, and the
-reference makes no promise about it. What it does maintain — the size bound and
-the ordering — is what the search reads.
+whose insertion shifts the cheaper prefix and stops at the first candidate with
+an equal or higher cost difference. The new entry precedes equal-cost entries,
+as in the reference's strict adjacent-swap comparisons. Starts have finite
+cost differences. The untouched suffix is already sorted, so this produces the
+same ordering and eviction as visiting every adjacent pair, including after the
+ring wraps. A differential test compares every rank and distance cache after
+4096 insertions with ties and extreme finite costs.
 
 ## 5. Numerical determinism
 
 Every comparison in the dynamic program is a strict `<` on an `f32`, so the
 arithmetic is part of the output, not an implementation detail:
+
+- Rearranged command prices copy the original `f32` bits. No distance or
+  extra-bit price is folded into them: additions keep their original order.
+  The implicit last-distance command condition remains exactly `code == 0`,
+  insert code below eight, and copy code below sixteen. Tests compare every
+  legal length-code pair across both model initializers.
 
 - `FastLog2` returns a `double` in the reference and is narrowed to `f32` at
   each use, so the intermediate is computed at full width and rounded once.

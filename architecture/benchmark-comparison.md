@@ -82,6 +82,11 @@ Each codec has its own `encoders/` or `decoders/` directory containing an index,
 `quality_docs.py` generates encoder quality pages; `plot.py` writes their shared
 overview, throughput and size charts. `decoder_docs.py` generates decoder pages
 and charts together. Generators compute links relative to their output directory.
+The current encoder CSV matches the final September 14 optimization snapshot
+byte for byte. Its environment record links the source hashes and run history;
+all 111 encoder charts and twelve quality pages use that same recorded sweep.
+Encoder SVG writers omit timestamps and strip trailing whitespace so generated
+artifacts remain reproducible and pass repository whitespace checks.
 
 ## Verification and known gaps
 
@@ -95,6 +100,10 @@ malformed records, medians, generated pages and SVG structure. See
 - Equal quality numbers do not imply equal compressed size or search policy.
 - These suites measure cold serial APIs. Root benchmarks separately cover retained
   state, slices, streaming, parallel tasks and experimental formats.
+  The root `compress` cold group includes 1 MiB incompressible and repeated-byte
+  inputs at every quality, covering deep sparse-pool growth and long-copy search.
+  Its 682 Rust/C pairs require exact output identity with matched C streaming
+  settings before timing, unlike the native-API comparison above.
 - Fixed implementation order and shared hosts can bias timings; confidence bounds
   do not capture every environmental effect or establish a significant lead.
 

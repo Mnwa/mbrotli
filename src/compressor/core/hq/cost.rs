@@ -21,7 +21,7 @@ use alloc::vec::Vec;
 
 use super::literal_cost::{LiteralCostArena, estimate_bit_costs_for_literals};
 use super::nodes::INFINITY;
-use crate::shared::command::Command;
+use crate::shared::command::{Command, combine_length_codes, insert_length_code};
 use crate::shared::constants::{NUM_COMMAND_SYMBOLS, NUM_LITERAL_SYMBOLS};
 use crate::shared::distance::NUM_HISTOGRAM_DISTANCE_SYMBOLS;
 use crate::shared::fast_log::fast_log2;
@@ -31,6 +31,9 @@ const COMMAND_PRIOR_OFFSET: usize = 11;
 
 /// Prior the literal-cost model uses for distance symbols: `log2(20 + symbol)`.
 const DISTANCE_PRIOR_OFFSET: usize = 20;
+
+/// Short blocks cannot amortize preparing every reachable command-price row.
+const COMMAND_PRICE_CACHE_MIN_BYTES: usize = 128;
 
 /// Turns a histogram into per-symbol costs (`SetCost`).
 ///
@@ -62,6 +65,8 @@ fn set_cost(histogram: &[u32], literal_histogram: bool, cost: &mut [f32]) {
 
 /// The prices the dynamic program decides on (`ZopfliCostModel`).
 pub(crate) struct ZopfliCostModel {
+    /// Command-symbol prices, followed by two 32-slot copy-code rows per
+    /// reachable insert code. A symbol-only length selects stack scratch.
     cost_cmd: Vec<f32>,
     cost_dist: Vec<f32>,
     /// Cumulative literal cost: `literal_costs[to] - literal_costs[from]` is
@@ -148,7 +153,12 @@ impl ZopfliCostModel {
         );
         accumulate_literal_costs(&mut self.literal_costs, num_bytes);
 
-        for (symbol, slot) in self.cost_cmd.iter_mut().enumerate() {
+        for (symbol, slot) in self
+            .cost_cmd
+            .iter_mut()
+            .take(NUM_COMMAND_SYMBOLS)
+            .enumerate()
+        {
             *slot = fast_log2(COMMAND_PRIOR_OFFSET + symbol) as f32;
         }
         for (symbol, slot) in self
@@ -160,6 +170,7 @@ impl ZopfliCostModel {
             *slot = fast_log2(DISTANCE_PRIOR_OFFSET + symbol) as f32;
         }
         self.min_cost_cmd = fast_log2(COMMAND_PRIOR_OFFSET) as f32;
+        self.prepare_command_costs(num_bytes);
     }
 
     /// Prices a block from the commands a previous pass produced.
@@ -201,14 +212,22 @@ impl ZopfliCostModel {
         }
 
         set_cost(&self.histogram_literal, true, &mut self.cost_literal);
-        set_cost(&self.histogram_cmd, false, &mut self.cost_cmd);
+        set_cost(
+            &self.histogram_cmd,
+            false,
+            &mut self.cost_cmd[..NUM_COMMAND_SYMBOLS],
+        );
         set_cost(
             &self.histogram_dist[..self.distance_histogram_size],
             false,
             &mut self.cost_dist[..self.distance_histogram_size],
         );
 
-        self.min_cost_cmd = self.cost_cmd.iter().copied().fold(INFINITY, f32::min);
+        self.min_cost_cmd = self.cost_cmd[..NUM_COMMAND_SYMBOLS]
+            .iter()
+            .copied()
+            .fold(INFINITY, f32::min);
+        self.prepare_command_costs(num_bytes);
 
         // Spread the per-symbol literal costs over the block, then accumulate.
         for index in 0..num_bytes {
@@ -221,10 +240,63 @@ impl ZopfliCostModel {
         accumulate_literal_costs(&mut self.literal_costs, num_bytes);
     }
 
+    /// Rearranges exact command prices once per model rebuild.
+    fn prepare_command_costs(&mut self, num_bytes: usize) {
+        // Queued starts and positions both belong to this block, so their
+        // insert length cannot exceed its byte count. Copy codes still cover
+        // the whole alphabet, including transformed dictionary words.
+        if num_bytes < COMMAND_PRICE_CACHE_MIN_BYTES {
+            // Retain capacity across streams, but mark the rows unavailable.
+            // A cold short block never grows its symbol-price allocation.
+            self.cost_cmd.truncate(NUM_COMMAND_SYMBOLS);
+            return;
+        }
+        let insert_codes = usize::from(insert_length_code(num_bytes)) + 1;
+        let required = NUM_COMMAND_SYMBOLS + insert_codes * 64;
+        if self.cost_cmd.len() < required {
+            self.cost_cmd.resize(required, INFINITY);
+        }
+        for insert in 0..insert_codes {
+            for use_last in [false, true] {
+                for copy in 0..24 {
+                    let code = combine_length_codes(insert as u16, copy as u16, use_last);
+                    let cost = self.command_cost(code);
+                    self.cost_cmd
+                        [NUM_COMMAND_SYMBOLS + insert * 64 + usize::from(use_last) * 32 + copy] =
+                        cost;
+                }
+            }
+        }
+    }
+
+    /// Prices copy-length codes for a fixed insert code and distance policy.
+    ///
+    /// Short blocks fill caller-owned scratch only after a useful match is
+    /// found. Larger blocks borrow the retained rows. Callers use copy codes
+    /// below 24 and insert codes reachable within the current block.
+    #[inline(always)]
+    pub(crate) fn command_costs<'a>(
+        &'a self,
+        insert: u16,
+        use_last: bool,
+        scratch: &'a mut [f32; 32],
+    ) -> &'a [f32; 32] {
+        if self.cost_cmd.len() == NUM_COMMAND_SYMBOLS {
+            for (copy, slot) in scratch.iter_mut().take(24).enumerate() {
+                *slot = self.command_cost(combine_length_codes(insert, copy as u16, use_last));
+            }
+            scratch
+        } else {
+            &self.cost_cmd[NUM_COMMAND_SYMBOLS..].as_chunks::<64>().0[usize::from(insert) & 31]
+                .as_chunks::<32>()
+                .0[usize::from(use_last)]
+        }
+    }
+
     /// Returns what coding command symbol `cmdcode` would cost.
     #[inline(always)]
     pub(crate) fn command_cost(&self, cmdcode: u16) -> f32 {
-        self.cost_cmd
+        self.cost_cmd[..NUM_COMMAND_SYMBOLS]
             .get(usize::from(cmdcode))
             .copied()
             .unwrap_or(INFINITY)
@@ -322,6 +394,84 @@ mod tests {
         assert_eq!(model.command_cost(5), fast_log2(16) as f32);
         assert_eq!(model.distance_cost(0), fast_log2(20) as f32);
         assert_eq!(model.min_cost_cmd(), fast_log2(11) as f32);
+    }
+
+    #[test]
+    fn length_prices_preserve_symbol_cost_bits_across_model_rebuilds() {
+        let data = b"abcabcabcabcabcabcabcabcabcabcabcabc".repeat(1024);
+        let mut model = ZopfliCostModel::new(alphabet());
+        model.reserve(data.len(), alphabet());
+        let commands = [Command::new(&DistanceParams::default(), 3, 20, 0, 3)];
+        let mut scratch = [INFINITY; 32];
+        for use_commands in [false, true, false] {
+            if use_commands {
+                model.set_from_commands(0, &data, usize::MAX, &commands, 0, data.len());
+            } else {
+                model.set_from_literal_costs(0, &data, usize::MAX, data.len());
+            }
+            for use_last in [false, true] {
+                for insert in 0..24 {
+                    for copy in 0..24 {
+                        let symbol = combine_length_codes(insert, copy, use_last);
+                        assert_eq!(
+                            model.command_costs(insert, use_last, &mut scratch)[usize::from(copy)]
+                                .to_bits(),
+                            model.command_cost(symbol).to_bits(),
+                            "insert {insert}, copy {copy}, last {use_last}, histogram {use_commands}",
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn length_prices_grow_and_rebuild_after_shorter_blocks() {
+        let data = b"abcabcabcabcabcabcabcabcabcabcabcabc".repeat(1024);
+        let mut model = ZopfliCostModel::new(alphabet());
+        model.reserve(data.len(), alphabet());
+        let mut scratch = [INFINITY; 32];
+        for length in [0, 1, 44, 127, 128, 129, data.len(), 3, 128] {
+            model.set_from_literal_costs(0, &data, usize::MAX, length);
+            let capacity = model.cost_cmd.capacity();
+            if length < COMMAND_PRICE_CACHE_MIN_BYTES {
+                assert_eq!(model.cost_cmd.len(), NUM_COMMAND_SYMBOLS);
+            }
+            for insert in 0..=insert_length_code(length) {
+                for use_last in [false, true] {
+                    for copy in 0..24 {
+                        assert_eq!(
+                            model.command_costs(insert, use_last, &mut scratch)[usize::from(copy)]
+                                .to_bits(),
+                            model
+                                .command_cost(combine_length_codes(insert, copy, use_last))
+                                .to_bits(),
+                        );
+                    }
+                }
+            }
+            model.set_from_commands(0, &data, usize::MAX, &[], 0, length);
+            assert_eq!(model.cost_cmd.capacity(), capacity);
+            assert_eq!(
+                model.command_costs(0, true, &mut scratch)[0],
+                model.command_cost(0)
+            );
+        }
+    }
+
+    #[test]
+    fn short_price_models_keep_symbol_storage_and_reject_non_symbols() {
+        let data = b"The quick brown fox jumps over the lazy dog.";
+        let mut model = ZopfliCostModel::new(alphabet());
+        model.reserve(data.len(), alphabet());
+        let capacity = model.cost_cmd.capacity();
+        model.set_from_literal_costs(0, data, usize::MAX, data.len());
+        assert_eq!(model.cost_cmd.capacity(), capacity);
+        assert_eq!(model.command_cost(NUM_COMMAND_SYMBOLS as u16), INFINITY);
+        // The appended cache must never extend the command-symbol alphabet.
+        model.prepare_command_costs(1 << 15);
+        assert_eq!(model.command_cost(NUM_COMMAND_SYMBOLS as u16), INFINITY);
+        assert_eq!(model.command_cost(u16::MAX), INFINITY);
     }
 
     #[test]

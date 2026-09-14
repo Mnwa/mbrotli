@@ -3,6 +3,7 @@
 | Compare | Results | Data |
 | --- | --- | --- |
 | Compression speed and size | [Qualities 0–11](encoders/README.md) | [CSV](encoder-comparison.csv), [conditions](encoder-comparison.md) |
+| Encoder optimization, 2026-09-14 | [Changes and measured results](encoder-optimization-2026-09-14.md) | [Before](encoder-optimization-2026-09-14/comparison-before.csv), [after](encoder-optimization-2026-09-14/comparison-after.csv), [environment](encoder-optimization-2026-09-14/environment.json) |
 | Decompression speed on identical streams | [Source qualities 0–11](decoders/README.md) | [CSV](decoder-comparison.csv), [conditions](decoder-comparison.md) |
 
 ## Compression
@@ -27,7 +28,7 @@ Rust brotli decoder project and is omitted. [Exact results](decoders/README.md).
 
 Published measurements use an Intel Core i7-13700KF under WSL2, generic mode,
 window 22, and cold native APIs including construction, allocation and disposal.
-Compression is dated 2026-09-07; decompression is dated 2026-09-10. See each
+Compression is dated 2026-09-14; decompression is dated 2026-09-10. See each
 report for provenance and limits; these are measurements of recorded builds.
 
 Empty and tiny inputs have equal weight with large inputs. Medians describe this

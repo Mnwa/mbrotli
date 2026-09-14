@@ -37,7 +37,7 @@ depending on the workload and quality setting.
 
 ![Compression speed and output size relative to Google C Brotli across qualities 0–11][bench-chart]
 
-**Recorded 2026-09-07 · Intel Core i7-13700KF · WSL2 · window 22 · cold serial APIs.**
+**Recorded 2026-09-14 · Intel Core i7-13700KF · WSL2 · window 22 · cold serial APIs.**
 Each value is the median of per-dataset ratios across eight equally weighted datasets,
 including empty and tiny inputs. A speed ratio above **1×** is faster than C; a size
 ratio below **1×** is smaller. These are compression results; the separate decoder comparison follows below.

@@ -247,6 +247,15 @@ The dense decision uses the construction-time size hint, not `prepare`'s
 on-demand layouts on deep shapes. Deep-shape thresholds also depend on whether
 the matcher has been reused. These layout choices preserve candidate order and
 output; allocation timing is not part of the public reuse contract.
+Sparse pools normally grow geometrically. When a pool has promoted 1024
+starter blocks, `reserve_populated_blocks` reserves from the current size hint to avoid
+repeatedly copying a populated pool. The estimate is one full block per sixteen
+input bytes, rounded down to a power of two and capped at 16384 blocks and the
+shape's bucket count. Unknown hints reserve nothing. This changes capacity only:
+the fifth store still promotes each starter, tags stay alongside positions, and
+generation stamps and candidate order are unchanged. The cap limits speculative
+reservation on large compressible inputs; pools can still grow beyond it on
+demand. Existing capacity is retained across resets.
 The size hint itself is retargetable: a reused encoder whose
 new hint resolves to the same shape and the same match-finder variant takes
 the hint over (`GreedyEncoder::retarget`, `MatchFinder::retarget`) instead
@@ -301,6 +310,9 @@ flowchart LR
     prepare -->|size hint at least the dense limit for a first or a later stream, unknown length on a tagged shape, or table held| dense[Dense: counters and flat key-addressed blocks]
     compact --> run[Matcher::visit_run binds one concrete run for the block]
     sparse --> run
+    sparse --> promoted{1024 full blocks reached?}
+    promoted -->|yes| reserve[Reserve bounded pool capacity from size hint]
+    reserve --> run
     dense --> run
     run --> search[find_longest_match: cached distances, tag mask, candidates, one index lookup per position]
     run --> store[store / store_range through the run]
@@ -308,6 +320,18 @@ flowchart LR
 ```
 
 ### 2.4. The distance cache
+
+The outlined `accept_cached` and `accept_candidate` measurement helpers return
+an optional pair with a `NonZeroUsize` score. A winning score is strictly greater
+than the current unsigned score, so zero cannot represent an accepted match.
+The niche lets the x86-64 build return the pair in registers without a separate
+option tag or a caller-provided return buffer. Ring positions and remaining
+block lengths cross this private helper boundary as `u32`: the largest ring has
+31 address bits and a block has at most 24 length bits. Widening them inside the
+helper makes these bounds visible to the optimizer while preserving safe slice
+checks. This is unrelated to the logical stream position, which can span many
+ring wraps. SIMD selection still happens above the search loop; each helper
+receives the already selected `S` token.
 
 Qualities seven and above probe more than the four remembered distances. The
 extra entries are near misses derived from the two freshest ones — one, two and

@@ -48,8 +48,8 @@ FFI do not appear in public signatures. Each codec compiles independently.
 | [Bit output](bit-output.md) | Initialized destinations, bit operations and overflow. |
 | [Serial output identity](universal-encoding.md) | Shared scheduling, empty finalization and C compatibility. |
 | [Fast encoder](fast-encoder.md) | Qualities 0–1: fragments, entropy coding and SIMD scans. |
-| [Greedy encoder](greedy-encoder.md) | Qualities 2–9: matchers, commands and meta-blocks. |
-| [High-quality encoder](hq-encoder.md) | Qualities 10–11: tree search, dynamic programming and clustering. |
+| [Greedy encoder](greedy-encoder.md) | Qualities 2–9: matcher layouts, bounded pool growth, match scoring and meta-blocks. |
+| [High-quality encoder](hq-encoder.md) | Qualities 10–11: tree search, command-price rows, ordered starts and clustering. |
 | [Parallel compression](parallel-compression.md) | Planning, encoder reconfiguration, caller-run tasks, staging and assembly. |
 
 ## Decompression
@@ -77,6 +77,6 @@ FFI do not appear in public signatures. Each codec compiles independently.
 
 | Specification | Scope |
 | --- | --- |
-| [Implementation comparison](benchmark-comparison.md) | Isolated Criterion suites, validation and symmetric encoder/decoder reports. |
+| [Implementation comparison](benchmark-comparison.md) | Isolated Criterion suites, validation, recorded-run provenance and encoder/decoder charts. |
 | [Fuzzing](fuzzing.md) | Target inputs, oracles, campaigns and regression replay. |
 | [Continuous integration](ci.md) | Triggers, checks, framed fuzz campaigns, artifacts and coverage gating. |

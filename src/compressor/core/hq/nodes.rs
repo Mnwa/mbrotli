@@ -241,20 +241,24 @@ impl StartPosQueue {
     }
 
     /// Adds `posdata`, keeping the queue sorted (`StartPosQueuePush`).
-    pub(crate) fn push(&mut self, posdata: PosData) {
+    pub(crate) const fn push(&mut self, posdata: PosData) {
         let start = !self.idx & (START_POS_QUEUE_SIZE - 1);
         self.idx += 1;
         let len = self.len();
-        self.queue[start] = posdata;
-        // Restoring the order needs at most `len - 1` adjacent swaps, because
-        // everything below the new entry was already sorted.
-        for offset in start..start + len.saturating_sub(1) {
-            let here = offset & (START_POS_QUEUE_SIZE - 1);
-            let next = (offset + 1) & (START_POS_QUEUE_SIZE - 1);
-            if self.queue[here].costdiff > self.queue[next].costdiff {
-                self.queue.swap(here, next);
+        let mut here = start;
+        // Costs are finite. Shift the cheaper prefix once; the untouched suffix
+        // is sorted, and inserting before ties preserves the reference order.
+        let mut offset = 1;
+        while offset < len {
+            let next = (start + offset) & (START_POS_QUEUE_SIZE - 1);
+            if posdata.costdiff <= self.queue[next].costdiff {
+                break;
             }
+            self.queue[here] = self.queue[next];
+            here = next;
+            offset += 1;
         }
+        self.queue[here] = posdata;
     }
 
     /// Returns the `k`th cheapest candidate (`StartPosQueueAt`).
@@ -374,6 +378,51 @@ mod tests {
                 costs.windows(2).all(|pair| pair[0] <= pair[1]),
                 "queue out of order after {pos} pushes: {costs:?}"
             );
+        }
+    }
+
+    #[test]
+    fn queue_insertion_preserves_reference_ties_and_eviction_after_wraps() {
+        let mut actual = StartPosQueue::default();
+        let mut reference = StartPosQueue::default();
+        let mut random = 0x2468_ACE0_1357_9BDFu64;
+        for pos in 0..4096 {
+            random ^= random << 13;
+            random ^= random >> 7;
+            random ^= random << 17;
+            let costdiff = match pos % 8 {
+                0 => 0.0,
+                1 => -0.0,
+                2 => f32::MIN,
+                3 => f32::MAX,
+                _ => (random % 17) as f32 - 8.0,
+            };
+            let incoming = PosData {
+                pos,
+                distance_cache: [pos as i32, 11, 15, 16],
+                costdiff,
+                cost: pos as f32,
+            };
+            actual.push(incoming);
+
+            // The reference always visits the entire suffix with adjacent swaps.
+            let start = !reference.idx & (START_POS_QUEUE_SIZE - 1);
+            reference.idx += 1;
+            reference.queue[start] = incoming;
+            for offset in start..start + reference.len().saturating_sub(1) {
+                let here = offset & (START_POS_QUEUE_SIZE - 1);
+                let next = (offset + 1) & (START_POS_QUEUE_SIZE - 1);
+                if reference.queue[here].costdiff > reference.queue[next].costdiff {
+                    reference.queue.swap(here, next);
+                }
+            }
+            for k in 0..actual.len() {
+                let (left, right) = (actual.at(k), reference.at(k));
+                assert_eq!(left.pos, right.pos, "position {pos}, rank {k}");
+                assert_eq!(left.distance_cache, right.distance_cache);
+                assert_eq!(left.costdiff.to_bits(), right.costdiff.to_bits());
+                assert_eq!(left.cost.to_bits(), right.cost.to_bits());
+            }
         }
     }
 

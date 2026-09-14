@@ -11,7 +11,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from quality_docs import CORPORA, ENCODERS, bars, load_rows, medians, quality_order
+from quality_docs import CORPORA, ENCODERS, bars, load_rows, medians, quality_order, save_svg
 
 
 def style():
@@ -36,7 +36,7 @@ def median_chart(rows, quality, path):
     fig.text(.5, .02, "Equal dataset weight, including empty input · per-dataset ratios to Google C · dashed line: C = 1×",
              ha="center", fontsize=10)
     fig.tight_layout(rect=(0, .06, 1, .95))
-    fig.savefig(path, metadata={"Date": None})
+    save_svg(fig, path)
     plt.close(fig)
 
 
@@ -58,7 +58,7 @@ def render(rows, output, subtitle):
         fig.text(.5, .018, subtitle + "\nEqual dataset weight · strongest mbrotli median speed / C first · Burli q0–q5 only",
                  ha="center", fontsize=10)
         fig.tight_layout(rect=(0, .05, 1, .94))
-        fig.savefig(output / f"{kind}.svg", metadata={"Date": None})
+        save_svg(fig, output / f"{kind}.svg")
         plt.close(fig)
     fig, axes = plt.subplots(2, 1, figsize=(14, 8))
     for ax, metric, label in zip(axes, ["speed", "size"],
@@ -79,7 +79,7 @@ def render(rows, output, subtitle):
     fig.text(.5, .02, subtitle + "\nPer-dataset ratios to C · equal weight · qualities ordered by mbrotli median speed / C",
              ha="center", fontsize=10)
     fig.tight_layout(rect=(0, .07, 1, .89))
-    fig.savefig(output / "overview.svg", metadata={"Date": None})
+    save_svg(fig, output / "overview.svg")
     plt.close(fig)
 
 
@@ -109,7 +109,7 @@ def before_after_chart(source, path):
     fig.text(.5, .015, "Separate 96-case run · ordered by median speedup across qualities · dashed line: unchanged = 1×",
              ha="center", fontsize=10)
     fig.tight_layout(rect=(0, .04, 1, .96))
-    fig.savefig(path, metadata={"Date": None})
+    save_svg(fig, path)
     plt.close(fig)
 
 

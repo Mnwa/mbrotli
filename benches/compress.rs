@@ -28,7 +28,7 @@
 //! Both sides reuse output storage in the reused and presized groups. C still
 //! creates and destroys encoder state for every independent stream.
 //!
-//! A full corpus checkout provides 658 paired Rust/C cases.
+//! A full corpus checkout provides 682 paired Rust/C cases.
 //! Tiny payloads are validated at each quality before their timing begins.
 
 #[cfg(not(feature = "no_std"))]
@@ -527,7 +527,11 @@ fn validate(quality: Quality, corpus: &Corpus) {
 /// `BrotliEncoderCompress` does on every call anyway.
 #[cfg(not(feature = "no_std"))]
 fn bench_cold(criterion: &mut Criterion) {
-    let corpora = corpora();
+    let mut corpora = corpora();
+    // Full sparse pools and long copy runs exercise different allocation and
+    // command-pricing costs, including the H5/H6 size-hint boundary at 1 MiB.
+    corpora.push(Corpus::new("incompressible-1MiB", incompressible(1 << 20)));
+    corpora.push(Corpus::new("repeated-1MiB", vec![b'a'; 1 << 20]));
 
     println!("corpus validation (lgwin {})", LGWIN.bits());
 

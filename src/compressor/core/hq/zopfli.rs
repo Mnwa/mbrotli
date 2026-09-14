@@ -19,12 +19,11 @@ use fearless_simd::Simd;
 
 use super::cost::ZopfliCostModel;
 use super::h10::{BackwardMatch, BinaryTreeMatcher, HASH_TYPE_LENGTH, STORE_LOOKAHEAD};
-use super::nodes::{PosData, StartPosQueue, ZopfliNode};
+use super::nodes::{INFINITY, PosData, StartPosQueue, ZopfliNode};
 use super::params::HqParams;
 use crate::compressor::core::rfc9841::context::SharedContextInner;
 use crate::shared::command::{
-    Command, combine_length_codes, copy_length_code, insert_length_code,
-    prefix_encode_copy_distance,
+    Command, copy_length_code, insert_length_code, prefix_encode_copy_distance,
 };
 use crate::shared::distance::NUM_DISTANCE_SHORT_CODES;
 use crate::shared::format::{COPY_EXTRA, INS_EXTRA};
@@ -406,6 +405,7 @@ fn update_nodes<S: Simd, const INDEPENDENT: bool>(
                 compute_minimum_copy_length(min_cost, nodes, ctx.num_bytes, pos)
             };
 
+            let mut command_scratch = [INFINITY; 32];
             // Command starts in order of increasing cost difference.
             for k in 0..max_iters.min(queue.len()) {
                 let (start, start_costdiff, cache) = {
@@ -462,19 +462,29 @@ fn update_nodes<S: Simd, const INDEPENDENT: bool>(
                         continue;
                     };
 
+                    // The continuation byte is only a filter: earlier bytes
+                    // can disagree, leaving no newly reachable copy length.
+                    if len <= best_len {
+                        continue;
+                    }
+
                     let dist_cost = base_cost + model.distance_cost(code);
                     // Price every length the copy newly reaches. The node array
                     // extends one past the block, so the range is always inside
                     // it; an empty one prices nothing.
+                    let command_costs =
+                        model.command_costs(inscode, code == 0, &mut command_scratch);
                     let reached = nodes
                         .get_mut(pos + best_len + 1..=pos + len)
                         .unwrap_or_default();
                     for (l, node) in (best_len + 1..).zip(reached) {
                         let copycode = copy_length_code(l);
-                        let cmdcode = combine_length_codes(inscode, copycode, code == 0);
-                        let cost = if cmdcode < 128 { base_cost } else { dist_cost }
-                            + COPY_EXTRA[usize::from(copycode)] as f32
-                            + model.command_cost(cmdcode);
+                        let cost = if code == 0 && inscode < 8 && copycode < 16 {
+                            base_cost
+                        } else {
+                            dist_cost
+                        } + COPY_EXTRA[usize::from(copycode)] as f32
+                            + command_costs[usize::from(copycode) & 31];
                         if cost < node.cost() {
                             node.record(pos, start, l, l, backward, code + 1, cost);
                             result = result.max(l);
@@ -516,6 +526,8 @@ fn update_nodes<S: Simd, const INDEPENDENT: bool>(
                         len = max_match_len;
                     }
                     if len <= max_match_len {
+                        let command_costs =
+                            model.command_costs(inscode, false, &mut command_scratch);
                         let reached = nodes
                             .get_mut(pos + len..=pos + max_match_len)
                             .unwrap_or_default();
@@ -526,10 +538,9 @@ fn update_nodes<S: Simd, const INDEPENDENT: bool>(
                                 l
                             };
                             let copycode = copy_length_code(len_code);
-                            let cmdcode = combine_length_codes(inscode, copycode, false);
                             let cost = dist_cost
                                 + COPY_EXTRA[usize::from(copycode)] as f32
-                                + model.command_cost(cmdcode);
+                                + command_costs[usize::from(copycode) & 31];
                             if cost < node.cost() {
                                 node.record(pos, start, l, len_code, dist, 0, cost);
                                 result = result.max(l);

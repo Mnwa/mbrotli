@@ -188,6 +188,17 @@ cleared between builds, because every build writes each node it reads. Block
 encoders borrow the retained tables. Move-to-front uses bounded stack
 scratch. Greedy splitters accept their previous split and histogram storage.
 HQ retains split/cluster/literal-cost storage and the full meta-block shape.
+Its cost model also retains command prices arranged by insert code and distance
+policy, with 32 copy-code slots per row. These rows extend the existing symbol
+price vector outside the dynamic program and are included by capacity in
+`retained_bytes`. Blocks below 128 bytes keep only the symbol prefix active and
+fill one stack row per useful match; a cold short stream adds no retained price
+storage. A short block after a large one retains the vector's capacity.
+Greedy sparse matchers reserve
+bounded extra pool capacity only after enough buckets have been populated; their
+position and tag capacities remain part of the same accounting. See the
+[greedy](greedy-encoder.md#23-storage-layouts-runs-and-sweeps) and
+[HQ](hq-encoder.md#4-the-dynamic-program) specifications for the growth rules.
 
 HQ prefix candidates occupy retained workspace. They merge backwards into the
 existing match arena, without `split_off` or a temporary merge vector. Earlier

@@ -19,6 +19,7 @@
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use core::num::NonZeroUsize;
 
 use fearless_simd::{Simd, SimdBase, SimdMask, u8x16, u8x32};
 
@@ -1353,6 +1354,9 @@ impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize>
                     *top = *starter;
                 }
                 let full = self.blocks.len();
+                if full == 1024 {
+                    self.reserve_populated_blocks();
+                }
                 self.blocks.push(block);
                 if Self::TAGGED {
                     let mut tags = [0u8; BLOCK];
@@ -1366,6 +1370,22 @@ impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize>
                 (BlockRef::Full(full), full as u32 + 1)
             }
             Some(BlockRef::Full(index)) => (BlockRef::Full(index), offset),
+        }
+    }
+
+    /// Reserves once a sparse stream has demonstrated broad bucket use.
+    #[cold]
+    fn reserve_populated_blocks(&mut self) {
+        // A size hint alone over-reserves repetitive streams. Wait until 1024
+        // buckets have outgrown their starters, then round the estimate down
+        // and cap it so larger pools still prove their demand incrementally.
+        let expected = (self.size_hint / 16).min(BUCKETS).min(1 << 14);
+        let expected = expected.checked_ilog2().map_or(0, |bits| 1usize << bits);
+        self.blocks
+            .reserve(expected.saturating_sub(self.blocks.len()));
+        if Self::TAGGED {
+            self.block_tags
+                .reserve(expected.saturating_sub(self.block_tags.len()));
         }
     }
 
@@ -1701,16 +1721,22 @@ struct Found {
 /// calls it keeps only its own filter in registers. It returns by value
 /// rather than writing the result, so the result never has to live in
 /// memory during the search.
+/// A winning score is positive: its nonzero niche keeps the optional pair
+/// in two words. Masked ring positions use at most 31 bits and block lengths
+/// at most 24; narrow arguments expose those bounds to the optimizer.
 #[inline(never)]
 fn accept_cached<S: Simd>(
     simd: S,
     data: &[u8],
-    cur_ix_masked: usize,
-    max_length: usize,
-    prev_ix: usize,
+    cur_ix_masked: u32,
+    max_length: u32,
+    prev_ix: u32,
     index: usize,
     best_score: usize,
-) -> Option<(usize, usize)> {
+) -> Option<(usize, NonZeroUsize)> {
+    let cur_ix_masked = cur_ix_masked as usize;
+    let max_length = max_length as usize;
+    let prev_ix = prev_ix as usize;
     let len = match_len_at(
         simd,
         data,
@@ -1727,7 +1753,7 @@ fn accept_cached<S: Simd>(
                 score -= backward_reference_penalty_using_last_distance(index);
             }
             if best_score < score {
-                return Some((len, score));
+                return NonZeroUsize::new(score).map(|score| (len, score));
             }
         }
     }
@@ -1746,16 +1772,21 @@ fn accept_cached<S: Simd>(
 /// reloads the loop's own invariants from the stack at every candidate. It
 /// returns by value rather than writing the result, so the result never
 /// has to live in memory during the search.
+/// Like [`accept_cached`], it uses a positive-score niche and narrow physical
+/// ring indices; logical stream positions are not narrowed here.
 #[inline(never)]
 fn accept_candidate<S: Simd, const HASH64: bool>(
     simd: S,
     data: &[u8],
-    cur_ix_masked: usize,
-    max_length: usize,
-    prev_ix: usize,
+    cur_ix_masked: u32,
+    max_length: u32,
+    prev_ix: u32,
     backward: usize,
     best_score: usize,
-) -> Option<(Best, usize)> {
+) -> Option<(Best, NonZeroUsize)> {
+    let cur_ix_masked = cur_ix_masked as usize;
+    let max_length = max_length as usize;
+    let prev_ix = prev_ix as usize;
     let cur = current_window(data, cur_ix_masked, max_length);
     let left = data.get(prev_ix..prev_ix + cur.len())?;
     let len = if HASH64 {
@@ -1779,7 +1810,7 @@ fn accept_candidate<S: Simd, const HASH64: bool>(
             len: len as u32,
             word: read_u32(data, cur_ix_masked + len - 3),
         };
-        return Some((best, score));
+        return NonZeroUsize::new(score).map(|score| (best, score));
     }
     None
 }
@@ -1833,9 +1864,9 @@ fn consider<S: Simd, const HASH64: bool>(
     if let Some((accepted, score)) = accept_candidate::<S, HASH64>(
         scan.simd,
         scan.data,
-        scan.cur_ix & scan.mask,
-        scan.max_length,
-        prev_ix,
+        (scan.cur_ix & scan.mask) as u32,
+        scan.max_length as u32,
+        prev_ix as u32,
         backward,
         found.score,
     ) {
@@ -1843,7 +1874,7 @@ fn consider<S: Simd, const HASH64: bool>(
         *found = Found {
             len: accepted.len as usize,
             distance: backward,
-            score,
+            score: score.get(),
         };
     }
     true
@@ -2011,9 +2042,9 @@ fn probe_last_distances<S: Simd, const BLOCK: usize>(
         if let Some((len, score)) = accept_cached(
             simd,
             data,
-            cur_ix_masked,
-            max_length,
-            prev_ix,
+            cur_ix_masked as u32,
+            max_length as u32,
+            prev_ix as u32,
             index,
             found.score,
         ) {
@@ -2021,7 +2052,7 @@ fn probe_last_distances<S: Simd, const BLOCK: usize>(
             found = Found {
                 len,
                 distance: backward,
-                score,
+                score: score.get(),
             };
         }
     }
@@ -3080,6 +3111,107 @@ mod tests {
                 u32::MAX
             );
         }
+    }
+
+    #[test]
+    fn accepted_matches_preserve_scores_and_reject_ties_on_every_backend() {
+        let mut data = [0u8; 96];
+        data[..8].copy_from_slice(b"abcdefgh");
+        data[32..40].copy_from_slice(b"abcdefgh");
+        data[8] = 1;
+        data[40] = 2;
+        for backend in crate::compressor::Backend::available() {
+            let score = backward_reference_score(8, 32);
+            for hash64 in [false, true] {
+                let actual = if hash64 {
+                    dispatch!(backend.0, simd => accept_candidate::<_, true>(simd, &data, 32, 16, 0, 32, 0))
+                } else {
+                    dispatch!(backend.0, simd => accept_candidate::<_, false>(simd, &data, 32, 16, 0, 32, 0))
+                };
+                let (best, actual_score) = actual.expect("eight-byte match");
+                assert_eq!(best.len, 8);
+                assert_eq!(best.word, u32::from_le_bytes([b'f', b'g', b'h', 2]));
+                assert_eq!(actual_score.get(), score);
+            }
+            assert!(dispatch!(backend.0, simd => accept_candidate::<_, false>(simd, &data, 32, 16, 0, 32, score)).is_none());
+            for (current, limit, previous) in [(95, 16, 0), (32, 16, 96), (32, 0, 0), (32, 3, 0)] {
+                assert!(dispatch!(backend.0, simd => accept_candidate::<_, false>(simd, &data, current, limit, previous, 32, 0)).is_none());
+                assert!(dispatch!(backend.0, simd => accept_candidate::<_, true>(simd, &data, current, limit, previous, 32, 0)).is_none());
+            }
+            for index in 0..NUM_DISTANCE_SHORT_CODES {
+                let mut expected = backward_reference_score_using_last_distance(8);
+                if index != 0 {
+                    expected -= backward_reference_penalty_using_last_distance(index);
+                }
+                let actual =
+                    dispatch!(backend.0, simd => accept_cached(simd, &data, 32, 16, 0, index, 0));
+                assert_eq!(
+                    actual.map(|(length, score)| (length, score.get())),
+                    Some((8, expected))
+                );
+                assert!(dispatch!(backend.0, simd => accept_cached(simd, &data, 32, 16, 0, index, expected)).is_none());
+                for length in 0..=3 {
+                    let actual = dispatch!(backend.0, simd => accept_cached(simd, &data, 32, length, 0, index, 0));
+                    assert_eq!(actual.is_some(), length >= 3 || (length == 2 && index < 2));
+                }
+            }
+            assert!(
+                dispatch!(backend.0, simd => accept_cached(simd, &data, 95, 16, 0, 0, 0)).is_none()
+            );
+            assert!(
+                dispatch!(backend.0, simd => accept_cached(simd, &data, 32, 16, 96, 0, 0))
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn sparse_pool_reservation_preserves_positions_and_tags() {
+        fn check<const BLOCK: usize>() {
+            let mut matcher = BucketMatcher::<false, { 1 << 14 }, BLOCK>::new(1 << 16);
+            matcher.prepare(true, 1 << 16, &[], false);
+            assert_eq!(matcher.layout, Layout::Sparse);
+            for key in 0..1030 {
+                for store in 0..5 {
+                    matcher.push::<false>(key, (key * 5 + store) as u32, store as u8);
+                }
+            }
+            for key in 0..1030 {
+                let entry = matcher.entries.as_ref().expect("sparse index")[key];
+                let (count, offset) = matcher.decode_entry(entry);
+                assert_eq!(count, 5);
+                let Some(BlockRef::Full(index)) =
+                    BucketMatcher::<false, { 1 << 14 }, BLOCK>::block(offset)
+                else {
+                    panic!("five stores promote a starter");
+                };
+                for (age, &position) in matcher.blocks[index][BLOCK - 5..].iter().enumerate() {
+                    assert_eq!(position, (key * 5 + 4 - age) as u32);
+                    if BucketMatcher::<false, { 1 << 14 }, BLOCK>::TAGGED {
+                        assert_eq!(matcher.block_tags[index][BLOCK - 5 + age], (4 - age) as u8);
+                    }
+                }
+            }
+        }
+        check::<32>();
+        check::<256>();
+    }
+
+    #[test]
+    fn sparse_pool_reservation_bounds_hints_and_keeps_existing_capacity() {
+        let mut matcher = BucketMatcher::<false, { 1 << 15 }, 64>::new(0);
+        matcher.reserve_populated_blocks();
+        assert_eq!(matcher.blocks.capacity(), 0);
+        matcher.size_hint = 15;
+        matcher.reserve_populated_blocks();
+        assert_eq!(matcher.blocks.capacity(), 0);
+        matcher.size_hint = usize::MAX;
+        matcher.reserve_populated_blocks();
+        assert_eq!(matcher.blocks.capacity(), 1 << 14);
+        assert_eq!(matcher.block_tags.capacity(), 0);
+        matcher.size_hint = 0;
+        matcher.reserve_populated_blocks();
+        assert_eq!(matcher.blocks.capacity(), 1 << 14);
     }
 
     use fearless_simd::{Level, dispatch};

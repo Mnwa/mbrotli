@@ -96,12 +96,16 @@ python3 benchmarks/comparison/quality_docs.py \
 python3 benchmarks/comparison/plot.py \
   --csv docs/benchmarks/encoder-comparison.csv \
   --output docs/benchmarks/encoders/charts \
-  --subtitle 'i7-13700KF; ce83e10; 30 samples; 2026-09-07'
+  --subtitle 'i7-13700KF; optimized working tree; 20 samples; 2026-09-14'
 ```
 
 `quality_docs.py` writes the index, twelve quality pages and their detailed
 charts. `plot.py` writes `overview.svg`, `throughput.svg` and `size.svg` into
 the same charts directory. All eight corpora contribute to the medians.
+The current encoder CSV is an exact copy of the final
+[September 14 optimization sweep](benchmarks/encoder-optimization-2026-09-14/comparison-after.csv).
+Its environment record identifies the measured source and binary; regenerating
+charts reuses those measurements and does not rerun the benchmark.
 
 ## Decoder comparison
 
@@ -180,7 +184,7 @@ per-case 95%-of-C gate and its Python tests remain available:
 
 ```sh
 cargo bench --bench compress --locked -- --save-baseline candidate
-python3 scripts/compare_benchmarks.py --baseline candidate --expected-cases 658 --csv /tmp/candidate.csv
+python3 scripts/compare_benchmarks.py --baseline candidate --expected-cases 682 --csv /tmp/candidate.csv
 python3 -m unittest discover -s scripts -p 'test_*.py'
 ```
 

@@ -1,10 +1,13 @@
-# Compression comparison — 2026-09-07
+# Compression comparison — 2026-09-14
 
 [Benchmark index](README.md) · [Results by quality](encoders/README.md)
 
 The [432-case CSV](encoder-comparison.csv) and
-[environment record](encoder-comparison-environment.json) describe encoder revision
-`ce83e1067ca85a2cb6e7ee4826c91b4ed8d0e072` on the recorded machine.
+[environment record](encoder-comparison-environment.json) describe the optimized
+working tree based on `090db88b4efb8836fe4dde74444bbfba63091c9a`, recorded as
+`encoder-final-20260914`. The CSV is identical to the
+[final optimization sweep](encoder-optimization-2026-09-14/comparison-after.csv).
+The environment records the measured source and executable hashes.
 
 ## Final measurements
 
@@ -18,28 +21,29 @@ times. Higher speed and lower output are better.
 
 | Quality | mbrotli median speed / C ↑ | mbrotli median output / C ↓ |
 | --- | ---: | ---: |
-| 0 | 1.132× | 1.000× |
-| 1 | 1.196× | 1.000× |
-| 2 | 1.094× | 1.000× |
-| 3 | 1.066× | 1.000× |
-| 4 | 0.975× | 1.000× |
-| 5 | 0.985× | 1.000× |
-| 6 | 0.941× | 1.000× |
-| 7 | 1.052× | 1.000× |
-| 8 | 0.862× | 1.000× |
-| 9 | 2.386× | 1.000× |
-| 10 | 1.002× | 1.000× |
-| 11 | 1.140× | 1.000× |
+| 0 | 1.129× | 1.000× |
+| 1 | 1.224× | 1.000× |
+| 2 | 1.102× | 1.000× |
+| 3 | 1.099× | 1.000× |
+| 4 | 0.998× | 1.000× |
+| 5 | 0.976× | 1.000× |
+| 6 | 0.963× | 1.000× |
+| 7 | 0.929× | 1.000× |
+| 8 | 0.898× | 1.000× |
+| 9 | 2.555× | 1.000× |
+| 10 | 1.124× | 1.000× |
+| 11 | 1.228× | 1.000× |
 
-mbrotli has a lower mean latency than C in 57 of 96 shared cases and the lowest
+mbrotli has a lower mean latency than C in 55 of 96 shared cases and the lowest
 mean among supported implementations in 48 of 96 cases. These counts compare
-point estimates, not statistical significance. The medians also retain qualities
-where mbrotli is slower than C.
+point estimates, not statistical significance. In 44 cases, mbrotli's 95% mean
+timing interval is wholly below every competitor's interval. The medians also
+retain qualities where mbrotli is slower than C.
 
-For Alice at q5, mbrotli measures 57.22 MiB/s against C's 62.21 MiB/s, both
-producing 52,809 bytes. Burli measures 64.11 MiB/s with 54,231 bytes. At q11,
-mbrotli measures 1.302 MiB/s against C's 1.096 MiB/s, both producing 46,487 bytes;
-SIMD Brotli measures 1.326 MiB/s with 46,493 bytes.
+For Alice at q5, mbrotli measures 58.00 MiB/s against C's 63.44 MiB/s, both
+producing 52,809 bytes. Burli measures 65.94 MiB/s with 54,231 bytes. At q11,
+mbrotli measures 1.365 MiB/s against C's 1.088 MiB/s, both producing 46,487 bytes;
+SIMD Brotli measures 1.335 MiB/s with 46,493 bytes.
 
 The [quality pages](encoders/README.md) retain all datasets, all implementations,
 and exact timings with 95% mean confidence bounds. Burli supports q0–q5 only.
@@ -47,7 +51,10 @@ Equal quality numbers describe each encoder's effort policy and do not imply
 equal output size.
 
 mbrotli and Google C produce equal output lengths in all 96 shared cases in
-this run. Equal lengths alone do not establish compressed byte identity.
+this run. Equal lengths alone do not establish compressed byte identity. The
+[optimization report](encoder-optimization-2026-09-14.md) separately checks
+before/after byte equality and records paired speed changes, streaming results,
+retained workspace, profiles, and memory tradeoffs.
 
 ## Measurement contract
 
@@ -57,11 +64,11 @@ this run. Equal lengths alone do not establish compressed byte identity.
 | Affinity | Logical CPU 2 |
 | Rust | rustc 1.98.1; release defaults; runtime SIMD dispatch |
 | C compiler | GCC 11.4.0; vendored release defaults |
-| C Brotli | 1.2.0; commit `028fb5a23661f123017c060daa546b55cf4bde29` |
+| C Brotli | 1.2.0; commit `4508218e7fef90fa4273286f7a415065946f2c43` |
 | Rust brotli / simd-brotli / burli | 9.0.0 / 10.0.1 / 0.3.1 |
 | Compression | Generic mode, window 22, complete known input, no dictionary or explicit flush |
 | API | Cold native serial helpers; construction, allocation, compression, and disposal timed |
-| Sampling | 30 samples; 0.2 s warmup; 0.5 s requested measurement per case |
+| Sampling | 20 samples; 0.1 s warmup; 0.3 s requested measurement per case |
 | Validation | All 432 outputs decoded to the original input through Google C Brotli before timing |
 
 Inputs are empty, 44-byte text, vendored `alice29.txt` (152,089 bytes), cyclic
@@ -82,10 +89,10 @@ Run from the repository root; use a fresh baseline name when repeating timings:
 
 ```sh
 cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench implementations --locked -- --test
-taskset -c 2 cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench implementations --locked -- --save-baseline library-refresh-2026-09-07-191328 --sample-size 30 --warm-up-time 0.2 --measurement-time 0.5 --noplot
-python3 benchmarks/comparison/report.py --baseline library-refresh-2026-09-07-191328 --csv docs/benchmarks/encoder-comparison.csv
+taskset -c 2 cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench implementations --locked -- --save-baseline encoder-final-20260914 --sample-size 20 --warm-up-time 0.1 --measurement-time 0.3 --noplot
+python3 benchmarks/comparison/report.py --baseline encoder-final-20260914 --csv docs/benchmarks/encoder-comparison.csv
 python3 benchmarks/comparison/quality_docs.py --csv docs/benchmarks/encoder-comparison.csv --environment docs/benchmarks/encoder-comparison-environment.json --report docs/benchmarks/encoder-comparison.md --output docs/benchmarks/encoders
-python3 benchmarks/comparison/plot.py --csv docs/benchmarks/encoder-comparison.csv --output docs/benchmarks/encoders/charts --subtitle 'i7-13700KF; ce83e10; 30 samples; 2026-09-07'
+python3 benchmarks/comparison/plot.py --csv docs/benchmarks/encoder-comparison.csv --output docs/benchmarks/encoders/charts --subtitle 'i7-13700KF; optimized working tree; 20 samples; 2026-09-14'
 ```
 
 Plotting uses Matplotlib 3.10.8. Criterion extends slow cases to collect the
@@ -93,9 +100,12 @@ requested samples. The exporter rejects incomplete matrices and mismatched
 input lengths. Export immediately after timing and archive `sizes.csv` with
 the named baseline: a later preflight replaces that shared manifest.
 Raw samples remain local under `benchmarks/comparison/target/criterion/`.
-This run also archives all named baseline directories, the matching size
-manifest, logs, exported CSV, and environment under
-`benchmarks/comparison/target/run-archives/library-refresh-2026-09-07-191328/`.
+The final [size manifest](encoder-optimization-2026-09-14/sizes-after.csv),
+[run history](encoder-optimization-2026-09-14/run-history.json), and
+[build provenance](encoder-optimization-2026-09-14/environment.json) are checked in
+with the optimization snapshot. The actual timed command runs a saved copy of
+the Cargo-built executable, as recorded in the environment. Chart regeneration
+reuses the final CSV; it does not rerun timings.
 
 ## Interpretation limits
 

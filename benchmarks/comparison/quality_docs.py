@@ -141,6 +141,12 @@ def bars(ax, names, values, colors, label, low=None, high=None, ratio=False):
         ax.axhline(1, color="#64748b", linestyle="--", linewidth=1)
 
 
+def save_svg(fig, path):
+    """Keep generated SVGs deterministic and free of trailing whitespace."""
+    fig.savefig(path, metadata={"Date": None})
+    path.write_text("\n".join(line.rstrip() for line in path.read_text().splitlines()) + "\n")
+
+
 def chart(group, quality, corpus, path):
     import matplotlib
     matplotlib.use("Agg")
@@ -177,7 +183,7 @@ def chart(group, quality, corpus, path):
     fig.text(.5, .015, "Linear axes from zero · cold APIs · window 22 · whiskers: 95% mean confidence bounds",
              ha="center", fontsize=10)
     fig.tight_layout(rect=(0, .045, 1, .95))
-    fig.savefig(path, metadata={"Date": None})
+    save_svg(fig, path)
     plt.close(fig)
 
 
@@ -275,7 +281,7 @@ def main():
                 "output / C = implementation bytes / C bytes. Medians are taken over those ratios.",
                 "Qualities are ordered by mbrotli median speed / C, highest first. Burli supports q0–q5 only.", "",
                 "| Quality | mbrotli speed / C ↑ | mbrotli output / C ↓ | Datasets |",
-                "| --- | ---: | ---: | ---: | ---: |"]
+                "| --- | ---: | ---: | ---: |"]
     for quality in quality_order(rows):
         values = medians(rows, quality)["mbrotli"]
         overview.append(f"| [Quality {quality}](q{quality}.md) | {values['speed']:.3f}× | {values['size']:.3f}× | 8 |")
