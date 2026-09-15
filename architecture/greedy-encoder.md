@@ -238,11 +238,42 @@ what `prepare` is told about it:
 
 | Layout | Chosen when | Index | Blocks | Cost of a new stream |
 | --- | --- | --- | --- | --- |
-| Compact | one-shot input of at most 1024 bytes on a matcher that has no sparse table yet | `KeyMap`, sized two entries per input byte, probed once per position: counter and chain head per bucket | one chain: `Vec<u64>` of `position | next << 32`, one node pushed per store in front of its bucket's previous node; a search walks the newest `BLOCK` nodes, the order a block scan takes | fill a map of at most 16 KiB |
+| Compact | one-shot input of at most 1024 bytes while the matcher is still compact | `KeyMap`, sized two entries per input byte, probed once per position: counter and chain head per bucket | one chain: `Vec<u64>` of `position | next << 32`, one node pushed per store in front of its bucket's previous node; a search walks the newest `BLOCK` nodes, the order a block scan takes | fill a map of at most 16 KiB |
 | Sparse | a known input below the dense limit; an input of unknown length on a deep shape; unless the dense table already exists | a boxed `[u64; BUCKETS]`: generation stamp, block index with a starter flag, counter | typed pools: `Vec<[u32; 4]>` starters that grow into `Vec<[u32; BLOCK]>` full blocks on their fifth store, tags alongside for tagged shapes | bump the generation |
-| Dense | the matcher's size hint is at least the shape's dense limit — a sixteenth of the table for tagged q5/q6 shapes (64 KiB and 128 KiB of input); for deep q7–q9 shapes an eighth of it on the matcher's first stream (1, 2 and 4 MiB) and a sixty-fourth from its second stream on (256 KiB, 256 KiB and 512 KiB) — or the length is unknown on a tagged shape, or the matcher already holds the dense table and the stream is not compact | `[u16; BUCKETS]` counters | one flat `Vec<u32>` of `BUCKETS * BLOCK` slots, viewed as `[[u32; BLOCK]; BUCKETS]` for a run, zeroed once per matcher | zero the counters |
+| Dense | the matcher's size hint is at least the shape's dense limit — a sixteenth of the table for tagged q5/q6 shapes (64 KiB and 128 KiB of input); for deep q7–q9 shapes an eighth of it on the matcher's first stream (1, 2 and 4 MiB) and a sixty-fourth from its second stream on (256 KiB, 256 KiB and 512 KiB) — or the length is unknown on a tagged shape, or the matcher already holds the dense table | `[u16; BUCKETS]` counters | one flat `Vec<u32>` of `BUCKETS * BLOCK` slots, viewed as `[[u32; BLOCK]; BUCKETS]` for a run, zeroed once per matcher | zero the counters |
 
-The dense decision uses the construction-time size hint, not `prepare`'s
+`BucketMatcher` owns only `Layout<BUCKETS, BLOCK>`, the retargetable size hint,
+and the saturating stream count. Each enum variant owns its own storage:
+`CompactLayout` has the key map and linked positions; `SparseLayout` has the
+boxed index, generation and full/starter pools with optional tags; `DenseLayout`
+has counters and flat positions/tags. `retained_bytes` counts only the active
+variant's allocations. The initial compact variant has no allocations.
+
+Layout changes occur only during `prepare`, between independent streams. Compact
+resets reuse its map and chain. Once sparse or dense storage exists, even a tiny
+one-shot stream keeps it; dense never demotes. Compact-to-sparse moves the larger
+of the map and chain's `Vec<u64>` allocations into the index, clears its previous
+encoding, resizes it to `BUCKETS`, and converts it to a boxed array. Growing or
+shrinking that allocation may relocate it. Sparse-to-dense uses safe
+`Vec::into_flattened` to transfer the larger position pool (full or starter)
+and the larger tag pool without copying, then extends them as needed. Sufficient
+capacity preserves their addresses; insufficient capacity may reallocate. The
+smaller pools and the sparse index are released. Compact-to-dense allocates new typed buffers. No unsafe type punning
+is used. Every transition resets counters or stamps before old slots can be read;
+it transfers storage, not a previous stream's match history.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Compact: empty buffers
+    Compact --> Compact: one-shot input at most 1024 bytes / reset map and chain
+    Compact --> Sparse: below dense threshold / reuse larger u64 buffer
+    Compact --> Dense: dense threshold reached / allocate typed tables
+    Sparse --> Sparse: below dense threshold / advance generation
+    Sparse --> Dense: dense threshold reached / flatten larger pools and extend
+    Dense --> Dense: every subsequent stream / clear counters
+```
+
+The dense decision uses the current retargetable size hint, not `prepare`'s
 `one_shot` flag. Unknown-length streams use dense storage on tagged shapes and
 on-demand layouts on deep shapes. Deep-shape thresholds also depend on whether
 the matcher has been reused. These layout choices preserve candidate order and
@@ -300,12 +331,12 @@ union of them:
 | Matcher | Run types |
 | --- | --- |
 | `QuickMatcher` | `QuickRun<&mut [u32; BUCKETS]>` over the table, or `QuickRun<&mut SmallSlots>` over the map |
-| `BucketMatcher` | `DenseRun` over three array references; `OnDemandRun<COMPACT>` over the matcher itself, the map-or-table choice a constant |
+| `BucketMatcher` | `DenseRun` over three array references; `CompactRun` over compact storage; `SparseRun` over sparse storage plus the current size hint |
 | `ChainMatcher` | the matcher itself |
 
 ```mermaid
 flowchart LR
-    prepare[prepare: one-shot? input length; size hint; tables held] --> compact[Compact: key map + one chain of nodes]
+    prepare[prepare: one-shot? input length; size hint; tables held] -->|still compact and at most 1024 bytes| compact[Compact: key map + one chain of nodes]
     prepare -->|known short input, or unknown length on a deep shape| sparse[Sparse: stamped entries + typed pools]
     prepare -->|size hint at least the dense limit for a first or a later stream, unknown length on a tagged shape, or table held| dense[Dense: counters and flat key-addressed blocks]
     compact --> run[Matcher::visit_run binds one concrete run for the block]

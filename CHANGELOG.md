@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Give each greedy bucket layout exclusive ownership of its storage. Reuse
+  compatible buffers when promoting compact to sparse and sparse to dense,
+  release obsolete pools, and retain prepared tables for later tiny streams.
+  Preserve match order and encoded bytes.
+
 - Optimize greedy match measurement and sparse-pool growth, and HQ command
   pricing and sorted start insertion, using safe Rust and preserving encoded
   bytes. Add differential coverage and 1 MiB random/repeated Criterion cases.

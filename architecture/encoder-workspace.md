@@ -246,17 +246,18 @@ flowchart TD
     Grow --> Store
 ```
 
-Bucket matchers pick one of three layouts per stream; see the
+Bucket matchers own exactly one storage layout; see the
 [greedy encoder](greedy-encoder.md#23-storage-layouts-runs-and-sweeps) for the
-selection rule. A compact key map or a table of generation-stamped entries
-activates blocks on demand: deep q7–q9 blocks start with four slots and are
-promoted once, in place, to the reference depth when a fifth is stored, with
-the starter left allocated; a compact one-shot stream links its stores into
-one chain instead. The dense layout, taken when the matcher's size hint is at
+selection rule and migration state diagram. Sparse generation-stamped entries
+activate four-slot starter blocks on demand and promote them into a full-block
+pool on the fifth store, leaving the starter allocated until reset or migration.
+Compact one-shot streams instead link their stores into one chain. Promotion
+from compact to sparse reuses the larger word buffer; promotion from sparse to
+dense flattens the larger position and tag pools and releases the unused storage.
+A prepared sparse or dense table remains in use even for subsequent tiny streams. The dense layout, taken when the matcher's size hint is at
 least the shape's dense limit (a sixteenth of the table for tagged q5/q6
 shapes; for deep q7–q9 shapes an eighth on the first stream and a
-sixty-fourth once the matcher is reused, so that a 256 KiB input takes the
-dense table on every shape from the second stream on), preallocates every
+sixty-fourth once the matcher is reused), preallocates every
 block at `key << block_bits`, zeroed once per matcher, and clears only its
 `u16` counters per stream. Counters, or the generation stamp, govern
 validity; a block's stale bytes are never read. Preparation reports
