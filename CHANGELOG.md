@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Store fixed-size greedy dense and chain matcher tables in boxed arrays with compile-time lengths;
+  preserve sparse-pool migration and retain vectors for growable storage.
+  Inline separate helpers for fresh table allocation and existing-vector conversion.
+  Return dense run views directly and forward optional tags without a redundant
+  outer option check.
+
 - Give each greedy bucket layout exclusive ownership of its storage. Reuse
   compatible buffers when promoting compact to sparse and sparse to dense,
   release obsolete pools, and retain prepared tables for later tiny streams.

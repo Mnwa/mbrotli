@@ -168,7 +168,7 @@ matchers take `block_bits = quality - 1`, and the chain matchers take
 | `H6` | 8 | 15 | `1 << (quality - 1)` | yes |
 
 Each plan is a distinct Rust type — `QuickMatcher<BUCKETS, SWEEP_BITS,
-HASH_LEN, USE_DICTIONARY, COMPACT>`, `BucketMatcher<HASH64, BUCKETS, BLOCK>`
+HASH_LEN, USE_DICTIONARY, COMPACT>`, `BucketMatcher<HASH64, BUCKETS, BLOCK, SLOTS>`
 or `ChainMatcher<NUM_BANKS, BANK_BITS>` — so the hash width, the table size
 and, for the bucket matchers, the block depth are compile-time constants
 inside the probe loop; each bucket quality is its own `MatchFinder` variant
@@ -184,6 +184,12 @@ reaches the static dictionary only by falling out of the bottom. `H3` never
 consults the dictionary, so that distinction is invisible there; `H2` does, so
 the single-slot branch must fall through rather than return — the two are the
 only matchers where the difference is observable.
+
+The chain matcher's addresses, heads, tiny hashes, bank offsets and free-slot
+indices are boxed arrays with compile-time lengths, allocated when the matcher
+is created.
+Its `slots` remain a `Vec<ChainSlot>`: activating a previously unused bank grows
+that pool. Logical resets retain both fixed tables and activated banks.
 
 ### 2.2. The tagged matchers
 
@@ -221,8 +227,8 @@ that really is using the tagged matchers.
 
 ### 2.3. Storage layouts, runs and sweeps
 
-Every bucket shape is its own type: `BucketMatcher<HASH64, BUCKETS, BLOCK>`
-takes the bucket count and the block depth as constants, so `MatchFinder`
+Every bucket shape is its own type: `BucketMatcher<HASH64, BUCKETS, BLOCK, SLOTS>`
+takes the bucket count, block depth and total slot count as constants, so `MatchFinder`
 holds ten bucket variants (`H5Q5`–`H5Q9`, `H6Q5`–`H6Q9`) rather than three.
 The depth is the quality less one, and it fixes the rest of the shape: how
 many cached distances a search probes (`last_distances_for`: four up to
@@ -230,6 +236,36 @@ thirty-two slots, ten up to 128, sixteen beyond) and whether slots carry tags
 (depth at most thirty-two). With both constants every slot mask, block index
 and hash shift is an immediate, and the dense tables are arrays whose
 indexing needs no runtime shape check.
+
+`SLOTS` is supplied separately because stable Rust cannot express a product of
+generic constants in an array type. `BucketMatcher::new` checks
+`SLOTS == BUCKETS * BLOCK` in an inline const assertion, so an inconsistent shape
+fails at compilation. The hash helper uses only `HASH64` and `BUCKETS`; runs keep
+their existing nested array views and do not carry the storage-size parameter.
+The inlined `fixed_table(initial)` creates an initialized vector of the final
+length and converts it to a boxed array. The separate inlined
+`fixed_table_from_vec(values, initial)` always resizes the supplied vector,
+including an empty one, before transferring ownership into a boxed array.
+Neither conversion copies elements. Dense construction establishes all tables;
+subsequent preparation only clears counters.
+`dense_run` returns `DenseRun` directly: the total array lengths fix the nested
+array views, so their checked `TryFrom` conversions fold away in optimized code.
+The run borrows existing counters, positions and optional tags without allocation
+or copying. Tagged shapes forward the optional tag reference; untagged shapes
+supply `None` without reading the tag pointer. `visit_run` passes the result
+directly to its visitor without an outer `Option` check.
+
+```mermaid
+flowchart LR
+    Layout["DenseLayout: fixed boxed arrays"] --> Run["dense_run: borrow counters and reshape positions"]
+    Layout --> Tags{"BLOCK <= 32?"}
+    Tags -->|yes| Borrow["Map optional tag array to nested view"]
+    Tags -->|no| None["No tag pointer read"]
+    Borrow --> Run
+    None --> Run
+    Run --> Visitor["visitor.visit: direct DenseRun"]
+```
+
 
 The reference allocates every bucket's block up front and never initialises
 it, reading a slot only below the counter that guards it. Safe Rust has to
@@ -240,14 +276,28 @@ what `prepare` is told about it:
 | --- | --- | --- | --- | --- |
 | Compact | one-shot input of at most 1024 bytes while the matcher is still compact | `KeyMap`, sized two entries per input byte, probed once per position: counter and chain head per bucket | one chain: `Vec<u64>` of `position | next << 32`, one node pushed per store in front of its bucket's previous node; a search walks the newest `BLOCK` nodes, the order a block scan takes | fill a map of at most 16 KiB |
 | Sparse | a known input below the dense limit; an input of unknown length on a deep shape; unless the dense table already exists | a boxed `[u64; BUCKETS]`: generation stamp, block index with a starter flag, counter | typed pools: `Vec<[u32; 4]>` starters that grow into `Vec<[u32; BLOCK]>` full blocks on their fifth store, tags alongside for tagged shapes | bump the generation |
-| Dense | the matcher's size hint is at least the shape's dense limit — a sixteenth of the table for tagged q5/q6 shapes (64 KiB and 128 KiB of input); for deep q7–q9 shapes an eighth of it on the matcher's first stream (1, 2 and 4 MiB) and a sixty-fourth from its second stream on (256 KiB, 256 KiB and 512 KiB) — or the length is unknown on a tagged shape, or the matcher already holds the dense table | `[u16; BUCKETS]` counters | one flat `Vec<u32>` of `BUCKETS * BLOCK` slots, viewed as `[[u32; BLOCK]; BUCKETS]` for a run, zeroed once per matcher | zero the counters |
+| Dense | the matcher's size hint is at least the shape's dense limit — a sixteenth of the table for tagged q5/q6 shapes (64 KiB and 128 KiB of input); for deep q7–q9 shapes an eighth of it on the matcher's first stream (1, 2 and 4 MiB) and a sixty-fourth from its second stream on (256 KiB, 256 KiB and 512 KiB) — or the length is unknown on a tagged shape, or the matcher already holds the dense table | `[u16; BUCKETS]` counters | one flat `Box<[u32; SLOTS]>` with `SLOTS = BUCKETS * BLOCK`, viewed as `[[u32; BLOCK]; BUCKETS]` for a run, zeroed once per matcher | zero the counters |
 
-`BucketMatcher` owns only `Layout<BUCKETS, BLOCK>`, the retargetable size hint,
+`BucketMatcher` owns only `Layout<BUCKETS, BLOCK, SLOTS>`, the retargetable size hint,
 and the saturating stream count. Each enum variant owns its own storage:
 `CompactLayout` has the key map and linked positions; `SparseLayout` has the
 boxed index, generation and full/starter pools with optional tags; `DenseLayout`
-has counters and flat positions/tags. `retained_bytes` counts only the active
-variant's allocations. The initial compact variant has no allocations.
+has `Box<[u16; BUCKETS]>` counters, `Box<[u32; SLOTS]>` positions and optional
+`Box<[u8; SLOTS]>` tags, absent for untagged shapes. `retained_bytes` counts array
+lengths and growable vector capacities, only for the active variant's allocations. The initial compact variant has no allocations.
+
+```mermaid
+graph TD
+    Fresh["New table"] --> Allocate["fixed_table: vec of final length"]
+    Existing["Existing Vec"] --> Resize["fixed_table_from_vec: resize"]
+    Allocate --> Fixed["Box of fixed-size array"]
+    Resize --> Fixed
+    DenseLayout --> Counters["Box of u16 array: BUCKETS counters"]
+    DenseLayout --> Positions["Box of u32 array: SLOTS positions"]
+    DenseLayout --> Tags["Optional box of u8 array: SLOTS tags"]
+    ChainMatcher --> Tables["Fixed boxed tables: addresses, heads, hashes, bank metadata"]
+    ChainMatcher --> Slots["Vec of ChainSlot: grows when a bank is activated"]
+```
 
 Layout changes occur only during `prepare`, between independent streams. Compact
 resets reuse its map and chain. Once sparse or dense storage exists, even a tiny
@@ -256,8 +306,11 @@ of the map and chain's `Vec<u64>` allocations into the index, clears its previou
 encoding, resizes it to `BUCKETS`, and converts it to a boxed array. Growing or
 shrinking that allocation may relocate it. Sparse-to-dense uses safe
 `Vec::into_flattened` to transfer the larger position pool (full or starter)
-and the larger tag pool without copying, then extends them as needed. Sufficient
-capacity preserves their addresses; insufficient capacity may reallocate. The
+and the larger tag pool without copying, then resizes them to `BUCKETS * BLOCK`
+before converting to boxed arrays using the safe `TryFrom` conversion. Exact
+final capacity preserves their addresses;
+growing or shrinking the allocation may relocate it. Dense preparation thereafter
+clears only counters and retains the fixed-size position and tag allocations. The
 smaller pools and the sparse index are released. Compact-to-dense allocates new typed buffers. No unsafe type punning
 is used. Every transition resets counters or stamps before old slots can be read;
 it transfers storage, not a previous stream's match history.
@@ -269,7 +322,7 @@ stateDiagram-v2
     Compact --> Sparse: below dense threshold / reuse larger u64 buffer
     Compact --> Dense: dense threshold reached / allocate typed tables
     Sparse --> Sparse: below dense threshold / advance generation
-    Sparse --> Dense: dense threshold reached / flatten larger pools and extend
+    Sparse --> Dense: dense threshold reached / flatten larger pools, resize and convert to fixed arrays
     Dense --> Dense: every subsequent stream / clear counters
 ```
 
@@ -293,7 +346,8 @@ the hint over (`GreedyEncoder::retarget`, `MatchFinder::retarget`) instead
 of being rebuilt, so a compressor fed inputs of varying lengths keeps its
 tables; only a hint that crosses the quick matchers' 2048-byte compact
 boundary, or changes the plan, still rebuilds.
-The table is kept flat on purpose: a zero-filled vector of integers
+The table is kept flat on purpose: a zero-filled vector of integers, converted
+to a boxed array at its final length,
 comes straight from the allocator's zeroed pages, whereas a vector of arrays
 longer than sixteen elements is written out element by element, which for the
 two-mebibyte quality-six table cost more than compressing a hundred kibibytes.

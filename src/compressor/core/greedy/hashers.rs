@@ -582,7 +582,7 @@ impl<
 
     /// Allocates a zeroed table.
     fn table() -> Option<Box<[u32; BUCKETS]>> {
-        vec![0u32; BUCKETS].into_boxed_slice().try_into().ok()
+        Some(fixed_table(0))
     }
 
     /// Returns the bucket of the bytes at `offset` (`HashBytes`).
@@ -1025,11 +1025,44 @@ impl KeyMap {
     }
 }
 
+/// Allocates a fixed-size table filled with `initial`.
+#[inline(always)]
+fn fixed_table<T: Copy, const N: usize>(initial: T) -> Box<[T; N]> {
+    let Ok(table) = vec![initial; N].into_boxed_slice().try_into() else {
+        unreachable!("table was created with exactly N entries");
+    };
+    table
+}
+
+/// Resizes an existing vector and transfers its allocation into a fixed-size table.
+#[inline(always)]
+fn fixed_table_from_vec<T: Copy, const N: usize>(mut values: Vec<T>, initial: T) -> Box<[T; N]> {
+    values.resize(N, initial);
+    let Ok(table) = values.into_boxed_slice().try_into() else {
+        unreachable!("table was resized to exactly N entries");
+    };
+    table
+}
+
+/// The reference bucket hash plus eight rejection bits below its key.
+#[inline(always)]
+fn hash_with_tag<const HASH64: bool, const BUCKETS: usize>(data: &[u8], offset: usize) -> usize {
+    if HASH64 {
+        // H6 tunes the multiplier to a five-byte match and always takes
+        // fifteen bits, whatever the bucket count is.
+        let hash_mul = HASH_MUL64 << (64 - 5 * 8);
+        (read_u64(data, offset).wrapping_mul(hash_mul) >> (64 - 15 - 8)) as usize
+    } else {
+        (read_u32(data, offset).wrapping_mul(HASH_MUL32) >> (32 - BUCKETS.trailing_zeros() - 8))
+            as usize
+    }
+}
+
 /// Storage owned exclusively by the current bucket layout.
-enum Layout<const BUCKETS: usize, const BLOCK: usize> {
+enum Layout<const BUCKETS: usize, const BLOCK: usize, const SLOTS: usize> {
     Compact(CompactLayout),
     Sparse(SparseLayout<BUCKETS, BLOCK>),
-    Dense(DenseLayout),
+    Dense(DenseLayout<BUCKETS, BLOCK, SLOTS>),
 }
 
 /// Short-stream bucket heads and linked positions.
@@ -1053,13 +1086,12 @@ struct SparseLayout<const BUCKETS: usize, const BLOCK: usize> {
 }
 
 /// Preallocated buckets; only their counters are cleared between streams.
-#[derive(Default)]
-struct DenseLayout {
-    num: Vec<u16>,
+struct DenseLayout<const BUCKETS: usize, const BLOCK: usize, const SLOTS: usize> {
+    num: Box<[u16; BUCKETS]>,
     /// Flat integers preserve the allocator's zeroed-page initialization path.
-    dense: Vec<u32>,
-    /// Empty for untagged shapes.
-    dense_tags: Vec<u8>,
+    dense: Box<[u32; SLOTS]>,
+    /// Absent for untagged shapes.
+    dense_tags: Option<Box<[u8; SLOTS]>>,
 }
 
 /// An activated on-demand block, by index into its pool.
@@ -1095,7 +1127,9 @@ const fn last_distances_for(block: usize) -> usize {
 /// an immediate and no table bound has to be held in a register: a search
 /// loop that carries a runtime depth spills the values it needs at every
 /// candidate. The depth also fixes how many cached distances a search
-/// probes ([`last_distances_for`]) and whether slots carry tags.
+/// probes ([`last_distances_for`]) and whether slots carry tags. `SLOTS` is
+/// `BUCKETS * BLOCK`, passed separately because stable Rust cannot multiply
+/// generic constants in an array type; construction checks it at compile time.
 ///
 /// # Storage
 ///
@@ -1137,8 +1171,13 @@ const fn last_distances_for(block: usize) -> usize {
 /// tags; deeper blocks measured slower with the mask. The SIMD backends use
 /// the tag mask; the scalar backend and starter blocks keep the unfiltered
 /// scan as an oracle.
-pub(crate) struct BucketMatcher<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize> {
-    layout: Layout<BUCKETS, BLOCK>,
+pub(crate) struct BucketMatcher<
+    const HASH64: bool,
+    const BUCKETS: usize,
+    const BLOCK: usize,
+    const SLOTS: usize,
+> {
+    layout: Layout<BUCKETS, BLOCK, SLOTS>,
     /// Total input the matcher was built for; zero when unknown.
     size_hint: usize,
     /// Streams prepared so far, saturating; the layout choice for a deep
@@ -1146,12 +1185,9 @@ pub(crate) struct BucketMatcher<const HASH64: bool, const BUCKETS: usize, const 
     streams: u32,
 }
 
-impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize>
-    BucketMatcher<HASH64, BUCKETS, BLOCK>
+impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize, const SLOTS: usize>
+    BucketMatcher<HASH64, BUCKETS, BLOCK, SLOTS>
 {
-    /// Base-2 logarithm of the number of buckets.
-    const BUCKET_BITS: u32 = BUCKETS.trailing_zeros();
-
     /// Whether blocks carry tags (the shallow `H58`/`H68` shapes).
     const TAGGED: bool = BLOCK <= 32;
 
@@ -1159,7 +1195,7 @@ impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize>
     const LAST_DISTANCES: usize = last_distances_for(BLOCK);
 
     /// Returns the bytes this match finder keeps allocated.
-    pub(crate) fn retained_bytes(&self) -> usize {
+    pub(crate) const fn retained_bytes(&self) -> usize {
         match &self.layout {
             Layout::Compact(layout) => {
                 (layout.compact.entries.capacity() + layout.chain.capacity()) * size_of::<u64>()
@@ -1172,9 +1208,12 @@ impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize>
                     + layout.starter_tags.capacity() * size_of::<[u8; STARTER_SLOTS]>()
             }
             Layout::Dense(layout) => {
-                layout.num.capacity() * size_of::<u16>()
-                    + layout.dense.capacity() * size_of::<u32>()
-                    + layout.dense_tags.capacity()
+                layout.num.len() * size_of::<u16>()
+                    + layout.dense.len() * size_of::<u32>()
+                    + match layout.dense_tags {
+                        Some(ref dense) => dense.len(),
+                        None => 0,
+                    }
             }
         }
     }
@@ -1182,6 +1221,12 @@ impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize>
     /// Creates an empty matcher expecting `size_hint` bytes (zero if unknown).
     #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
     pub(crate) fn new(size_hint: usize) -> Self {
+        const {
+            assert!(
+                SLOTS == BUCKETS * BLOCK,
+                "dense table must match the bucket shape"
+            )
+        };
         Self {
             layout: Layout::Compact(CompactLayout::default()),
             size_hint,
@@ -1244,20 +1289,6 @@ impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize>
         self.size_hint = size_hint;
     }
 
-    /// The reference bucket hash plus eight rejection bits below its key.
-    #[inline(always)]
-    fn hash_with_tag(data: &[u8], offset: usize) -> usize {
-        if HASH64 {
-            // H6 tunes the multiplier to a five-byte match and always takes
-            // fifteen bits, whatever the bucket count is.
-            let hash_mul = HASH_MUL64 << (64 - 5 * 8);
-            (read_u64(data, offset).wrapping_mul(hash_mul) >> (64 - 15 - 8)) as usize
-        } else {
-            (read_u32(data, offset).wrapping_mul(HASH_MUL32) >> (32 - Self::BUCKET_BITS - 8))
-                as usize
-        }
-    }
-
     /// Resets the current layout or promotes it, transferring compatible buffers.
     fn select_layout(&mut self, one_shot: bool, input_size: usize) {
         let compact = matches!(self.layout, Layout::Compact(_))
@@ -1291,26 +1322,26 @@ impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize>
             previous => {
                 let mut layout = match previous {
                     Layout::Dense(layout) => layout,
-                    Layout::Sparse(sparse) => DenseLayout {
-                        num: Vec::new(),
-                        dense: if sparse.blocks.capacity() * BLOCK
+                    Layout::Sparse(sparse) => {
+                        let dense = if sparse.blocks.capacity() * BLOCK
                             >= sparse.starters.capacity() * STARTER_SLOTS
                         {
                             sparse.blocks.into_flattened()
                         } else {
                             sparse.starters.into_flattened()
-                        },
-                        dense_tags: if sparse.block_tags.capacity() * BLOCK
+                        };
+                        let dense_tags = if sparse.block_tags.capacity() * BLOCK
                             >= sparse.starter_tags.capacity() * STARTER_SLOTS
                         {
                             sparse.block_tags.into_flattened()
                         } else {
                             sparse.starter_tags.into_flattened()
-                        },
-                    },
+                        };
+                        DenseLayout::from((dense, dense_tags))
+                    }
                     Layout::Compact(_) => DenseLayout::default(),
                 };
-                layout.prepare::<BUCKETS, BLOCK>();
+                layout.prepare();
                 Layout::Dense(layout)
             }
         };
@@ -1331,52 +1362,62 @@ impl CompactLayout {
     }
 }
 
-impl DenseLayout {
-    /// Reuses initialized slots and empties their counters for a new stream.
-    fn prepare<const BUCKETS: usize, const BLOCK: usize>(&mut self) {
-        if self.num.is_empty() {
-            self.num = vec![0; BUCKETS];
-        } else {
-            self.num.fill(0);
-        }
-        if self.dense.capacity() == 0 {
-            self.dense = vec![0; BUCKETS * BLOCK];
-        } else {
-            self.dense.resize(BUCKETS * BLOCK, 0);
-        }
-        if BLOCK <= 32 {
-            if self.dense_tags.capacity() == 0 {
-                self.dense_tags = vec![0; BUCKETS * BLOCK];
-            } else {
-                self.dense_tags.resize(BUCKETS * BLOCK, 0);
-            }
+impl<const BUCKETS: usize, const BLOCK: usize, const SLOTS: usize> Default
+    for DenseLayout<BUCKETS, BLOCK, SLOTS>
+{
+    fn default() -> Self {
+        Self {
+            num: fixed_table(0),
+            dense: fixed_table(0),
+            dense_tags: (BLOCK <= 32).then(|| fixed_table(0)),
         }
     }
+}
 
-    /// Binds the dense tables as arrays for one block of searches.
+impl<const BUCKETS: usize, const BLOCK: usize, const SLOTS: usize> From<(Vec<u32>, Vec<u8>)>
+    for DenseLayout<BUCKETS, BLOCK, SLOTS>
+{
+    fn from((dense, tags): (Vec<u32>, Vec<u8>)) -> Self {
+        Self {
+            num: fixed_table(0),
+            dense: fixed_table_from_vec(dense, 0),
+            dense_tags: (BLOCK <= 32).then(|| fixed_table_from_vec(tags, 0)),
+        }
+    }
+}
+
+impl<const BUCKETS: usize, const BLOCK: usize, const SLOTS: usize>
+    DenseLayout<BUCKETS, BLOCK, SLOTS>
+{
+    /// Empties counters while retaining the fixed-size tables for a new stream.
+    fn prepare(&mut self) {
+        self.num.fill(0);
+    }
+
+    /// Borrows the fixed tables for one block without a fallible run wrapper.
     ///
-    /// Preparation sizes every table to exactly one entry per bucket.
-    /// Returns `None` if those internal lengths have not been established.
-    fn dense_run<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize>(
-        &mut self,
-    ) -> Option<DenseRun<'_, HASH64, BUCKETS, BLOCK>> {
-        let num = self.num.first_chunk_mut::<BUCKETS>()?;
-        let dense = self
-            .dense
-            .as_chunks_mut::<BLOCK>()
-            .0
-            .first_chunk_mut::<BUCKETS>()?;
+    /// The shape fixes both conversions at compile time. Optional tags stay
+    /// optional in the run; an untagged shape does not read the tag pointer.
+    #[inline]
+    fn dense_run<const HASH64: bool>(&mut self) -> DenseRun<'_, HASH64, BUCKETS, BLOCK> {
+        let Ok(dense) = self.dense.as_chunks_mut::<BLOCK>().0.try_into() else {
+            unreachable!("dense positions have the bucket shape");
+        };
         let tags = if BLOCK <= 32 {
-            Some(
-                self.dense_tags
-                    .as_chunks_mut::<BLOCK>()
-                    .0
-                    .first_chunk_mut::<BUCKETS>()?,
-            )
+            self.dense_tags.as_deref_mut().map(|tags| {
+                let Ok(tags) = tags.as_chunks_mut::<BLOCK>().0.try_into() else {
+                    unreachable!("dense tags have the bucket shape");
+                };
+                tags
+            })
         } else {
             None
         };
-        Some(DenseRun { num, dense, tags })
+        DenseRun {
+            num: &mut self.num,
+            dense,
+            tags,
+        }
     }
 }
 
@@ -1391,10 +1432,7 @@ impl<const BUCKETS: usize, const BLOCK: usize> From<CompactLayout>
             compact.chain
         };
         entries.clear();
-        entries.resize(BUCKETS, 0);
-        let Ok(entries) = entries.into_boxed_slice().try_into() else {
-            unreachable!("sparse index was resized to exactly BUCKETS entries");
-        };
+        let entries = fixed_table_from_vec(entries, 0);
         Self {
             entries,
             generation: 1,
@@ -1581,8 +1619,7 @@ impl<const BUCKETS: usize, const BLOCK: usize> SparseLayout<BUCKETS, BLOCK> {
     ) {
         let cur_ix_masked = query.cur_ix & query.mask;
         let min_score = out.score;
-        let hash =
-            BucketMatcher::<HASH64, BUCKETS, BLOCK>::hash_with_tag(query.data, cur_ix_masked);
+        let hash = hash_with_tag::<HASH64, BUCKETS>(query.data, cur_ix_masked);
         let key = hash >> 8;
         let tag = hash as u8;
         let (count, offset) = self.decode_entry(self.entries[key & (BUCKETS - 1)]);
@@ -2151,7 +2188,7 @@ impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize> MatchRun
 
     #[inline(always)]
     fn store(&mut self, data: &[u8], mask: usize, ix: usize) {
-        let hash = BucketMatcher::<HASH64, BUCKETS, BLOCK>::hash_with_tag(data, ix & mask);
+        let hash = hash_with_tag::<HASH64, BUCKETS>(data, ix & mask);
         self.layout
             .push(hash >> 8, ix as u32, hash as u8, self.size_hint);
     }
@@ -2183,7 +2220,7 @@ impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize> MatchRun
 
     #[inline(always)]
     fn store(&mut self, data: &[u8], mask: usize, ix: usize) {
-        let hash = BucketMatcher::<HASH64, BUCKETS, BLOCK>::hash_with_tag(data, ix & mask);
+        let hash = hash_with_tag::<HASH64, BUCKETS>(data, ix & mask);
         let key = hash >> 8;
         let (slot, count, head) = self.0.compact.slot_for_write(key);
         self.0.push_chain(key, slot, count, head, ix as u32);
@@ -2204,10 +2241,7 @@ impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize> MatchRun
         out: &mut SearchResult,
     ) {
         let min_score = out.score;
-        let hash = BucketMatcher::<HASH64, BUCKETS, BLOCK>::hash_with_tag(
-            query.data,
-            query.cur_ix & query.mask,
-        );
+        let hash = hash_with_tag::<HASH64, BUCKETS>(query.data, query.cur_ix & query.mask);
         let key = hash >> 8;
         let (slot, count, head) = self.0.compact.slot_for_write(key);
         search_chain::<S, HASH64, BLOCK>(simd, &query, out, count, head, &self.0.chain);
@@ -2227,7 +2261,7 @@ impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize> MatchRun
 
     #[inline(always)]
     fn store(&mut self, data: &[u8], mask: usize, ix: usize) {
-        let hash = BucketMatcher::<HASH64, BUCKETS, BLOCK>::hash_with_tag(data, ix & mask);
+        let hash = hash_with_tag::<HASH64, BUCKETS>(data, ix & mask);
         dense_store(
             self.num,
             self.dense,
@@ -2254,8 +2288,7 @@ impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize> MatchRun
     ) {
         let cur_ix_masked = query.cur_ix & query.mask;
         let min_score = out.score;
-        let hash =
-            BucketMatcher::<HASH64, BUCKETS, BLOCK>::hash_with_tag(query.data, cur_ix_masked);
+        let hash = hash_with_tag::<HASH64, BUCKETS>(query.data, cur_ix_masked);
         let key = (hash >> 8) & (BUCKETS - 1);
         let tag = hash as u8;
         let count = self.num[key];
@@ -2276,21 +2309,15 @@ impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize> MatchRun
     }
 }
 
-impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize> Matcher
-    for BucketMatcher<HASH64, BUCKETS, BLOCK>
+impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize, const SLOTS: usize> Matcher
+    for BucketMatcher<HASH64, BUCKETS, BLOCK, SLOTS>
 {
     const HASH_TYPE_LENGTH: usize = if HASH64 { 8 } else { 4 };
     const STORE_LOOKAHEAD: usize = Self::HASH_TYPE_LENGTH;
 
     fn visit_run<V: RunVisitor>(&mut self, visitor: V) -> V::Output {
         match &mut self.layout {
-            Layout::Dense(layout) => {
-                // Preparation fixes all three lengths; every dense run has a view.
-                if let Some(run) = layout.dense_run::<HASH64, BUCKETS, BLOCK>() {
-                    return visitor.visit(run);
-                }
-                unreachable!("prepared dense tables have the bucket shape");
-            }
+            Layout::Dense(layout) => visitor.visit(layout.dense_run::<HASH64>()),
             Layout::Compact(layout) => visitor.visit(CompactRun::<HASH64, BUCKETS, BLOCK>(layout)),
             Layout::Sparse(layout) => visitor.visit(SparseRun::<HASH64, BUCKETS, BLOCK> {
                 layout,
@@ -2410,16 +2437,16 @@ struct ChainSlot {
 /// index arithmetic in the inner hop loop: H40 and H41 keep one bank of
 /// 65,536 slots, H42 five hundred and twelve banks of 512.
 pub(crate) struct ChainMatcher<const NUM_BANKS: usize, const BANK_BITS: u32> {
-    addr: Vec<u32>,
-    head: Vec<u16>,
-    tiny_hash: Vec<u8>,
+    addr: Box<[u32; CHAIN_BUCKET_SIZE]>,
+    head: Box<[u16; CHAIN_BUCKET_SIZE]>,
+    tiny_hash: Box<[u8; 1 << 16]>,
     slots: Vec<ChainSlot>,
     /// Compact bank offsets plus one, retained across logical resets.
-    bank_offsets: Vec<u32>,
+    bank_offsets: Box<[u32; NUM_BANKS]>,
     // Heap-allocated rather than a `[u16; NUM_BANKS]` field: H42 needs five
     // hundred and twelve of these, and inlining a kibibyte would make every
     // other `MatchFinder` variant carry the same footprint.
-    free_slot_idx: Vec<u16>,
+    free_slot_idx: Box<[u16; NUM_BANKS]>,
     last_distances: usize,
     max_hops: usize,
 }
@@ -2437,24 +2464,24 @@ impl<const NUM_BANKS: usize, const BANK_BITS: u32> ChainMatcher<NUM_BANKS, BANK_
     /// Creates an empty chain table of the shape `shape` describes.
     /// Returns the bytes this match finder keeps allocated.
     pub(crate) fn retained_bytes(&self) -> usize {
-        self.addr.capacity() * size_of::<u32>()
-            + self.head.capacity() * size_of::<u16>()
-            + self.tiny_hash.capacity()
+        self.addr.len() * size_of::<u32>()
+            + self.head.len() * size_of::<u16>()
+            + self.tiny_hash.len()
             + self.slots.capacity() * size_of::<ChainSlot>()
-            + self.bank_offsets.capacity() * size_of::<u32>()
-            + self.free_slot_idx.capacity() * size_of::<u16>()
+            + self.bank_offsets.len() * size_of::<u32>()
+            + self.free_slot_idx.len() * size_of::<u16>()
     }
 
     pub(crate) fn new(shape: ChainShape) -> Self {
         debug_assert_eq!(shape.num_banks, NUM_BANKS);
         debug_assert_eq!(shape.bank_bits, BANK_BITS);
         Self {
-            addr: vec![CHAIN_EMPTY_ADDR; CHAIN_BUCKET_SIZE],
-            head: vec![0u16; CHAIN_BUCKET_SIZE],
-            tiny_hash: vec![0u8; 1 << 16],
+            addr: fixed_table(CHAIN_EMPTY_ADDR),
+            head: fixed_table(0),
+            tiny_hash: fixed_table(0),
             slots: Vec::new(),
-            bank_offsets: vec![0; NUM_BANKS],
-            free_slot_idx: vec![0u16; NUM_BANKS],
+            bank_offsets: fixed_table(0),
+            free_slot_idx: fixed_table(0),
             last_distances: shape.last_distances,
             max_hops: shape.max_hops,
         }
@@ -2689,25 +2716,25 @@ pub(crate) enum MatchFinder {
     /// Quality 9, small windows: `H42`.
     H42(ChainMatcher<512, 9>),
     /// Quality 5, ordinary inputs: fourteen bucket bits, sixteen slots.
-    H5Q5(BucketMatcher<false, { 1 << 14 }, 16>),
+    H5Q5(BucketMatcher<false, { 1 << 14 }, 16, { (1 << 14) * 16 }>),
     /// Quality 6, ordinary inputs: fourteen bucket bits, thirty-two slots.
-    H5Q6(BucketMatcher<false, { 1 << 14 }, 32>),
+    H5Q6(BucketMatcher<false, { 1 << 14 }, 32, { (1 << 14) * 32 }>),
     /// Quality 7, ordinary inputs: fifteen bucket bits, sixty-four slots.
-    H5Q7(BucketMatcher<false, { 1 << 15 }, 64>),
+    H5Q7(BucketMatcher<false, { 1 << 15 }, 64, { (1 << 15) * 64 }>),
     /// Quality 8, ordinary inputs: fifteen bucket bits, 128 slots.
-    H5Q8(BucketMatcher<false, { 1 << 15 }, 128>),
+    H5Q8(BucketMatcher<false, { 1 << 15 }, 128, { (1 << 15) * 128 }>),
     /// Quality 9, ordinary inputs: fifteen bucket bits, 256 slots.
-    H5Q9(BucketMatcher<false, { 1 << 15 }, 256>),
+    H5Q9(BucketMatcher<false, { 1 << 15 }, 256, { (1 << 15) * 256 }>),
     /// Quality 5, large inputs and wide windows.
-    H6Q5(BucketMatcher<true, { 1 << 15 }, 16>),
+    H6Q5(BucketMatcher<true, { 1 << 15 }, 16, { (1 << 15) * 16 }>),
     /// Quality 6, large inputs and wide windows.
-    H6Q6(BucketMatcher<true, { 1 << 15 }, 32>),
+    H6Q6(BucketMatcher<true, { 1 << 15 }, 32, { (1 << 15) * 32 }>),
     /// Quality 7, large inputs and wide windows.
-    H6Q7(BucketMatcher<true, { 1 << 15 }, 64>),
+    H6Q7(BucketMatcher<true, { 1 << 15 }, 64, { (1 << 15) * 64 }>),
     /// Quality 8, large inputs and wide windows.
-    H6Q8(BucketMatcher<true, { 1 << 15 }, 128>),
+    H6Q8(BucketMatcher<true, { 1 << 15 }, 128, { (1 << 15) * 128 }>),
     /// Quality 9, large inputs and wide windows.
-    H6Q9(BucketMatcher<true, { 1 << 15 }, 256>),
+    H6Q9(BucketMatcher<true, { 1 << 15 }, 256, { (1 << 15) * 256 }>),
 }
 
 impl MatchFinder {
@@ -2873,6 +2900,57 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dense_runs_borrow_the_first_and_last_slots_of_the_owned_tables() {
+        fn check<const BLOCK: usize, const SLOTS: usize>() {
+            let mut layout = DenseLayout::<2, BLOCK, SLOTS>::default();
+            let positions = layout.dense.as_ptr();
+            let counters = layout.num.as_ptr();
+            {
+                let run = layout.dense_run::<false>();
+                assert_eq!(run.dense.as_ptr().cast::<u32>(), positions);
+                assert_eq!(run.num.as_ptr(), counters);
+                run.dense[0][0] = 11;
+                run.dense[1][BLOCK - 1] = 22;
+                run.num[1] = 3;
+                assert_eq!(run.tags.is_some(), BLOCK <= 32);
+                if let Some(tags) = run.tags {
+                    tags[0][0] = 4;
+                    tags[1][BLOCK - 1] = 5;
+                }
+            }
+            assert_eq!(layout.dense[0], 11);
+            assert_eq!(layout.dense[SLOTS - 1], 22);
+            assert_eq!(layout.num[1], 3);
+            if let Some(tags) = layout.dense_tags {
+                assert_eq!(tags[0], 4);
+                assert_eq!(tags[SLOTS - 1], 5);
+            }
+        }
+        check::<16, 32>();
+        check::<64, 128>();
+    }
+
+    #[test]
+    fn new_fixed_tables_initialize_every_entry() {
+        assert_eq!(*fixed_table::<u32, 4>(0), [0; 4]);
+        assert_eq!(*fixed_table::<u32, 4>(7), [7; 4]);
+        assert_eq!(*fixed_table::<u32, 0>(7), []);
+    }
+
+    #[test]
+    fn an_empty_vector_is_resized_into_an_initialized_table() {
+        assert_eq!(*fixed_table_from_vec::<u32, 4>(Vec::new(), 7), [7; 4]);
+    }
+
+    #[test]
+    fn fixed_tables_preserve_existing_values_and_initialize_only_the_extension() {
+        assert_eq!(*fixed_table_from_vec::<_, 4>(vec![7, 8], 3), [7, 8, 3, 3]);
+        assert_eq!(*fixed_table_from_vec::<_, 1>(vec![7, 8], 3), [7]);
+        assert_eq!(*fixed_table_from_vec::<u32, 0>(vec![7, 8], 3), []);
+        assert_eq!(*fixed_table_from_vec::<u32, 0>(Vec::new(), 3), []);
+    }
+
+    #[test]
     fn compact_slots_preserve_colliding_keys_through_growth_overwrites_and_reset() {
         let mut slots = SmallSlots::default();
         assert_eq!(slots.read(3), 0);
@@ -2929,7 +3007,7 @@ mod tests {
 
     #[test]
     fn a_short_input_links_each_store_in_front_of_its_bucket_chain() {
-        let mut matcher = BucketMatcher::<false, { 1 << 15 }, 256>::new(0);
+        let mut matcher = BucketMatcher::<false, { 1 << 15 }, 256, { (1 << 15) * 256 }>::new(0);
         let data = [b'a'; 64];
         matcher.prepare(true, data.len(), &data, true);
         assert!(matches!(matcher.layout, Layout::Compact(_)));
@@ -2947,7 +3025,7 @@ mod tests {
         // Every store is one node, linked to the previous store into the
         // same bucket: position 4 first, then 3, down to 0 with no link.
         assert_eq!(layout.chain.len(), 5);
-        let key = BucketMatcher::<false, { 1 << 15 }, 256>::hash_with_tag(&data, 0) >> 8;
+        let key = hash_with_tag::<false, { 1 << 15 }>(&data, 0) >> 8;
         let (count, head) = layout.compact.get(key);
         assert_eq!(count, 5);
         let mut link = head as usize;
@@ -2968,10 +3046,12 @@ mod tests {
         let data = [b'a'; 200];
         let level =
             fearless_simd::Level::try_detect().unwrap_or_else(fearless_simd::Level::baseline);
-        let mut compact = BucketMatcher::<false, { 1 << 14 }, 16>::new(0);
+        let mut compact = BucketMatcher::<false, { 1 << 14 }, 16, { (1 << 14) * 16 }>::new(0);
         compact.prepare(true, data.len(), &data, true);
         assert!(matches!(compact.layout, Layout::Compact(_)));
-        let mut sparse = BucketMatcher::<false, { 1 << 14 }, 16>::new(COMPACT_INPUT_LIMIT + 1);
+        let mut sparse = BucketMatcher::<false, { 1 << 14 }, 16, { (1 << 14) * 16 }>::new(
+            COMPACT_INPUT_LIMIT + 1,
+        );
         sparse.prepare(true, COMPACT_INPUT_LIMIT + 1, &data, true);
         assert!(matches!(sparse.layout, Layout::Sparse(_)));
         compact.store_range(&data, usize::MAX, 0, 100);
@@ -3000,7 +3080,8 @@ mod tests {
                 // A tagged shape takes an unknown length for a long stream.
                 (false, data.len(), 0, "dense"),
             ] {
-                let mut matcher = BucketMatcher::<false, { 1 << 14 }, 16>::new(size_hint);
+                let mut matcher =
+                    BucketMatcher::<false, { 1 << 14 }, 16, { (1 << 14) * 16 }>::new(size_hint);
                 matcher.prepare(one_shot, input_size, &data, true);
                 assert_eq!(
                     match matcher.layout {
@@ -3044,7 +3125,7 @@ mod tests {
     #[test]
     fn compact_promotion_reuses_the_larger_word_buffer_and_discards_old_entries() {
         for reuse_chain in [false, true] {
-            let mut matcher = BucketMatcher::<false, 64, 16>::new(1);
+            let mut matcher = BucketMatcher::<false, 64, 16, { 64 * 16 }>::new(1);
             matcher.prepare(true, 16, &[], false);
             let Layout::Compact(layout) = &mut matcher.layout else {
                 panic!("compact layout");
@@ -3070,8 +3151,8 @@ mod tests {
 
     #[test]
     fn sparse_promotion_transfers_full_block_allocations_and_releases_other_pools() {
-        fn check<const BLOCK: usize>(enough_capacity: bool) {
-            let mut matcher = BucketMatcher::<false, 64, BLOCK>::new(1);
+        fn check<const BLOCK: usize, const SLOTS: usize>(enough_capacity: bool) {
+            let mut matcher = BucketMatcher::<false, 64, BLOCK, SLOTS>::new(1);
             matcher.prepare(false, 0, &[], false);
             let Layout::Sparse(layout) = &mut matcher.layout else {
                 panic!("sparse layout");
@@ -3096,16 +3177,16 @@ mod tests {
             if enough_capacity {
                 assert_eq!(layout.dense.as_ptr(), positions);
                 if tagged {
-                    assert_eq!(layout.dense_tags.as_ptr(), tags);
+                    assert_eq!(layout.dense_tags.as_ref().unwrap().as_ptr(), tags);
                 }
             }
             assert_eq!(&layout.dense[..BLOCK], &[123; BLOCK]);
             assert!(layout.dense[BLOCK..].iter().all(|&position| position == 0));
             assert!(layout.num.iter().all(|&count| count == 0));
             if tagged {
-                assert_eq!(&layout.dense_tags[..BLOCK], &[7; BLOCK]);
+                assert_eq!(&layout.dense_tags.as_ref().unwrap()[..BLOCK], &[7; BLOCK]);
             } else {
-                assert!(layout.dense_tags.is_empty());
+                assert!(layout.dense_tags.is_none());
             }
             assert_eq!(
                 matcher.retained_bytes(),
@@ -3113,15 +3194,15 @@ mod tests {
             );
         }
         for enough in [false, true] {
-            check::<16>(enough);
-            check::<64>(enough);
-            check::<256>(enough);
+            check::<16, { 64 * 16 }>(enough);
+            check::<64, { 64 * 64 }>(enough);
+            check::<256, { 64 * 256 }>(enough);
         }
     }
 
     #[test]
     fn sparse_promotion_reuses_starters_when_their_allocation_is_larger() {
-        let mut matcher = BucketMatcher::<false, 64, 16>::new(1);
+        let mut matcher = BucketMatcher::<false, 64, 16, { 64 * 16 }>::new(1);
         matcher.prepare(false, 0, &[], false);
         let Layout::Sparse(layout) = &mut matcher.layout else {
             panic!("sparse layout");
@@ -3138,9 +3219,12 @@ mod tests {
             panic!("dense layout");
         };
         assert_eq!(layout.dense.as_ptr(), positions);
-        assert_eq!(layout.dense_tags.as_ptr(), tags);
+        assert_eq!(layout.dense_tags.as_ref().unwrap().as_ptr(), tags);
         assert_eq!(&layout.dense[..STARTER_SLOTS], &[123; STARTER_SLOTS]);
-        assert_eq!(&layout.dense_tags[..STARTER_SLOTS], &[7; STARTER_SLOTS]);
+        assert_eq!(
+            &layout.dense_tags.as_ref().unwrap()[..STARTER_SLOTS],
+            &[7; STARTER_SLOTS]
+        );
         assert!(layout.num.iter().all(|&count| count == 0));
         assert_eq!(matcher.retained_bytes(), 64 * (2 + 16 * 5));
     }
@@ -3149,7 +3233,8 @@ mod tests {
     fn prepared_layouts_retain_their_allocations_for_shorter_streams() {
         let data = repeated();
         for size_hint in [1, usize::MAX] {
-            let mut matcher = BucketMatcher::<false, { 1 << 14 }, 16>::new(size_hint);
+            let mut matcher =
+                BucketMatcher::<false, { 1 << 14 }, 16, { (1 << 14) * 16 }>::new(size_hint);
             matcher.prepare(false, 0, &data, false);
             matcher.store_range(&data, usize::MAX, 0, REPEAT_AT);
             let retained = matcher.retained_bytes();
@@ -3177,14 +3262,14 @@ mod tests {
         // the first stream stays on demand; the second stream, a sixty-fourth
         // being enough for a reused matcher, gets the table.
         let data = repeated();
-        let mut matcher = BucketMatcher::<false, { 1 << 15 }, 64>::new(1 << 18);
+        let mut matcher = BucketMatcher::<false, { 1 << 15 }, 64, { (1 << 15) * 64 }>::new(1 << 18);
         matcher.prepare(false, data.len(), &data, true);
         assert!(matches!(matcher.layout, Layout::Sparse(_)));
         matcher.prepare(false, data.len(), &data, true);
         assert!(matches!(matcher.layout, Layout::Dense(_)));
         // A hint below a sixty-fourth stays on demand however often it is
         // reused; retargeting to a longer stream changes that.
-        let mut short = BucketMatcher::<false, { 1 << 15 }, 64>::new(1 << 16);
+        let mut short = BucketMatcher::<false, { 1 << 15 }, 64, { (1 << 15) * 64 }>::new(1 << 16);
         for _ in 0..3 {
             short.prepare(false, data.len(), &data, true);
             assert!(matches!(short.layout, Layout::Sparse(_)));
@@ -3216,7 +3301,9 @@ mod tests {
     #[test]
     fn a_sparse_table_wipes_itself_when_its_generations_run_out() {
         let data = repeated();
-        let mut matcher = BucketMatcher::<false, { 1 << 14 }, 16>::new(COMPACT_INPUT_LIMIT + 1);
+        let mut matcher = BucketMatcher::<false, { 1 << 14 }, 16, { (1 << 14) * 16 }>::new(
+            COMPACT_INPUT_LIMIT + 1,
+        );
         matcher.prepare(true, COMPACT_INPUT_LIMIT + 1, &data, true);
         matcher.store_range(&data, usize::MAX, 0, REPEAT_AT);
         let Layout::Sparse(layout) = &mut matcher.layout else {
@@ -3242,7 +3329,7 @@ mod tests {
     #[test]
     fn a_dense_table_keeps_its_blocks_and_clears_only_its_counters() {
         let data = repeated();
-        let mut matcher = BucketMatcher::<false, { 1 << 14 }, 16>::new(1 << 20);
+        let mut matcher = BucketMatcher::<false, { 1 << 14 }, 16, { (1 << 14) * 16 }>::new(1 << 20);
         matcher.prepare(false, data.len(), &data, true);
         matcher.store_range(&data, usize::MAX, 0, REPEAT_AT);
         let retained = matcher.retained_bytes();
@@ -3375,8 +3462,8 @@ mod tests {
 
     #[test]
     fn sparse_pool_reservation_preserves_positions_and_tags() {
-        fn check<const BLOCK: usize>() {
-            let mut matcher = BucketMatcher::<false, { 1 << 14 }, BLOCK>::new(1 << 16);
+        fn check<const BLOCK: usize, const SLOTS: usize>() {
+            let mut matcher = BucketMatcher::<false, { 1 << 14 }, BLOCK, SLOTS>::new(1 << 16);
             matcher.prepare(true, 1 << 16, &[], false);
             assert!(matches!(matcher.layout, Layout::Sparse(_)));
             let Layout::Sparse(layout) = &mut matcher.layout else {
@@ -3397,19 +3484,19 @@ mod tests {
                 };
                 for (age, &position) in layout.blocks[index][BLOCK - 5..].iter().enumerate() {
                     assert_eq!(position, (key * 5 + 4 - age) as u32);
-                    if BucketMatcher::<false, { 1 << 14 }, BLOCK>::TAGGED {
+                    if BucketMatcher::<false, { 1 << 14 }, BLOCK, SLOTS>::TAGGED {
                         assert_eq!(layout.block_tags[index][BLOCK - 5 + age], (4 - age) as u8);
                     }
                 }
             }
         }
-        check::<32>();
-        check::<256>();
+        check::<32, { (1 << 14) * 32 }>();
+        check::<256, { (1 << 14) * 256 }>();
     }
 
     #[test]
     fn sparse_pool_reservation_bounds_hints_and_keeps_existing_capacity() {
-        let mut matcher = BucketMatcher::<false, { 1 << 15 }, 64>::new(0);
+        let mut matcher = BucketMatcher::<false, { 1 << 15 }, 64, { (1 << 15) * 64 }>::new(0);
         matcher.prepare(false, 0, &[], false);
         let Layout::Sparse(layout) = &mut matcher.layout else {
             panic!("sparse layout")
@@ -3547,16 +3634,25 @@ mod tests {
     fn the_bucket_matchers_find_a_repeat_they_have_stored() {
         let data = repeated();
 
-        let mut h5 = primed(BucketMatcher::<false, { 1 << 14 }, 16>::new(0), &data);
+        let mut h5 = primed(
+            BucketMatcher::<false, { 1 << 14 }, 16, { (1 << 14) * 16 }>::new(0),
+            &data,
+        );
         let found = search_at(&mut h5, &data, REPEAT_AT);
         assert_eq!((found.distance, found.len), (64, 64));
 
-        let mut h6 = primed(BucketMatcher::<true, { 1 << 15 }, 16>::new(0), &data);
+        let mut h6 = primed(
+            BucketMatcher::<true, { 1 << 15 }, 16, { (1 << 15) * 16 }>::new(0),
+            &data,
+        );
         let found = search_at(&mut h6, &data, REPEAT_AT);
         assert_eq!((found.distance, found.len), (64, 64));
 
         // The deepest bucket quality nine asks for finds the same repeat.
-        let mut deep = primed(BucketMatcher::<false, { 1 << 15 }, 256>::new(0), &data);
+        let mut deep = primed(
+            BucketMatcher::<false, { 1 << 15 }, 256, { (1 << 15) * 256 }>::new(0),
+            &data,
+        );
         let found = search_at(&mut deep, &data, REPEAT_AT);
         assert_eq!((found.distance, found.len), (64, 64));
     }
@@ -3594,16 +3690,16 @@ mod tests {
         // Every position hashes to the same bucket, so the depth is exactly
         // how far back a match can still be found.
         let data = vec![b'a'; 1024];
-        fn reach<const BLOCK: usize>(data: &[u8]) -> usize {
-            let mut matcher = BucketMatcher::<false, { 1 << 15 }, BLOCK>::new(0);
+        fn reach<const BLOCK: usize, const SLOTS: usize>(data: &[u8]) -> usize {
+            let mut matcher = BucketMatcher::<false, { 1 << 15 }, BLOCK, SLOTS>::new(0);
             matcher.prepare(true, data.len(), data, true);
             matcher.store_range(data, usize::MAX, 0, 512);
             let found = search_at(&mut matcher, data, 512);
             assert!(found.is_match());
             found.distance
         }
-        assert!(reach::<16>(&data) <= 16);
-        assert!(reach::<256>(&data) <= 256);
+        assert!(reach::<16, { (1 << 15) * 16 }>(&data) <= 16);
+        assert!(reach::<256, { (1 << 15) * 256 }>(&data) <= 256);
     }
 
     #[test]
@@ -3611,7 +3707,7 @@ mod tests {
         // Every position hashes to the same bucket, so a store past the
         // sixteenth has to push the oldest one out.
         let data = vec![b'a'; 256];
-        let mut matcher = BucketMatcher::<false, { 1 << 14 }, 16>::new(0);
+        let mut matcher = BucketMatcher::<false, { 1 << 14 }, 16, { (1 << 14) * 16 }>::new(0);
         matcher.prepare(true, data.len(), &data, true);
         matcher.store_range(&data, usize::MAX, 0, 100);
         let found = search_at(&mut matcher, &data, 100);
@@ -3630,7 +3726,7 @@ mod tests {
         chain.prepare(true, data.len(), &data, true);
         assert!(!search_at(&mut chain, &data, REPEAT_AT).is_match());
 
-        let mut bucket = BucketMatcher::<false, { 1 << 14 }, 16>::new(0);
+        let mut bucket = BucketMatcher::<false, { 1 << 14 }, 16, { (1 << 14) * 16 }>::new(0);
         bucket.prepare(true, data.len(), &data, true);
         assert!(!search_at(&mut bucket, &data, REPEAT_AT).is_match());
     }
@@ -3648,7 +3744,10 @@ mod tests {
         chain.prepare(false, 0, &data, true);
         assert!(!search_at(&mut chain, &data, REPEAT_AT).is_match());
 
-        let mut bucket = primed(BucketMatcher::<false, { 1 << 14 }, 16>::new(0), &data);
+        let mut bucket = primed(
+            BucketMatcher::<false, { 1 << 14 }, 16, { (1 << 14) * 16 }>::new(0),
+            &data,
+        );
         assert!(search_at(&mut bucket, &data, REPEAT_AT).is_match());
         bucket.prepare(false, 0, &data, true);
         assert!(!search_at(&mut bucket, &data, REPEAT_AT).is_match());
@@ -3756,7 +3855,8 @@ mod tests {
     #[test]
     fn a_matcher_reports_the_cached_distance_count_its_shape_asked_for() {
         assert_eq!(
-            BucketMatcher::<false, { 1 << 15 }, 256>::new(0).last_distances_to_check(),
+            BucketMatcher::<false, { 1 << 15 }, 256, { (1 << 15) * 256 }>::new(0)
+                .last_distances_to_check(),
             16
         );
         assert_eq!(
