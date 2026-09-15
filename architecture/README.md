@@ -48,7 +48,7 @@ FFI do not appear in public signatures. Each codec compiles independently.
 | [Bit output](bit-output.md) | Initialized destinations, bit operations and overflow. |
 | [Serial output identity](universal-encoding.md) | Shared scheduling, empty finalization and C compatibility. |
 | [Fast encoder](fast-encoder.md) | Qualities 0–1: fragments, entropy coding and SIMD scans. |
-| [Greedy encoder](greedy-encoder.md) | Qualities 2–9: fixed boxed tables, direct run views and buffer migration, bounded pool growth, match scoring and meta-blocks. |
+| [Greedy encoder](greedy-encoder.md) | Qualities 2–9: fixed boxed tables, in-place compact-map rehashing and buffer migration, bounded pool growth, match scoring and meta-blocks. |
 | [High-quality encoder](hq-encoder.md) | Qualities 10–11: tree search, command-price rows, ordered starts and clustering. |
 | [Parallel compression](parallel-compression.md) | Planning, encoder reconfiguration, caller-run tasks, staging and assembly. |
 

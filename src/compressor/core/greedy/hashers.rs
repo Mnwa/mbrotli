@@ -1002,11 +1002,22 @@ impl KeyMap {
         self.write_slot(slot, key, count, offset);
     }
 
+    /// Doubles the table and rehashes entries inside the resized allocation.
     fn grow(&mut self) {
-        let size = (self.entries.len() * 2).max(64);
-        let previous = ::core::mem::replace(&mut self.entries, vec![Self::EMPTY; size]);
+        let old_len = self.entries.len();
+        let empty = self
+            .entries
+            .iter()
+            .position(|&entry| entry == Self::EMPTY)
+            .unwrap_or(0);
+        self.entries.resize((old_len * 2).max(64), Self::EMPTY);
         self.count = 0;
-        for entry in previous {
+        // Start after an empty slot so wrapping clusters are visited in probe
+        // order. With a doubled mask, reinsertion can reach only the new half
+        // or already-visited old slots, never an unread old entry.
+        for offset in 1..=old_len {
+            let slot = (empty + offset) & (old_len - 1);
+            let entry = ::core::mem::replace(&mut self.entries[slot], Self::EMPTY);
             if entry != Self::EMPTY {
                 self.set((entry >> 48) as usize, (entry >> 32) as u16, entry as u32);
             }
@@ -1016,11 +1027,9 @@ impl KeyMap {
     /// Empties the map, sized so `input_size` distinct keys never grow it.
     fn reset(&mut self, input_size: usize) {
         let size = (2 * input_size).next_power_of_two().max(64);
-        if self.entries.len() < size {
-            self.entries = vec![Self::EMPTY; size];
-        } else {
-            self.entries.fill(Self::EMPTY);
-        }
+        self.entries.fill(Self::EMPTY);
+        self.entries
+            .resize(size.max(self.entries.len()), Self::EMPTY);
         self.count = 0;
     }
 }
@@ -3340,6 +3349,94 @@ mod tests {
         };
         assert!(layout.num.iter().all(|&count| count == 0));
         assert!(!search_at(&mut matcher, &data, REPEAT_AT).is_match());
+    }
+
+    #[test]
+    fn key_map_growth_reuses_reserved_storage() {
+        let mut map = KeyMap::default();
+        map.reset(8);
+        map.entries.reserve_exact(64);
+        for key in 0..32 {
+            map.set(key * 64 + 63, key as u16 + 1, key as u32 + 7);
+        }
+        let storage = map.entries.as_ptr();
+        map.set(32 * 64 + 63, 33, 39);
+        assert_eq!(map.entries.as_ptr(), storage);
+        assert_eq!(map.entries.len(), 128);
+        assert_eq!(map.count, 33);
+        for key in 0..33 {
+            assert_eq!(map.get(key * 64 + 63), (key as u16 + 1, key as u32 + 7));
+        }
+    }
+
+    #[test]
+    fn key_map_reset_reuses_reserved_storage_and_clears_old_entries() {
+        let mut map = KeyMap::default();
+        map.reset(8);
+        map.set(63, 7, 11);
+        map.entries.reserve_exact(64);
+        let storage = map.entries.as_ptr();
+        for input_size in [64, 1, 0] {
+            map.reset(input_size);
+            assert_eq!(map.entries.as_ptr(), storage);
+            assert_eq!(map.entries.len(), 128);
+            assert_eq!(map.count, 0);
+            assert_eq!(map.get(63), (0, 0));
+            assert!(map.entries.iter().all(|&entry| entry == KeyMap::EMPTY));
+            map.set(63, 7, 11);
+        }
+    }
+
+    #[test]
+    fn key_map_growth_preserves_wrapping_clusters_in_both_hash_halves() {
+        for reverse in [false, true] {
+            let mut map = KeyMap::default();
+            map.reset(8);
+            for i in 0..32 {
+                let key = if reverse { 31 - i } else { i };
+                map.set(key * 64 + 63, key as u16 + 1, key as u32 + 7);
+            }
+            for _ in 0..4 {
+                map.grow();
+                assert_eq!(map.count, 32);
+                for key in 0..32 {
+                    assert_eq!(map.get(key * 64 + 63), (key as u16 + 1, key as u32 + 7));
+                }
+                assert_eq!(map.get(62), (0, 0));
+            }
+        }
+    }
+
+    #[test]
+    fn key_map_growth_from_empty_and_overwrites_match_an_ordered_map() {
+        let mut map = KeyMap::default();
+        map.grow();
+        assert_eq!(map.entries.len(), 64);
+        assert_eq!(map.count, 0);
+        let mut expected = alloc::collections::BTreeMap::new();
+        let mut state = 0x1234_5678_u32;
+        for i in 0..2048_u32 {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            let key = if i & 1 == 0 {
+                (state as usize & 511) * 64 + 63
+            } else {
+                state as usize & 32767
+            };
+            let value = (i as u16 + 1, state);
+            map.set(key, value.0, value.1);
+            expected.insert(key, value);
+            assert_eq!(map.count, expected.len());
+            if i % 64 == 63 {
+                for (&key, &value) in &expected {
+                    assert_eq!(map.get(key), value);
+                }
+            }
+        }
+        for (&key, &value) in &expected {
+            assert_eq!(map.get(key), value);
+        }
     }
 
     #[test]

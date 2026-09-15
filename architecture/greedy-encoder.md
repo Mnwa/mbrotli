@@ -299,6 +299,42 @@ graph TD
     ChainMatcher --> Slots["Vec of ChainSlot: grows when a bank is activated"]
 ```
 
+### Compact key-map growth
+
+`KeyMap::reset` clears the existing words, then resizes only up to the larger of
+its current length and the requested power-of-two length. It retains capacity
+and initializes newly added words to the empty sentinel. Normal compact inputs
+are pre-sized to at least two slots per input byte, so `grow` is a fallback;
+reused streams of increasing short lengths exercise the reset growth path.
+
+`KeyMap::grow` doubles the logical length with `Vec::resize` and rebuilds the
+open-addressed index in the same vector. Capacity already sufficient for the new
+length means no allocation; otherwise the allocator may extend or move the buffer.
+No separate destination vector is created.
+
+Rehashing starts immediately after an empty slot in the old table and visits
+exactly the old length of slots, wrapping with the old mask. The table is at most
+half full, so such a slot exists whenever the table is nonempty. This traversal
+visits each old probe cluster in order. Each entry is removed before reinsertion
+using the new mask; its destination is in the new half or an already visited old
+slot. Unread entries cannot be overwritten or mistaken for reinserted entries.
+The count is rebuilt, and packed keys, counters and chain offsets are preserved.
+An initially empty table grows to 64 empty slots without a rehash loop.
+
+```mermaid
+flowchart TD
+    Old["Find an empty slot in the old table"] --> Resize["resize to max of twice old length and 64"]
+    Resize --> Count["Reset count; begin after old empty slot"]
+    Count --> Next{"Old slots left?"}
+    Next -->|yes| Take["Take current entry; leave empty sentinel"]
+    Take --> Present{"Entry occupied?"}
+    Present -->|yes| Insert["Reinsert using new mask; rebuild count"]
+    Present -->|no| Advance["Advance with old mask"]
+    Insert --> Advance
+    Advance --> Next
+    Next -->|no| Ready["All keys reachable in resized table"]
+```
+
 Layout changes occur only during `prepare`, between independent streams. Compact
 resets reuse its map and chain. Once sparse or dense storage exists, even a tiny
 one-shot stream keeps it; dense never demotes. Compact-to-sparse moves the larger

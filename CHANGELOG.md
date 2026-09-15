@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Reuse the greedy compact key map allocation during growth and reset. Rehash
+  wrapping probe clusters in place after resizing, preserving keys and values.
+
 - Store fixed-size greedy dense and chain matcher tables in boxed arrays with compile-time lengths;
   preserve sparse-pool migration and retain vectors for growable storage.
   Inline separate helpers for fresh table allocation and existing-vector conversion.
