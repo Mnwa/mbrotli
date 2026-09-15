@@ -2943,7 +2943,7 @@ mod tests {
     fn new_fixed_tables_initialize_every_entry() {
         assert_eq!(*fixed_table::<u32, 4>(0), [0; 4]);
         assert_eq!(*fixed_table::<u32, 4>(7), [7; 4]);
-        assert_eq!(*fixed_table::<u32, 0>(7), []);
+        assert_eq!(*fixed_table::<u32, 0>(7), [0_u32; 0]);
     }
 
     #[test]
@@ -2955,8 +2955,8 @@ mod tests {
     fn fixed_tables_preserve_existing_values_and_initialize_only_the_extension() {
         assert_eq!(*fixed_table_from_vec::<_, 4>(vec![7, 8], 3), [7, 8, 3, 3]);
         assert_eq!(*fixed_table_from_vec::<_, 1>(vec![7, 8], 3), [7]);
-        assert_eq!(*fixed_table_from_vec::<u32, 0>(vec![7, 8], 3), []);
-        assert_eq!(*fixed_table_from_vec::<u32, 0>(Vec::new(), 3), []);
+        assert_eq!(*fixed_table_from_vec::<u32, 0>(vec![7, 8], 3), [0_u32; 0]);
+        assert_eq!(*fixed_table_from_vec::<u32, 0>(Vec::new(), 3), [0_u32; 0]);
     }
 
     #[test]
