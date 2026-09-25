@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+- Stop the Miri workflow's `compressor::core::stream::tests` step from also
+  running the nine `decompressor::core::stream::tests`. libtest filters match
+  substrings, so the step ran the decoder's golden and ring-boundary tests
+  under the interpreter, which took hours. It now passes
+  `--skip decompressor::` and runs only its one intended test.
+
+- Skip `a_deep_shape_takes_the_dense_table_once_it_is_reused` in the Miri
+  workflow. It checks the sparse-to-dense layout policy rather than memory
+  safety, and filling its 8 MiB dense table twice took about 11 minutes
+  under Miri, twice as long as the other 46 hasher tests together.
+
 ## [v0.5.0](https://github.com/Mnwa/mbrotli/releases/tag/v0.5.0) - 2026-09-25
 
 - Add `EncoderSessionOwned` and `DecoderSessionOwned`: incremental sessions
