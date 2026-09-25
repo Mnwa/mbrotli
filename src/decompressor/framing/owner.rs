@@ -265,7 +265,7 @@ impl FramedDecompressor {
     /// Claims the owner for one object after lifecycle and policy checks.
     ///
     /// The single start path behind borrowed and owned sessions.
-    fn begin_session(&mut self, stream: FramedDecodeStreamConfig) -> Result<(), E> {
+    pub(super) fn begin_session(&mut self, stream: FramedDecodeStreamConfig) -> Result<(), E> {
         if self.active {
             return Err(E::AbandonedSession);
         }

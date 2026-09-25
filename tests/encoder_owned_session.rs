@@ -535,3 +535,142 @@ fn an_owned_session_moves_between_threads() {
     let mut compressor = compressor;
     assert_eq!(bytes, compressor.compress(&data).expect("one shot"));
 }
+
+/// Leaves `session` in one of the states `reinit` must recover from.
+fn end_first_operation(session: &mut EncoderSessionOwned, ending: &str, data: &[u8]) {
+    let mut output = [0; 4];
+    match ending {
+        "finished" => {
+            drive(&mut *session, data, SCHEDULES[1]);
+        }
+        "needs input" => {
+            let p = session
+                .process(&data[..10], &mut output, Operation::Process)
+                .expect("process");
+            assert_eq!(p.status, EncoderStatus::NeedsInput);
+        }
+        "needs output" => {
+            let p = session
+                .process(data, &mut output, Operation::Finish)
+                .expect("finish");
+            assert_eq!(p.status, EncoderStatus::NeedsOutput);
+        }
+        "flushed" => {
+            let p = session
+                .process(data, &mut vec![0; 1 << 16], Operation::Flush)
+                .expect("flush");
+            assert_eq!(p.status, EncoderStatus::NeedsInput);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn reinit_starts_an_operation_identical_to_a_fresh_borrowed_one() {
+    let first = b"the first operation, ended in different ways ".repeat(40);
+    let second = b"the second operation must not remember the first ".repeat(30);
+    for quality in PARITY_QUALITIES {
+        for ending in ["finished", "needs input", "needs output", "flushed"] {
+            for stream in [
+                StreamConfig::default(),
+                InputSize::Exact(second.len() as u64).into(),
+            ] {
+                let mut session = encoder(quality, 22)
+                    .into_session(StreamConfig::default())
+                    .expect("start");
+                end_first_operation(&mut session, ending, &first);
+                session.reinit(stream).expect("reinit");
+                assert!(!session.is_finished());
+                for schedule in [SCHEDULES[0], SCHEDULES[2]] {
+                    let expected = borrowed(quality, stream, &second, schedule);
+                    let actual = drive(&mut session, &second, schedule);
+                    assert_eq!(actual, expected, "q{}, {ending}", quality.get());
+                    session.reinit(stream).expect("reinit again");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_rejected_reinit_leaves_a_failed_session_that_a_later_reinit_recovers() {
+    let data = b"after a rejected reinit ".repeat(20);
+    let mut session = encoder(Quality::Q1, 22)
+        .into_session(StreamConfig::default())
+        .expect("start");
+    session
+        .process(&data, &mut [0; 8], Operation::Process)
+        .expect("process");
+    let offset = StreamConfig::default().with_stream_offset(64);
+    assert!(matches!(
+        session.reinit(offset),
+        Err(EncodeError::UnsupportedStreamOffset { offset: 64 })
+    ));
+    assert!(!session.is_finished());
+    assert!(matches!(
+        session.process(&data, &mut [0; 64], Operation::Finish),
+        Err(EncodeError::InvalidState { .. })
+    ));
+
+    session.reinit(StreamConfig::default()).expect("reinit");
+    let actual = drive(&mut session, &data, SCHEDULES[2]);
+    assert_eq!(
+        actual,
+        borrowed(Quality::Q1, StreamConfig::default(), &data, SCHEDULES[2])
+    );
+    // And the owner handed back after a rejected reinit is reusable.
+    session.reinit(offset).expect_err("rejected");
+    let mut compressor = session.into_compressor();
+    assert_eq!(
+        c_decompress(&compressor.compress(&data).expect("compress"), data.len()).as_deref(),
+        Some(&data[..])
+    );
+}
+
+#[test]
+fn reinit_keeps_the_dictionary_of_the_session() {
+    let prefix = b"a shared prefix both sides know about. ".repeat(20);
+    let data = [&prefix[..100], b" and a tail that is new"].concat();
+    let dictionary = Arc::new(
+        DictionaryBuilder::new()
+            .add_prefix(&prefix[..])
+            .build()
+            .expect("dictionary"),
+    );
+    let mut compressor = encoder(Quality::Q5, 22);
+    let expected = drive(
+        &mut compressor
+            .start_with_dictionary(&dictionary, StreamConfig::default())
+            .expect("borrowed"),
+        &data,
+        SCHEDULES[1],
+    );
+    let mut session = encoder(Quality::Q5, 22)
+        .into_session_with_dictionary(Arc::clone(&dictionary), StreamConfig::default())
+        .expect("owned");
+    session
+        .process(b"interrupted", &mut [0; 4], Operation::Finish)
+        .expect("process");
+    session.reinit(StreamConfig::default()).expect("reinit");
+    assert_eq!(drive(&mut session, &data, SCHEDULES[1]), expected);
+}
+
+#[cfg(feature = "experimental")]
+#[test]
+fn reinit_recovers_from_a_failed_process() {
+    let stream = StreamConfig::default().with_stream_offset((1 << 63) - 1);
+    let mut session = encoder(Quality::Q5, 22)
+        .into_session(stream)
+        .expect("owned");
+    assert!(
+        session
+            .process(b"x", &mut [0; 10], Operation::Finish)
+            .is_err()
+    );
+    session.reinit(StreamConfig::default()).expect("reinit");
+    let data = b"valid after failure".repeat(10);
+    assert_eq!(
+        drive(&mut session, &data, SCHEDULES[2]),
+        borrowed(Quality::Q5, StreamConfig::default(), &data, SCHEDULES[2])
+    );
+}

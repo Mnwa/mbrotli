@@ -552,3 +552,150 @@ fn owned_framed_sessions_move_between_threads() {
             .contains("FramedDecoderSessionOwned")
     );
 }
+
+fn fresh_borrowed(
+    config: FramedDecodeConfig,
+    stream: FramedDecodeStreamConfig,
+    input: &[u8],
+    split: usize,
+    widths: &[usize],
+) -> Vec<String> {
+    let mut owner = decoder(config);
+    drive(
+        &mut owner.start(stream).expect("start"),
+        input,
+        split,
+        widths,
+    )
+}
+
+/// Leaves `session` in one of the states `reinit` must recover from.
+fn end_first_object<R: DictionaryResolver + 'static>(
+    session: &mut FramedDecoderSessionOwned<R>,
+    ending: &str,
+) {
+    let first = full(&[chunk(&[2, 0, 0], b"first"), chunk(&[2, 0, 0], b"object")]);
+    let mut output = [0; 64];
+    let result = match ending {
+        "finished" => {
+            assert!(finished(&drive(&mut *session, &first, 1000, &[64])));
+            return;
+        }
+        "needs input" => session
+            .process(&first[..3], &mut output, DecodeOperation::Process)
+            .map(|p| format!("{:?}", p.status)),
+        "needs output" => {
+            let mut offset = 0;
+            loop {
+                let p = session
+                    .process(&first[offset..], &mut [], DecodeOperation::Process)
+                    .expect("zero width");
+                offset += p.consumed;
+                if matches!(p.status, FramedDecoderStatus::NeedsOutput) {
+                    break Ok("NeedsOutput".to_owned());
+                }
+            }
+        }
+        "event" => session
+            .process(&first, &mut output, DecodeOperation::Process)
+            .map(|p| format!("{:?}", p.status)),
+        "failed" => session
+            .process(&[0x91, 10, 66, 0xff], &mut output, DecodeOperation::Finish)
+            .map(|p| format!("{:?}", p.status)),
+        _ => unreachable!(),
+    };
+    match (ending, result) {
+        ("needs input", Ok(status)) => assert_eq!(status, "NeedsInput"),
+        ("event", Ok(status)) => assert!(status.starts_with("Event"), "{status}"),
+        ("failed", Err(_)) => {}
+        ("needs output", Ok(status)) => assert_eq!(status, "NeedsOutput"),
+        (ending, other) => panic!("{ending}: {other:?}"),
+    }
+}
+
+#[test]
+fn reinit_starts_an_object_identical_to_a_fresh_borrowed_one() {
+    let second = full(&[
+        chunk(&[7, 0], b"AA\x00"),
+        chunk(&[2, 0, 0], b"abc"),
+        chunk(&[2, 0, 0], b"xyz"),
+    ]);
+    for ending in ["finished", "needs input", "needs output", "event", "failed"] {
+        for stream in [
+            FramedDecodeStreamConfig::default(),
+            OutputSize::Exact(6).into(),
+        ] {
+            let mut session = decoder(Default::default())
+                .into_session(Default::default())
+                .expect("start");
+            end_first_object(&mut session, ending);
+            session.reinit(stream).expect("reinit");
+            let mut fresh_owner = decoder(Default::default());
+            let fresh = fresh_owner.start(stream).expect("start").counters();
+            assert_eq!(session.counters(), fresh, "{ending}");
+            for (split, widths) in SCHEDULES {
+                let expected = fresh_borrowed(Default::default(), stream, &second, split, widths);
+                let actual = drive(&mut session, &second, split, widths);
+                assert_eq!(actual, expected, "{ending}, split {split}");
+                assert!(finished(&actual));
+                session.reinit(stream).expect("reinit again");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_rejected_reinit_leaves_a_failed_object_that_a_later_reinit_recovers() {
+    let bytes = full(&[chunk(&[2, 0, 0], b"abc")]);
+    let config = FramedDecodeConfig::default()
+        .with_limits(FramedDecodeLimits::default().with_max_output_bytes(Some(5)));
+    let mut session = decoder(config)
+        .into_session(Default::default())
+        .expect("start");
+    let rejected = session.reinit(OutputSize::Exact(6).into());
+    let borrowed = decoder(config)
+        .start(OutputSize::Exact(6).into())
+        .map(|_| ());
+    assert_eq!(format!("{rejected:?}"), format!("{borrowed:?}"));
+    assert!(rejected.is_err());
+    let failure = session
+        .process(&bytes, &mut [0; 16], DecodeOperation::Finish)
+        .unwrap_err();
+    assert!(matches!(failure.error, FramedDecodeError::InvalidState));
+    assert_eq!((failure.consumed, failure.produced), (0, 0));
+
+    session.reinit(Default::default()).expect("reinit");
+    assert_eq!(
+        drive(&mut session, &bytes, 3, &[2]),
+        fresh_borrowed(config, Default::default(), &bytes, 3, &[2])
+    );
+    session
+        .reinit(OutputSize::Exact(6).into())
+        .expect_err("rejected");
+    let mut decoder = session.into_framed_decompressor();
+    assert!(decoder.decompress(&bytes).is_ok());
+}
+
+#[test]
+fn reinit_keeps_the_resolver_of_the_session() {
+    let input = full(&[chunk(&external_header(2), &[0x3b])]);
+    let resolver = Arc::new(Resolver {
+        bytes: vec![0x91, 0],
+    });
+    let mut owner = decoder(Default::default());
+    let expected = drive(
+        &mut owner
+            .start_with_dictionaries(&*resolver, Default::default())
+            .expect("borrowed"),
+        &input,
+        5,
+        &[1, 0, 3],
+    );
+    assert!(finished(&expected));
+    let mut session = decoder(Default::default())
+        .into_session_with_dictionaries(Arc::clone(&resolver), Default::default())
+        .expect("owned");
+    end_first_object(&mut session, "failed");
+    session.reinit(Default::default()).expect("reinit");
+    assert_eq!(drive(&mut session, &input, 5, &[1, 0, 3]), expected);
+}

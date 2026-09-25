@@ -372,6 +372,42 @@ impl<R: DictionaryResolver + 'static> FramedDecoderSessionOwned<R> {
     pub const fn input_format(&self) -> Option<StreamInfo> {
         self.owner.engine.format
     }
+    /// Ends the current object and starts a new, independent one in place.
+    ///
+    /// Cancels the current object exactly as
+    /// [`Self::into_framed_decompressor`] does, then starts the next one with
+    /// the same resolver through the same path as
+    /// [`FramedDecompressor::into_session`]. To change the resolver, go through
+    /// [`Self::into_framed_decompressor`] and
+    /// [`FramedDecompressor::into_session_with_dictionaries`].
+    /// # Errors
+    /// As [`FramedDecompressor::start`]. After an error the session is failed:
+    /// [`Self::process`] returns [`FramedDecodeError::InvalidState`] until a
+    /// later `reinit` succeeds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::framing::*;
+    /// use mbrotli::DecodeOperation;
+    /// let valid = [0x91, 10, 66, 82, 0, 6, 2, 0, 0, b'a', b'b', b'c'];
+    /// let mut session = FramedDecompressor::new(Default::default())?.into_session(Default::default())?;
+    /// let mut output = [0; 16];
+    /// assert!(session.process(&[0x91, 10, 66, 0xff], &mut output, DecodeOperation::Finish).is_err());
+    ///
+    /// session.reinit(Default::default())?;
+    /// let progress = session.process(&valid, &mut output, DecodeOperation::Finish)?;
+    /// assert!(matches!(progress.status, FramedDecoderStatus::Event(FramedEvent::StreamStart(_))));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn reinit(&mut self, stream: FramedDecodeStreamConfig) -> Result<(), FramedDecodeError> {
+        self.owner.cancel();
+        let started = self.owner.begin_session(stream);
+        if started.is_err() {
+            self.owner.engine.poison();
+        }
+        started
+    }
     /// Ends the object and returns the decoder, ready for the next one.
     ///
     /// Cancels exactly as dropping a [`FramedDecoderSession`] does, after a

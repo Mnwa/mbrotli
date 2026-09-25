@@ -615,3 +615,159 @@ fn an_owned_session_moves_between_threads() {
     let mut decoder = decoder;
     assert_eq!(decoder.decompress(&compressed).expect("decode"), payload);
 }
+
+fn borrowed_trace(
+    config: DecoderConfig,
+    stream: DecodeStreamConfig,
+    input: &[u8],
+    chunk: usize,
+    output: usize,
+) -> Trace {
+    let mut owner = decoder(config);
+    drive(
+        &mut owner.start(stream).expect("start"),
+        input,
+        chunk,
+        output,
+    )
+}
+
+/// Leaves `session` in one of the states `reinit` must recover from.
+fn end_first_operation(session: &mut DecoderSessionOwned, ending: &str, compressed: &[u8]) {
+    let result = match ending {
+        "finished" => {
+            let trace = drive(&mut *session, compressed, 1 << 16, 1 << 16);
+            assert!(!trace.failed());
+            return;
+        }
+        "needs input" => session.process(&compressed[..3], &mut [0; 64], DecodeOperation::Process),
+        "needs output" => session.process(compressed, &mut [0; 2], DecodeOperation::Finish),
+        "failed" => {
+            let mut corrupt = compressed.to_vec();
+            corrupt[0] = 0xff;
+            corrupt[1] = 0xff;
+            session.process(&corrupt, &mut [0; 64], DecodeOperation::Finish)
+        }
+        "truncated" => session.process(&compressed[..5], &mut [0; 64], DecodeOperation::Finish),
+        _ => unreachable!(),
+    };
+    match (ending, result) {
+        ("needs input", Ok(p)) => assert_eq!(p.status, DecoderStatus::NeedsInput),
+        ("needs output", Ok(p)) => assert_eq!(p.status, DecoderStatus::NeedsOutput),
+        ("failed" | "truncated", Err(_)) => {}
+        (ending, other) => panic!("{ending}: {other:?}"),
+    }
+}
+
+#[test]
+fn reinit_starts_an_operation_identical_to_a_fresh_borrowed_one() {
+    let first = c_compress(5, 22, &b"the first operation ".repeat(200));
+    let payload = b"the second operation must not remember the first ".repeat(60);
+    let second = c_compress(9, 20, &payload);
+    for ending in [
+        "finished",
+        "needs input",
+        "needs output",
+        "failed",
+        "truncated",
+    ] {
+        for stream in [
+            DecodeStreamConfig::default(),
+            OutputSize::Exact(payload.len() as u64).into(),
+        ] {
+            let mut session = decoder(DecoderConfig::default())
+                .into_session(Default::default())
+                .expect("start");
+            end_first_operation(&mut session, ending, &first);
+            session.reinit(stream).expect("reinit");
+            assert_eq!(
+                session.totals(),
+                Totals {
+                    finished: false,
+                    total_in: 0,
+                    total_out: 0,
+                    members: 0,
+                    window: None,
+                }
+            );
+            for (chunk, output) in [(1, 1), (97, 64)] {
+                let expected =
+                    borrowed_trace(DecoderConfig::default(), stream, &second, chunk, output);
+                let actual = drive(&mut session, &second, chunk, output);
+                assert_eq!(actual, expected, "{ending}");
+                assert_eq!(actual.output, payload);
+                session.reinit(stream).expect("reinit again");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_rejected_reinit_leaves_a_failed_session_that_a_later_reinit_recovers() {
+    let payload = b"after a rejected reinit ".repeat(4);
+    let compressed = c_compress(5, 22, &payload);
+    let config = DecoderConfig::default()
+        .with_limits(DecodeLimits::default().with_max_output_bytes(Some(1000)));
+    let mut session = decoder(config)
+        .into_session(Default::default())
+        .expect("start");
+    session
+        .process(&compressed[..3], &mut [0; 8], DecodeOperation::Process)
+        .expect("partial");
+    assert!(matches!(
+        session.reinit(OutputSize::Exact(1001).into()),
+        Err(DecodeError::OutputLimitExceeded { limit: 1000 })
+    ));
+    assert!(matches!(
+        session
+            .process(&compressed, &mut [0; 128], DecodeOperation::Finish)
+            .unwrap_err()
+            .into_error(),
+        DecodeError::InvalidState
+    ));
+
+    session.reinit(Default::default()).expect("reinit");
+    let actual = drive(&mut session, &compressed, 7, 9);
+    assert_eq!(
+        actual,
+        borrowed_trace(config, Default::default(), &compressed, 7, 9)
+    );
+    assert_eq!(actual.output, payload);
+
+    session
+        .reinit(OutputSize::Exact(1001).into())
+        .expect_err("rejected");
+    let mut decoder = session.into_decompressor();
+    assert_eq!(decoder.decompress(&compressed).expect("decode"), payload);
+}
+
+#[test]
+fn reinit_keeps_the_dictionary_of_the_session() {
+    let prefix = b"a prefix both sides share, repeated enough to matter. ".repeat(10);
+    let payload = [&prefix[..120], b" plus a novel tail"].concat();
+    let compressed = c_compress_with_prefixes(CParams::new(5, 22), &[&prefix], &payload);
+    let dictionary = Arc::new(
+        DecodeDictionary::new(&[DictionaryAttachment::Raw(&prefix)], Default::default())
+            .expect("dictionary"),
+    );
+    let mut session = decoder(DecoderConfig::default())
+        .into_session_with_dictionary(Arc::clone(&dictionary), Default::default())
+        .expect("owned");
+    assert!(
+        session
+            .process(&[0xff, 0xff], &mut [0; 8], DecodeOperation::Finish)
+            .is_err()
+    );
+    session.reinit(Default::default()).expect("reinit");
+    let mut owner = decoder(DecoderConfig::default());
+    let expected = drive(
+        &mut owner
+            .start_with_dictionary(&*dictionary, Default::default())
+            .expect("borrowed"),
+        &compressed,
+        11,
+        13,
+    );
+    assert_eq!(drive(&mut session, &compressed, 11, 13), expected);
+    assert_eq!(expected.output, payload);
+}

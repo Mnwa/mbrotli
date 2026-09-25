@@ -180,6 +180,11 @@ impl OperationState {
         }
     }
 
+    /// Makes every later call report `InvalidState`.
+    pub(crate) const fn poison(&mut self) {
+        self.failed = true;
+    }
+
     /// Ends the operation, leaving `decoder` ready for the next one.
     ///
     /// The single release path: borrowed sessions run it on drop, owned

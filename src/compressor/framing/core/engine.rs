@@ -50,6 +50,10 @@ impl Engine {
         self.failed = false;
         self.finishing = false;
     }
+    /// Makes every later call and command report `InvalidState`.
+    pub(in crate::compressor::framing) const fn poison(&mut self) {
+        self.failed = true;
+    }
     pub(in crate::compressor::framing) fn start(
         &mut self,
         stream: FramedEncodeStreamConfig,

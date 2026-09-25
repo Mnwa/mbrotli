@@ -138,6 +138,9 @@ stateDiagram-v2
     Terminal --> Terminal: process (idempotent Finished / InvalidState)
     Owned --> Returned: into_compressor / into_decompressor
     Terminal --> Returned: into_compressor / into_decompressor
+    Owned --> Owned: reinit (release + begin)
+    Terminal --> Owned: reinit (release + begin)
+    Owned --> Terminal: reinit rejected (poisoned)
     Owned --> [*]: drop (codec dropped)
     Terminal --> [*]: drop (codec dropped)
     Returned --> [*]
@@ -158,6 +161,37 @@ sessions in [compressor](compressor.md) and
   self-references. The only extra storage is the owned `D` itself.
 - **No hot-path changes.** Encoder and decoder algorithms, SIMD dispatch and
   output bytes are unchanged.
+
+## Reinitialization
+
+All four owned sessions have a `reinit(&mut self, stream)` method. It ends the
+current operation and starts an independent one in place, keeping the owner,
+its backend, its retained storage (subject to retention policy), and the owned
+dictionary or resolver.
+
+```mermaid
+flowchart TD
+    Call["reinit(stream)"] --> Release["release the current operation:\nraw OperationState::release / framed cancel"]
+    Release --> Begin["the shared begin path:\nCompressor::begin / decoder OperationState::start /\nframed begin_session"]
+    Begin -->|Ok| Fresh[replace the stream state with a fresh one]
+    Begin -->|Err| Poison["poison: raw phase Failed / decoder failed flag /\nframed engine failed or Phase::Failed"]
+    Poison --> Refuse[process and commands return InvalidState]
+    Refuse --> Call
+    Fresh --> Ready[next operation is identical to a fresh borrowed session]
+```
+
+- **The same paths as drop-then-start.** Release is the path a borrowed
+  session's `Drop` runs, and the begin step is the one `start` and
+  `into_session` use. So `reinit` behaves exactly like dropping a borrowed
+  session and starting a new one, whether the previous operation finished,
+  was waiting for input or output, was just past an event, or failed.
+- **A rejected start leaves the session failed.** The previous operation has
+  already been released, so the only state left to mark is the failure.
+  Nothing else runs until a later `reinit` succeeds. The owner can still be
+  handed back, since release is idempotent.
+- **The dictionary is kept.** `reinit` restarts with the session's own
+  dictionary or resolver. Changing it goes through the consuming `into_*`
+  methods: hand the owner back, then start a new owned session.
 
 ## Framed sessions
 
@@ -228,6 +262,7 @@ stateDiagram-v2
     Owned --> Lent: process returns Event
     Lent --> Owned: event's last use
     Owned --> Returned: into_framed_compressor / into_framed_decompressor (cancel)
+    Owned --> Owned: reinit (cancel + begin_session)
     Owned --> [*]: drop (owner dropped)
     Returned --> [*]
 ```
@@ -283,6 +318,17 @@ failures, and totals.
   - Reuse after finished, needs-input, needs-output, post-event and failed
     operations, and a start after a leaked session.
   - `Send`.
+
+- **`reinit` tests** in all four files end a first operation in each
+  supported way: finished, needs input, needs output, flushed, after an
+  event, failed, or truncated. They then reinitialize and require the next
+  operation's trace to equal a fresh borrowed session's, across several
+  schedules and stream configurations. They also check that a rejected
+  `reinit` leaves `InvalidState` until a later `reinit` succeeds, and that
+  the dictionary or resolver is kept.
+  - A framed encoder start can only fail on allocation. Its poisoned state is
+    therefore covered by a unit test in `compressor::framing::session` that
+    poisons the engine directly.
 
 ## Known gaps
 

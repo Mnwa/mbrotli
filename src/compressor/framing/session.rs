@@ -390,6 +390,37 @@ impl FramedEncoderSessionOwned {
     pub const fn next_chunk_offset(&self) -> u64 {
         self.owner.engine.offset()
     }
+    /// Ends the current container and starts a new, independent one in place.
+    ///
+    /// Cancels the current container exactly as
+    /// [`Self::into_framed_compressor`] does, then starts the next one through
+    /// the same path as [`FramedCompressor::into_session`], keeping the
+    /// encoder and its retained storage.
+    /// # Errors
+    /// As [`FramedCompressor::start`]. After an error the session is failed:
+    /// calls and commands return [`FramedEncodeError::InvalidState`] until a
+    /// later `reinit` succeeds.
+    /// # Examples
+    /// ```
+    /// use mbrotli::{Operation, framing::*};
+    /// let mut session = FramedCompressor::new(Default::default())?.into_session(Default::default())?;
+    /// session.process(&mut [0; 128], FramedEncodeOperation::Process)?;
+    /// session.reinit(Default::default())?;
+    /// // The new container starts with a fresh header.
+    /// let mut output = [0; 128];
+    /// let p = session.process(&mut output, FramedEncodeOperation::Process)?;
+    /// assert_eq!(&output[..4], &[0x91, 10, 66, 82]);
+    /// assert_eq!(session.total_out(), p.produced as u64);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn reinit(&mut self, stream: FramedEncodeStreamConfig) -> Result<(), FramedEncodeError> {
+        self.owner.cancel();
+        let started = self.owner.begin_session(stream);
+        if started.is_err() {
+            self.owner.engine.poison();
+        }
+        started
+    }
     /// Ends the container and returns the encoder, ready for the next one.
     ///
     /// Cancels exactly as dropping a [`FramedEncoderSession`] does, whether the
@@ -456,5 +487,41 @@ impl FramedResourceSession<'_, '_> {
 impl Drop for FramedResourceSession<'_, '_> {
     fn drop(&mut self) {
         self.owner.engine.release_resource(&mut self.owner.raw);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A rejected `reinit` poisons the engine; only allocation failure can
+    /// reject a framed start, so the state is set directly here.
+    #[test]
+    fn a_poisoned_owned_session_refuses_work_until_a_reinit_succeeds() {
+        let mut session = FramedCompressor::new(Default::default())
+            .expect("config")
+            .into_session(Default::default())
+            .expect("start");
+        session.owner.cancel();
+        session.owner.engine.poison();
+        let failure = session
+            .process(&mut [0; 64], FramedEncodeOperation::Process)
+            .unwrap_err();
+        assert!(matches!(failure.error, FramedEncodeError::InvalidState));
+        assert!(matches!(
+            session.padding(1),
+            Err(FramedEncodeError::InvalidState)
+        ));
+        assert!(matches!(
+            session.resource(Default::default(), Default::default()),
+            Err(FramedEncodeError::InvalidState)
+        ));
+
+        session.reinit(Default::default()).expect("reinit");
+        let mut output = [0; 64];
+        let progress = session
+            .process(&mut output, FramedEncodeOperation::Process)
+            .expect("header");
+        assert_eq!(&output[..progress.produced], &[0x91, 10, 66, 82, 4]);
     }
 }

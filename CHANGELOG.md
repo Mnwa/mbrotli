@@ -30,6 +30,14 @@
   `Box<T>` and `Arc<T>`, and the new `NoDictionaries` is the default resolver
   type. Wire bytes, events and errors are unchanged.
 
+- Add `reinit` to all four owned sessions. It ends the current operation the
+  way the owner-returning methods do, then starts an independent new one in
+  place through the same start path as `start`/`into_session`. It keeps the
+  owner, its retained storage and the session's dictionary or resolver. It
+  works after finished, incomplete, backpressured and failed operations. If
+  the new start is rejected, the session stays failed until a later `reinit`
+  succeeds.
+
 - Update `fearless_simd` 0.7 → 1.0 and `hotpath` 0.25 → 0.26. Follow the
   `fearless_simd` 1.0 renames: the lane-count constant `SimdBase::N` is now
   `SimdBase::LEN`, and `as_array` now borrows, so the HQ block splitter reads

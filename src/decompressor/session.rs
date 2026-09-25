@@ -371,6 +371,50 @@ impl<D: AsRef<DecodeDictionary> + 'static> DecoderSessionOwned<D> {
         self.operation.window()
     }
 
+    /// Ends the current operation and starts a new, independent one in place.
+    ///
+    /// Releases the current operation exactly as [`Self::into_decompressor`]
+    /// does — finished, waiting for input or output, or failed — and starts
+    /// the next one with the same dictionary through the same path as
+    /// [`Decompressor::into_session`]. To change the dictionary, go through
+    /// [`Self::into_decompressor`] and
+    /// [`Decompressor::into_session_with_dictionary`].
+    ///
+    /// # Errors
+    /// As [`Decompressor::start`]. After an error the session is failed:
+    /// [`Self::process`] returns [`DecodeError::InvalidState`] until a later
+    /// `reinit` succeeds, and [`Self::into_decompressor`] still returns a
+    /// reusable decoder.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{DecodeOperation, DecoderStatus, Decompressor};
+    /// let compressed = [0x0b, 0x02, 0x80, b'h', b'e', b'l', b'l', b'o', 0x03];
+    /// let mut session = Decompressor::new(Default::default())?.into_session(Default::default())?;
+    /// let mut output = [0; 16];
+    /// assert!(session.process(&[0xff, 0xff], &mut output, DecodeOperation::Finish).is_err());
+    ///
+    /// session.reinit(Default::default())?;
+    /// let progress = session.process(&compressed, &mut output, DecodeOperation::Finish)?;
+    /// assert_eq!(progress.status, DecoderStatus::Finished);
+    /// assert_eq!(&output[..progress.produced], b"hello");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn reinit(&mut self, stream: DecodeStreamConfig) -> Result<(), DecodeError> {
+        self.operation.release(&mut self.decoder);
+        match OperationState::start(&mut self.decoder, stream) {
+            Ok(operation) => {
+                self.operation = operation;
+                Ok(())
+            }
+            Err(error) => {
+                self.operation.poison();
+                Err(error)
+            }
+        }
+    }
+
     /// Ends the operation and returns the decoder, ready for the next one.
     ///
     /// Releases the operation exactly as dropping a [`DecoderSession`] does,

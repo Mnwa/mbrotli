@@ -189,6 +189,10 @@ impl Engine {
         next.layout.chunks = ::core::mem::take(&mut self.layout.chunks);
         *self = next;
     }
+    /// Makes every later call report `InvalidState`.
+    pub const fn poison(&mut self) {
+        self.phase = Phase::Failed;
+    }
     pub fn fits_policy(&self) -> bool {
         self.budget(0, 0).is_ok()
     }

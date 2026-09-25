@@ -94,6 +94,24 @@ impl<D: AsRef<PreparedDictionary>> OwnedSessionCore<D> {
     pub(crate) const fn is_finished(&self) -> bool {
         self.operation.is_finished(&self.compressor)
     }
+    /// Releases the current operation and starts a fresh one with the same
+    /// dictionary, through the same path `Compressor::start` uses.
+    ///
+    /// A rejected start leaves the operation failed, so it encodes nothing.
+    pub(crate) fn reinit(&mut self, stream: StreamConfig) -> Result<(), EncodeError> {
+        self.operation.release(&mut self.compressor);
+        let dictionary = self.dictionary.as_ref().map(AsRef::as_ref);
+        match self.compressor.begin(dictionary, stream) {
+            Ok(limit) => {
+                self.operation = OperationState::new(limit, stream);
+                Ok(())
+            }
+            Err(error) => {
+                self.operation.poison();
+                Err(error)
+            }
+        }
+    }
     /// Ends the operation exactly as dropping a borrowed session does.
     pub(crate) fn into_compressor(self) -> Compressor {
         let Self {
@@ -192,6 +210,10 @@ impl OperationState {
 }
 
 impl OperationState {
+    /// Makes every later call report `InvalidState`.
+    pub(crate) fn poison(&mut self) {
+        self.state.phase = Phase::Failed;
+    }
     pub(crate) fn release(&self, compressor: &mut Compressor) {
         if self.state.phase != Phase::Finished {
             compressor.workspace.invalidate();

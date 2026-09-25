@@ -180,7 +180,7 @@ impl FramedCompressor {
     /// Claims the owner for one container and queues its header.
     ///
     /// The single start path behind [`Self::start`] and [`Self::into_session`].
-    fn begin_session(&mut self, stream: FramedEncodeStreamConfig) -> Result<(), E> {
+    pub(super) fn begin_session(&mut self, stream: FramedEncodeStreamConfig) -> Result<(), E> {
         if self.active {
             return Err(E::AbandonedSession);
         }

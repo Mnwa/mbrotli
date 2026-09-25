@@ -540,6 +540,41 @@ impl<D: AsRef<PreparedDictionary> + 'static> EncoderSessionOwned<D> {
         self.core.is_finished()
     }
 
+    /// Ends the current stream and starts a new, independent one in place.
+    ///
+    /// Releases the current stream exactly as [`Self::into_compressor`] does
+    /// — finished, unfinished, flushed or failed — and starts the next one
+    /// with the same dictionary through the same path as
+    /// [`Compressor::into_session`](super::Compressor::into_session). The new
+    /// stream's bytes equal a fresh borrowed session's. To change the
+    /// dictionary, go through [`Self::into_compressor`] and
+    /// [`Compressor::into_session_with_dictionary`](super::Compressor::into_session_with_dictionary).
+    ///
+    /// # Errors
+    ///
+    /// As [`Compressor::start`](super::Compressor::start). After an error the
+    /// session is failed: [`Self::process`] returns
+    /// [`EncodeError::InvalidState`] until a later `reinit` succeeds, and
+    /// [`Self::into_compressor`] still returns a usable compressor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{Compressor, EncoderStatus, Operation};
+    ///
+    /// let mut session = Compressor::new(Default::default())?.into_session(Default::default())?;
+    /// let mut output = [0u8; 256];
+    /// session.process(b"abandoned", &mut output, Operation::Process)?;
+    ///
+    /// session.reinit(Default::default())?;
+    /// let progress = session.process(b"fresh", &mut output, Operation::Finish)?;
+    /// assert_eq!(progress.status, EncoderStatus::Finished);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn reinit(&mut self, stream: StreamConfig) -> Result<(), EncodeError> {
+        self.core.reinit(stream)
+    }
+
     /// Ends the stream and returns the compressor, ready for the next one.
     ///
     /// Releases the operation exactly as dropping an [`EncoderSession`] does,

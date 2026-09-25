@@ -638,3 +638,99 @@ fn an_owned_framed_session_moves_between_threads() {
     .expect("the worker finished");
     assert_eq!([head, tail].concat(), expected);
 }
+
+/// Leaves `session` in one of the states `reinit` must recover from.
+fn end_first_container(session: &mut FramedEncoderSessionOwned, ending: &str) {
+    let items = [FramedItem::Resource(FramedResource::from(
+        &b"first container"[..],
+    ))];
+    match ending {
+        "finished" => {
+            encode(&mut *session, items.as_slice().into(), SCHEDULES[3]);
+            assert!(session.is_finished());
+        }
+        "needs output" => {
+            let p = session
+                .process(&mut [0; 2], FramedEncodeOperation::Process)
+                .expect("partial header");
+            assert_eq!(p.status, FramedEncoderStatus::NeedsOutput);
+        }
+        "needs input" => {
+            session
+                .process(&mut [0; 256], FramedEncodeOperation::Process)
+                .expect("header");
+            let mut resource = session
+                .resource(Default::default(), Default::default())
+                .expect("resource");
+            let p = resource
+                .process(b"unfinished", &mut [0; 256], Operation::Process)
+                .expect("resource");
+            assert_eq!(p.status, FramedEncoderStatus::NeedsInput);
+        }
+        "failed" => {
+            session
+                .process(&mut [0; 256], FramedEncodeOperation::Process)
+                .expect("header");
+            {
+                let mut resource = session
+                    .resource(Default::default(), InputSize::Exact(10).into())
+                    .expect("resource");
+                assert!(
+                    resource
+                        .process(b"abc", &mut [0; 256], Operation::Finish)
+                        .is_err()
+                );
+            }
+            assert!(
+                session
+                    .process(&mut [0; 256], FramedEncodeOperation::Finish)
+                    .is_err()
+            );
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn reinit_starts_a_container_identical_to_a_fresh_borrowed_one() {
+    let payload = b"the second container ".repeat(15);
+    let footer = [MetadataField {
+        code: *b"YY",
+        value: b"footer",
+    }];
+    let items = [
+        FramedItem::Padding { bytes: 2 },
+        FramedItem::Resource(FramedResource::from(&payload[..])),
+        FramedItem::Metadata {
+            kind: MetadataKind::Footer,
+            fields: &footer,
+            options: Default::default(),
+        },
+    ];
+    let input = FramedInput::from(items.as_slice());
+    let one_shot = owner(false).compress(input).expect("compress");
+    for ending in ["finished", "needs output", "needs input", "failed"] {
+        let mut session = owner(false)
+            .into_session(Default::default())
+            .expect("start");
+        end_first_container(&mut session, ending);
+        session.reinit(Default::default()).expect("reinit");
+        let mut fresh = owner(false);
+        let fresh = fresh.start(Default::default()).expect("start").counters();
+        assert_eq!(session.counters(), fresh, "{ending}");
+        for schedule in SCHEDULES {
+            let mut borrowed_owner = owner(false);
+            let expected = encode(
+                &mut borrowed_owner.start(Default::default()).expect("start"),
+                input,
+                schedule,
+            );
+            let actual = encode(&mut session, input, schedule);
+            assert_eq!(actual, expected, "{ending}, {schedule:?}");
+            if !schedule.flush {
+                assert_eq!(actual.wire, one_shot);
+            }
+            session.reinit(Default::default()).expect("reinit again");
+        }
+    }
+}
