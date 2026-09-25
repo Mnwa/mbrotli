@@ -245,6 +245,7 @@ impl FramedDecompressor {
             active: false,
         }
     }
+    /// Releases the active object; the one path both session shapes end on.
     pub(super) fn cancel(&mut self) {
         self.engine.clear();
         self.active = false;
@@ -255,6 +256,16 @@ impl FramedDecompressor {
         resolver: Option<DictionaryResolverRef<'dict>>,
         stream: FramedDecodeStreamConfig,
     ) -> Result<FramedDecoderSession<'d, 'dict>, E> {
+        self.begin_session(stream)?;
+        Ok(FramedDecoderSession {
+            owner: self,
+            resolver,
+        })
+    }
+    /// Claims the owner for one object after lifecycle and policy checks.
+    ///
+    /// The single start path behind borrowed and owned sessions.
+    fn begin_session(&mut self, stream: FramedDecodeStreamConfig) -> Result<(), E> {
         if self.active {
             return Err(E::AbandonedSession);
         }
@@ -270,10 +281,7 @@ impl FramedDecompressor {
         }
         self.engine.stream = stream;
         self.active = true;
-        Ok(FramedDecoderSession {
-            owner: self,
-            resolver,
-        })
+        Ok(())
     }
     /// Starts one exclusive input object without external dictionaries.
     /// # Errors
@@ -331,6 +339,85 @@ impl FramedDecompressor {
         stream: FramedDecodeStreamConfig,
     ) -> Result<FramedDecoderSession<'d, 'dict>, E> {
         self.begin(Some(dictionaries.into()), stream)
+    }
+    /// Starts one object that takes ownership of this decoder.
+    ///
+    /// Validates and starts exactly as [`Self::start`] does, but the returned
+    /// [`FramedDecoderSessionOwned`] owns the decoder instead of borrowing it.
+    /// Recover the decoder with
+    /// [`FramedDecoderSessionOwned::into_framed_decompressor`].
+    /// # Errors
+    /// As [`Self::start`]. The decoder is dropped with the error; use
+    /// [`Self::start`] when it must survive a rejected start.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::framing::*;
+    /// use mbrotli::DecodeOperation;
+    /// let decoder = FramedDecompressor::new(Default::default())?;
+    /// let mut session = decoder.into_session(Default::default())?;
+    /// let input = [0x91, 10, 66, 82, 0, 6, 2, 0, 0, b'a', b'b', b'c'];
+    /// let mut output = [0; 16];
+    /// let progress = session.process(&input, &mut output, DecodeOperation::Process)?;
+    /// assert!(matches!(progress.status, FramedDecoderStatus::Event(FramedEvent::StreamStart(_))));
+    /// let mut decoder = session.into_framed_decompressor();
+    /// assert_eq!(decoder.decompress(&input)?.resources[0].data, b"abc");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn into_session(
+        mut self,
+        stream: FramedDecodeStreamConfig,
+    ) -> Result<FramedDecoderSessionOwned, E> {
+        self.begin_session(stream)?;
+        Ok(FramedDecoderSessionOwned {
+            owner: self,
+            resolver: None,
+        })
+    }
+    /// Starts one owned object resolving external dictionaries through `dictionaries`.
+    ///
+    /// As [`Self::start_with_dictionaries`], but the session owns both the
+    /// decoder and the resolver, so it carries no lifetime. Pass an
+    /// `Arc` of a resolver to share it between sessions, or a `&'static` one.
+    /// Raw Auto input never invokes the resolver.
+    /// # Errors
+    /// As [`Self::start`]. The decoder and resolver are dropped with the error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use mbrotli::framing::*;
+    /// struct Dictionaries;
+    /// impl DictionaryResolver for Dictionaries {
+    ///     fn resolve(&self, request: ExternalDictionaryRequest) -> Option<&[u8]> {
+    ///         (request.id == DictionaryId([7; 32])
+    ///             && request.kind == ExternalDictionaryKind::Prefix).then_some(b"prefix")
+    ///     }
+    /// }
+    /// let dictionaries = Arc::new(Dictionaries);
+    /// let decoder = FramedDecompressor::new(Default::default())?;
+    /// // Footerless full resource, Shared Brotli codec, one external prefix reference.
+    /// let mut input = vec![0x91, 10, 66, 82, 0, 40, 2, 3, 0, 1, 2, 3];
+    /// input.extend([7; 32]);
+    /// input.extend([0, 0x3b]);
+    /// let mut session =
+    ///     decoder.into_session_with_dictionaries(Arc::clone(&dictionaries), Default::default())?;
+    /// let progress = session.process(&input, &mut [], mbrotli::DecodeOperation::Finish)?;
+    /// assert!(matches!(progress.status, FramedDecoderStatus::Event(FramedEvent::StreamStart(_))));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn into_session_with_dictionaries<R: DictionaryResolver + 'static>(
+        mut self,
+        dictionaries: R,
+        stream: FramedDecodeStreamConfig,
+    ) -> Result<FramedDecoderSessionOwned<R>, E> {
+        self.begin_session(stream)?;
+        Ok(FramedDecoderSessionOwned {
+            owner: self,
+            resolver: Some(dictionaries),
+        })
     }
     /// Returns independently owned resources after complete object validation.
     /// # Errors

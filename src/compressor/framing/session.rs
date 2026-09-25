@@ -33,6 +33,8 @@ pub struct FramedEncodeProgress {
 }
 /// Exclusive container operation. Drop cancels without I/O and releases the owner.
 ///
+/// The session borrows its [`FramedCompressor`]; [`FramedEncoderSessionOwned`]
+/// is the same operation owning it instead.
 /// A forgotten session requires explicit owner recovery.
 /// ```compile_fail
 /// use mbrotli::framing::*;
@@ -76,9 +78,7 @@ impl FramedEncoderSession<'_> {
         fields: &[MetadataField<'_>],
         options: MetadataOptions<'_>,
     ) -> Result<(), FramedEncodeError> {
-        self.owner
-            .engine
-            .metadata(&mut self.owner.raw, kind, fields, options)
+        self.owner.session_metadata(kind, fields, options)
     }
     /// Selects repeated fields before the first metadata command.
     /// # Errors
@@ -100,16 +100,8 @@ impl FramedEncoderSession<'_> {
         options: ResourceOptions,
         stream: StreamConfig,
     ) -> Result<FramedResourceSession<'_, 'static>, FramedEncodeError> {
-        self.owner.engine.begin_resource(
-            &mut self.owner.raw,
-            options,
-            stream,
-            ResourceEncoding::Brotli,
-        )?;
-        Ok(FramedResourceSession {
-            owner: self.owner,
-            dictionary: None,
-        })
+        self.owner
+            .open_resource(options, stream, ResourceEncoding::Brotli, None)
     }
     /// Starts a resource borrowing an explicit prepared dictionary.
     /// # Errors
@@ -156,19 +148,8 @@ impl FramedEncoderSession<'_> {
         dictionary: &'dict PreparedDictionary,
         references: &[DictionaryReference],
     ) -> Result<FramedResourceSession<'s, 'dict>, FramedEncodeError> {
-        self.owner.engine.begin_resource(
-            &mut self.owner.raw,
-            options,
-            stream,
-            ResourceEncoding::Shared {
-                dictionary,
-                references,
-            },
-        )?;
-        Ok(FramedResourceSession {
-            owner: self.owner,
-            dictionary: Some(dictionary),
-        })
+        self.owner
+            .open_shared_resource(options, stream, dictionary, references)
     }
     /// Starts a verbatim resource using the same chunk and lifecycle rules.
     /// # Errors
@@ -177,16 +158,12 @@ impl FramedEncoderSession<'_> {
         &mut self,
         options: ResourceOptions,
     ) -> Result<FramedResourceSession<'_, 'static>, FramedEncodeError> {
-        self.owner.engine.begin_resource(
-            &mut self.owner.raw,
+        self.owner.open_resource(
             options,
             Default::default(),
             ResourceEncoding::Uncompressed,
-        )?;
-        Ok(FramedResourceSession {
-            owner: self.owner,
-            dictionary: None,
-        })
+            None,
+        )
     }
     /// Accepted payload across resources, including hidden resources.
     pub const fn total_in(&self) -> u64 {
@@ -212,6 +189,216 @@ impl FramedEncoderSession<'_> {
 impl Drop for FramedEncoderSession<'_> {
     fn drop(&mut self) {
         self.owner.cancel();
+    }
+}
+
+// Command bodies shared by the borrowed and owned session facades.
+impl FramedCompressor {
+    fn session_metadata(
+        &mut self,
+        kind: MetadataKind,
+        fields: &[MetadataField<'_>],
+        options: MetadataOptions<'_>,
+    ) -> Result<(), FramedEncodeError> {
+        self.engine.metadata(&mut self.raw, kind, fields, options)
+    }
+    fn open_resource<'s, 'dict>(
+        &'s mut self,
+        options: ResourceOptions,
+        stream: StreamConfig,
+        encoding: ResourceEncoding<'_>,
+        dictionary: Option<&'dict PreparedDictionary>,
+    ) -> Result<FramedResourceSession<'s, 'dict>, FramedEncodeError> {
+        self.engine
+            .begin_resource(&mut self.raw, options, stream, encoding)?;
+        Ok(FramedResourceSession {
+            owner: self,
+            dictionary,
+        })
+    }
+    fn open_shared_resource<'s, 'dict>(
+        &'s mut self,
+        options: ResourceOptions,
+        stream: StreamConfig,
+        dictionary: &'dict PreparedDictionary,
+        references: &[DictionaryReference],
+    ) -> Result<FramedResourceSession<'s, 'dict>, FramedEncodeError> {
+        let encoding = ResourceEncoding::Shared {
+            dictionary,
+            references,
+        };
+        self.open_resource(options, stream, encoding, Some(dictionary))
+    }
+}
+
+/// Exclusive container operation that owns its [`FramedCompressor`].
+///
+/// [`FramedEncoderSession`] borrows its encoder with `&mut`; this session
+/// consumes it, so a composition layer can hold the whole streaming operation
+/// as one owned value with no lifetime. It keeps no references into its own
+/// fields, and it is the same synchronous, caller-driven API: every method
+/// runs the borrowed session's code on the same framing engine, so the wire
+/// bytes, progress and errors are identical.
+///
+/// Resources still open through the borrowing [`FramedResourceSession`]
+/// guard. While one is live the session is mutably borrowed, so neither a
+/// container command nor [`Self::into_framed_compressor`] can run:
+/// ```compile_fail
+/// use mbrotli::framing::*;
+/// let owner = FramedCompressor::new(Default::default()).unwrap();
+/// let mut session = owner.into_session(Default::default()).unwrap();
+/// session.process(&mut [0; 16], FramedEncodeOperation::Process).unwrap();
+/// let resource = session.resource(Default::default(), Default::default()).unwrap();
+/// session.padding(1).unwrap(); // The resource still borrows the session.
+/// drop(resource);
+/// ```
+///
+/// [`Self::into_framed_compressor`] cancels the container exactly as dropping
+/// a borrowed session does and hands the encoder back for reuse. Dropping the
+/// owned session instead drops the encoder with it.
+///
+/// # Examples
+/// ```
+/// use mbrotli::{Operation, framing::*};
+/// let encoder = FramedCompressor::new(Default::default())?;
+/// let mut session = encoder.into_session(Default::default())?;
+/// let mut output = [0; 128];
+/// let mut wire = Vec::new();
+/// let p = session.process(&mut output, FramedEncodeOperation::Process)?;
+/// wire.extend_from_slice(&output[..p.produced]);
+/// {
+///     let mut resource = session.resource(Default::default(), Default::default())?;
+///     let p = resource.process(b"owned", &mut output, Operation::Finish)?;
+///     assert_eq!(p.status, FramedEncoderStatus::Finished);
+///     wire.extend_from_slice(&output[..p.produced]);
+/// }
+/// let p = session.process(&mut output, FramedEncodeOperation::Finish)?;
+/// assert_eq!(p.status, FramedEncoderStatus::Finished);
+/// wire.extend_from_slice(&output[..p.produced]);
+///
+/// let mut encoder = session.into_framed_compressor();
+/// let items = [FramedItem::Resource(FramedResource::from(&b"owned"[..]))];
+/// assert_eq!(encoder.compress(items.as_slice().into())?, wire);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug)]
+pub struct FramedEncoderSessionOwned {
+    pub(super) owner: FramedCompressor,
+}
+impl FramedEncoderSessionOwned {
+    /// Drains queued output or finalizes, as [`FramedEncoderSession::process`].
+    /// # Errors
+    /// As [`FramedEncoderSession::process`].
+    pub fn process(
+        &mut self,
+        output: &mut [u8],
+        operation: FramedEncodeOperation,
+    ) -> Result<FramedEncodeProgress, FramedEncodeFailure> {
+        self.owner.engine.process(output, operation)
+    }
+    /// Queues uncompressed metadata, as [`FramedEncoderSession::metadata`].
+    /// # Errors
+    /// As [`FramedEncoderSession::metadata`].
+    pub fn metadata(
+        &mut self,
+        kind: MetadataKind,
+        fields: &[MetadataField<'_>],
+    ) -> Result<(), FramedEncodeError> {
+        self.owner
+            .session_metadata(kind, fields, Default::default())
+    }
+    /// Queues metadata with options, as [`FramedEncoderSession::metadata_with_options`].
+    /// # Errors
+    /// As [`FramedEncoderSession::metadata_with_options`].
+    pub fn metadata_with_options(
+        &mut self,
+        kind: MetadataKind,
+        fields: &[MetadataField<'_>],
+        options: MetadataOptions<'_>,
+    ) -> Result<(), FramedEncodeError> {
+        self.owner.session_metadata(kind, fields, options)
+    }
+    /// Selects repeated fields, as [`FramedEncoderSession::repeat_metadata_fields`].
+    /// # Errors
+    /// As [`FramedEncoderSession::repeat_metadata_fields`].
+    pub fn repeat_metadata_fields(&mut self, codes: &[[u8; 2]]) -> Result<(), FramedEncodeError> {
+        self.owner.engine.repeat(codes)
+    }
+    /// Queues padding, as [`FramedEncoderSession::padding`].
+    /// # Errors
+    /// As [`FramedEncoderSession::padding`].
+    pub fn padding(&mut self, bytes: usize) -> Result<(), FramedEncodeError> {
+        self.owner.engine.padding(bytes)
+    }
+    /// Starts a compressed resource borrowing this session, as
+    /// [`FramedEncoderSession::resource`].
+    /// # Errors
+    /// As [`FramedEncoderSession::resource`].
+    pub fn resource(
+        &mut self,
+        options: ResourceOptions,
+        stream: StreamConfig,
+    ) -> Result<FramedResourceSession<'_, 'static>, FramedEncodeError> {
+        self.owner
+            .open_resource(options, stream, ResourceEncoding::Brotli, None)
+    }
+    /// Starts a resource borrowing a prepared dictionary, as
+    /// [`FramedEncoderSession::resource_with_dictionary`].
+    /// # Errors
+    /// As [`FramedEncoderSession::resource_with_dictionary`].
+    pub fn resource_with_dictionary<'s, 'dict>(
+        &'s mut self,
+        options: ResourceOptions,
+        stream: StreamConfig,
+        dictionary: &'dict PreparedDictionary,
+        references: &[DictionaryReference],
+    ) -> Result<FramedResourceSession<'s, 'dict>, FramedEncodeError> {
+        self.owner
+            .open_shared_resource(options, stream, dictionary, references)
+    }
+    /// Starts a verbatim resource, as [`FramedEncoderSession::uncompressed_resource`].
+    /// # Errors
+    /// As [`FramedEncoderSession::uncompressed_resource`].
+    pub fn uncompressed_resource(
+        &mut self,
+        options: ResourceOptions,
+    ) -> Result<FramedResourceSession<'_, 'static>, FramedEncodeError> {
+        self.owner.open_resource(
+            options,
+            Default::default(),
+            ResourceEncoding::Uncompressed,
+            None,
+        )
+    }
+    /// Accepted payload across resources, including hidden resources.
+    pub const fn total_in(&self) -> u64 {
+        self.owner.engine.total_in
+    }
+    /// Wire bytes delivered to callers, relative to this container's start.
+    pub const fn total_out(&self) -> u64 {
+        self.owner.engine.total_out
+    }
+    /// Resources whose final chunks have been completely delivered.
+    pub const fn resources_encoded(&self) -> u64 {
+        self.owner.engine.resources()
+    }
+    /// Whether the suffix was generated and fully delivered.
+    pub const fn is_finished(&self) -> bool {
+        self.owner.engine.finished()
+    }
+    /// Queued offset of the next chunk, independent of destination transport.
+    pub const fn next_chunk_offset(&self) -> u64 {
+        self.owner.engine.offset()
+    }
+    /// Ends the container and returns the encoder, ready for the next one.
+    ///
+    /// Cancels exactly as dropping a [`FramedEncoderSession`] does, whether the
+    /// container finished, is mid-way, still has output queued, or failed.
+    #[must_use]
+    pub fn into_framed_compressor(self) -> FramedCompressor {
+        let Self { mut owner } = self;
+        owner.cancel();
+        owner
     }
 }
 /// Exclusive byte-input resource guard. An unfinished drop abandons the container.

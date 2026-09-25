@@ -16,6 +16,20 @@
   which both session types share. `PreparedDictionary` and `DecodeDictionary`
   now implement `AsRef<Self>`. Existing APIs and output are unchanged.
 
+- Add `FramedEncoderSessionOwned` and `FramedDecoderSessionOwned`
+  (experimental): framed sessions that own their `FramedCompressor` or
+  `FramedDecompressor`. Create them with `FramedCompressor::into_session`,
+  `FramedDecompressor::into_session` or
+  `FramedDecompressor::into_session_with_dictionaries`, which takes an owned
+  `R: DictionaryResolver + 'static`. `into_framed_compressor` and
+  `into_framed_decompressor` cancel the operation, as dropping a borrowed
+  session does, and return the owner. Resources still open through
+  `FramedResourceSession`, and events are still lent until their last use.
+  Borrowed and owned sessions share one start path, the same engine calls and
+  one event mapping. `DictionaryResolver` is now implemented for `&T`,
+  `Box<T>` and `Arc<T>`, and the new `NoDictionaries` is the default resolver
+  type. Wire bytes, events and errors are unchanged.
+
 - Update `fearless_simd` 0.7 → 1.0 and `hotpath` 0.25 → 0.26. Follow the
   `fearless_simd` 1.0 renames: the lane-count constant `SimdBase::N` is now
   `SimdBase::LEN`, and `as_array` now borrows, so the HQ block splitter reads

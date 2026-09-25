@@ -23,7 +23,14 @@ graph TD
     Workspace --> SIMD[fearless_simd backend selected once at owner construction]
     Guard[FramedResourceSession] -. borrowed per call .-> Dictionary[external PreparedDictionary]
     Guard --> Owner
+    Borrowed[FramedEncoderSession: &mut owner] --> Owner
+    Owned[FramedEncoderSessionOwned: owner by value] --> Owner
 ```
+
+`FramedEncoderSession` borrows the owner and `FramedEncoderSessionOwned` owns
+it; neither holds state of its own. Both go through the private `begin_session`
+start path, the same `Engine` calls and resource helpers, and `cancel` on
+release. See [owned sessions](owned-sessions.md).
 
 The owner stores no sink, input slices or dictionary references. The raw operation
 state was separated from `SessionCore`'s compressor/dictionary borrows; both raw

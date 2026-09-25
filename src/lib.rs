@@ -586,7 +586,8 @@ pub mod framing;
 #[cfg(all(feature = "experimental", feature = "decompression"))]
 pub use decompressor::framing::{
     FramedDecodeConfig, FramedDecodeError, FramedDecodeFailure, FramedDecodeLimits,
-    FramedDecodeStreamConfig, FramedDecoderSession, FramedDecompressor, FramedOutput,
+    FramedDecodeStreamConfig, FramedDecoderSession, FramedDecoderSessionOwned, FramedDecompressor,
+    FramedOutput,
 };
 #[cfg(all(
     any(feature = "compression", feature = "decompression"),
@@ -609,5 +610,6 @@ pub use compressor::{
 pub use compressor::framing::{
     FramedCompressor, FramedCompressorBuilder, FramedEncodeConfig, FramedEncodeError,
     FramedEncodeFailure, FramedEncodeLocation, FramedEncodeOperation, FramedEncodeProgress,
-    FramedEncodeStreamConfig, FramedEncoderSession, FramedEncoderStatus, FramedResourceSession,
+    FramedEncodeStreamConfig, FramedEncoderSession, FramedEncoderSessionOwned, FramedEncoderStatus,
+    FramedResourceSession,
 };

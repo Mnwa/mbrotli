@@ -1,7 +1,9 @@
 # Owned sessions
 
 `EncoderSessionOwned` and `DecoderSessionOwned` are the owning counterparts of
-`EncoderSession` and `DecoderSession`. A borrowed session holds `&mut` to its
+`EncoderSession` and `DecoderSession`. `FramedEncoderSessionOwned` and
+`FramedDecoderSessionOwned` (behind `experimental`) do the same for the framed
+sessions; see [Framed sessions](#framed-sessions). A borrowed session holds `&mut` to its
 codec and borrows its dictionary; an owned session takes the `Compressor` or
 `Decompressor` by value and, when attached, the dictionary too, so it has no
 lifetime parameter. Both shapes run one shared state machine per codec. Only
@@ -157,6 +159,79 @@ sessions in [compressor](compressor.md) and
 - **No hot-path changes.** Encoder and decoder algorithms, SIMD dispatch and
   output bytes are unchanged.
 
+## Framed sessions
+
+Framed sessions keep all operation state in the owner, in its private `Engine`.
+So the owned framed sessions hold the owner itself and add no operation state.
+
+```mermaid
+graph TD
+    FC[FramedCompressor: raw Compressor + Engine] --> BE[FramedEncoderSession: &mut owner, Drop cancels]
+    FC --> OE[FramedEncoderSessionOwned: owner by value, no Drop]
+    BE --> Helpers[shared private owner helpers: session_metadata, open_resource, open_shared_resource]
+    OE --> Helpers
+    BE --> EEngine[framing core Engine]
+    OE --> EEngine
+    Helpers --> EEngine
+    BE --> Guard[FramedResourceSession: &mut FramedCompressor]
+    OE --> Guard
+    FD[FramedDecompressor: Engine + Backend] --> BD[FramedDecoderSession: &mut owner + DictionaryResolverRef, Drop cancels]
+    FD --> OD["FramedDecoderSessionOwned&lt;R = NoDictionaries&gt;: owner + Option&lt;R&gt;, no Drop"]
+    BD --> DHelpers[shared private owner helpers: session_step, session_process]
+    OD --> DHelpers
+    DHelpers --> DEngine[framed decoder Engine::process and event]
+```
+
+- **Start.** `FramedCompressor::start` and `into_session` both go through the
+  private `begin_session`: abandoned-session check, buffer-budget recovery,
+  `Engine::start`, and `active = true`. `FramedDecompressor::start`,
+  `start_with_dictionaries`, `into_session` and
+  `into_session_with_dictionaries` all go through the decoder's
+  `begin_session`: abandoned-session check, exact output size against the
+  budget, `fits_policy` recovery, stream installation, and `active = true`.
+- **Commands and processing.** Encoder methods call the same `Engine` methods,
+  or the private owner helpers for metadata and resource guards. Decoder
+  `process` calls `session_process`, which runs `session_step` (that is,
+  `Engine::process`) and then maps the `Tag` to a status and lends the event.
+  The borrowed session's `step`, used by the one-shot APIs and the reader, is
+  the same `session_step`.
+- **Resources.** The owned encoder session opens resources through the
+  existing `FramedResourceSession` guard, which borrows the owner inside the
+  session. While a guard is live, the borrow checker rejects both container
+  commands and `into_framed_compressor`. A rustdoc `compile_fail` example
+  covers this.
+- **Lending.** Owned `process<'a>(&'a mut self, …, output: &'a mut [u8])`
+  returns `FramedDecodeProgress<'a>`, exactly like the borrowed session, so a
+  live event blocks the next call. A rustdoc `compile_fail` example covers
+  this too.
+- **Owned resolvers.** The decoder resolver is owned as
+  `R: DictionaryResolver + 'static`. Each call borrows it as a
+  `DictionaryResolverRef`, which the engine uses only for that call.
+  - `DictionaryResolver` is implemented for `&T`, `Box<T>` and `Arc<T>`. The
+    `Arc` impl needs `target_has_atomic = "ptr"`.
+  - `into_session` stores `None`, which is exactly what borrowed `start` does,
+    so `NoDictionaries` is only a default type and is never asked to resolve
+    anything. Used explicitly as a resolver, it resolves nothing. That
+    produces a different error than having no resolver at all.
+- **Release.** `into_framed_compressor` and `into_framed_decompressor` call
+  the owner's existing `cancel`, the same path the borrowed `Drop` runs.
+- **Auto traits.** `FramedEncoderSessionOwned` is `Send`.
+  `FramedDecoderSessionOwned<R>` is `Send` exactly when `R` is. The borrowed
+  framed decoder session is never `Send`, because its resolver reference has
+  no `Sync` bound.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Owned: into_session*
+    Owned --> Guarded: resource / resource_with_dictionary / uncompressed_resource
+    Guarded --> Owned: guard dropped
+    Owned --> Lent: process returns Event
+    Lent --> Owned: event's last use
+    Owned --> Returned: into_framed_compressor / into_framed_decompressor (cancel)
+    Owned --> [*]: drop (owner dropped)
+    Returned --> [*]
+```
+
 ## Verification
 
 Each test file drives one set of schedules through both the borrowed and the
@@ -183,6 +258,32 @@ failures, and totals.
   - dictionaries by value, `Arc` and `&'static`;
   - `Send`.
 
+- **`tests/framed_encoder_owned_session.rs`** — borrowed and owned facades
+  run through the same driver across output widths (including 0–2 bytes),
+  payload chunks and flushes. Traces must match byte for byte, including each
+  call's result and counters, and must equal `compress` when there are no
+  flushes.
+  - Containers: empty; one resource; Brotli, uncompressed, Brotli; global,
+    resource and footer metadata with padding and repeats; and a dictionary
+    resource.
+  - A direct resource guard.
+  - Reuse after finished, header-pending, unfinished and failed containers.
+  - A start after a leaked session.
+  - `Send`.
+- **`tests/framed_decoder_owned_session.rs`** — per-call results and events
+  are recorded as debug text while each borrow is alive, and must be
+  identical.
+  - Inputs: hand-built containers and the checked-in writer fixtures, across
+    input splits (including one-byte splits) and output widths (including 0–2
+    bytes).
+  - Every truncated prefix, the final suffix contract, and Auto raw input.
+  - External dictionaries resolved through `Arc`, by value, `&'static` and
+    `Box<dyn>`.
+  - Numeric limits and exact output size.
+  - Reuse after finished, needs-input, needs-output, post-event and failed
+    operations, and a start after a leaked session.
+  - `Send`.
+
 ## Known gaps
 
 - **The consumed codec is lost on a rejected start.** A failed
@@ -190,5 +291,7 @@ failures, and totals.
 - **No `PreparedDictionary` for owned decoders.** An owned decoder session
   cannot decode with a `PreparedDictionary`. The borrowed session still can,
   through `DictionaryRef::Prepared`.
+- **The framed seek reader and the std readers and writers still borrow their
+  owners.** No owned variants were added.
 - **The fuzz targets don't exercise owned sessions yet.** Parity with the
   borrowed sessions is established by the integration tests.

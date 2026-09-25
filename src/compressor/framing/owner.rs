@@ -171,10 +171,25 @@ impl FramedCompressor {
             active: false,
         }
     }
+    /// Releases the active container; the one path both session shapes end on.
     pub(super) fn cancel(&mut self) {
         self.engine.clear(&mut self.raw);
         self.active = false;
         self.trim(self.retention);
+    }
+    /// Claims the owner for one container and queues its header.
+    ///
+    /// The single start path behind [`Self::start`] and [`Self::into_session`].
+    fn begin_session(&mut self, stream: FramedEncodeStreamConfig) -> Result<(), E> {
+        if self.active {
+            return Err(E::AbandonedSession);
+        }
+        if self.engine.retained_bytes() > self.config.framing_config().max_buffer_bytes {
+            self.recover();
+        }
+        self.engine.start(stream)?;
+        self.active = true;
+        Ok(())
     }
     /// Starts one exclusive container and queues its header without I/O.
     /// # Errors
@@ -224,15 +239,37 @@ impl FramedCompressor {
         &mut self,
         stream: FramedEncodeStreamConfig,
     ) -> Result<FramedEncoderSession<'_>, E> {
-        if self.active {
-            return Err(E::AbandonedSession);
-        }
-        if self.engine.retained_bytes() > self.config.framing_config().max_buffer_bytes {
-            self.recover();
-        }
-        self.engine.start(stream)?;
-        self.active = true;
+        self.begin_session(stream)?;
         Ok(FramedEncoderSession { owner: self })
+    }
+    /// Starts one container that takes ownership of this encoder.
+    ///
+    /// Validates and starts exactly as [`Self::start`] does, but the returned
+    /// [`FramedEncoderSessionOwned`] owns the encoder instead of borrowing it.
+    /// Recover the encoder with [`FramedEncoderSessionOwned::into_framed_compressor`].
+    /// # Errors
+    /// As [`Self::start`]. The encoder is dropped with the error; use
+    /// [`Self::start`] when it must survive a rejected start.
+    /// # Examples
+    /// ```
+    /// use mbrotli::framing::*;
+    /// let encoder = FramedCompressor::new(Default::default())?;
+    /// let mut session = encoder.into_session(Default::default())?;
+    /// let mut output = [0; 128];
+    /// let progress = session.process(&mut output, FramedEncodeOperation::Process)?;
+    /// assert_eq!(&output[..4], &[0x91, 10, 66, 82]);
+    /// assert_eq!(progress.status, FramedEncoderStatus::NeedsInput);
+    /// // The unfinished container is cancelled; the encoder starts afresh.
+    /// let mut encoder = session.into_framed_compressor();
+    /// assert_eq!(encoder.start(Default::default())?.total_out(), 0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn into_session(
+        mut self,
+        stream: FramedEncodeStreamConfig,
+    ) -> Result<FramedEncoderSessionOwned, E> {
+        self.begin_session(stream)?;
+        Ok(FramedEncoderSessionOwned { owner: self })
     }
     /// Encodes borrowed resources and metadata as one finalized container.
     /// # Errors

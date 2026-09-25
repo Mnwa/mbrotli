@@ -50,7 +50,7 @@ FFI do not appear in public signatures. Each codec compiles independently.
 | [Fast encoder](fast-encoder.md) | Qualities 0–1: fragments, entropy coding and SIMD scans. |
 | [Greedy encoder](greedy-encoder.md) | Qualities 2–9: fixed boxed tables, in-place compact-map rehashing and buffer migration, store-rate-driven mid-stream sparse-to-dense promotion, bounded pool growth, match scoring and meta-blocks. |
 | [High-quality encoder](hq-encoder.md) | Qualities 10–11: tree search, command-price rows, ordered starts and clustering. |
-| [Owned sessions](owned-sessions.md) | Lifetime-free encoder and decoder sessions sharing the borrowed state machines and release paths. |
+| [Owned sessions](owned-sessions.md) | Lifetime-free raw and framed sessions sharing the borrowed state machines, engines and release paths. |
 | [Parallel compression](parallel-compression.md) | Planning, encoder reconfiguration, caller-run tasks, staging and assembly. |
 
 ## Decompression

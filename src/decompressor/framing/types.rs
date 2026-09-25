@@ -436,6 +436,71 @@ pub trait DictionaryResolver {
     fn resolve(&self, request: ExternalDictionaryRequest) -> Option<&[u8]>;
 }
 
+impl<T: DictionaryResolver + ?Sized> DictionaryResolver for &T {
+    /// Resolves through the borrowed resolver, so a `&'static` one can be owned.
+    fn resolve(&self, request: ExternalDictionaryRequest) -> Option<&[u8]> {
+        (**self).resolve(request)
+    }
+}
+impl<T: DictionaryResolver + ?Sized> DictionaryResolver for alloc::boxed::Box<T> {
+    /// Resolves through the boxed resolver.
+    fn resolve(&self, request: ExternalDictionaryRequest) -> Option<&[u8]> {
+        (**self).resolve(request)
+    }
+}
+#[cfg(target_has_atomic = "ptr")]
+impl<T: DictionaryResolver + ?Sized> DictionaryResolver for alloc::sync::Arc<T> {
+    /// Resolves through the shared resolver, so sessions can share one without copying.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use mbrotli::framing::*;
+    /// struct Prefix;
+    /// impl DictionaryResolver for Prefix {
+    ///     fn resolve(&self, _: ExternalDictionaryRequest) -> Option<&[u8]> { Some(b"prefix") }
+    /// }
+    /// let shared = Arc::new(Prefix);
+    /// let request = ExternalDictionaryRequest {
+    ///     id: DictionaryId([7; 32]), kind: ExternalDictionaryKind::Prefix,
+    /// };
+    /// assert_eq!(shared.resolve(request), Some(&b"prefix"[..]));
+    /// # Ok::<(), FramedDecodeError>(())
+    /// ```
+    fn resolve(&self, request: ExternalDictionaryRequest) -> Option<&[u8]> {
+        (**self).resolve(request)
+    }
+}
+
+/// The resolver type of an owned framed session started without dictionaries.
+///
+/// It is the default type parameter of
+/// [`FramedDecoderSessionOwned`](super::FramedDecoderSessionOwned). A session
+/// started by [`into_session`](super::FramedDecompressor::into_session) has no
+/// resolver at all, exactly like
+/// [`start`](super::FramedDecompressor::start); this type is never consulted
+/// there. Used as a resolver in its own right, it resolves nothing.
+///
+/// # Examples
+///
+/// ```
+/// use mbrotli::framing::*;
+/// let request = ExternalDictionaryRequest {
+///     id: DictionaryId([7; 32]), kind: ExternalDictionaryKind::Prefix,
+/// };
+/// assert_eq!(NoDictionaries.resolve(request), None);
+/// ```
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+pub struct NoDictionaries;
+
+impl DictionaryResolver for NoDictionaries {
+    /// Resolves no dictionary.
+    fn resolve(&self, _: ExternalDictionaryRequest) -> Option<&[u8]> {
+        None
+    }
+}
+
 /// Borrowed external dictionary lookup accepted by framed decoder entry points.
 ///
 /// A shared reference to any [`DictionaryResolver`] converts automatically.

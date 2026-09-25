@@ -25,6 +25,9 @@ pub enum FramedDecoderStatus<'a> {
 }
 /// Exclusive operation. External borrows live only here; Drop cancels without I/O.
 ///
+/// The session borrows its [`FramedDecompressor`]; [`FramedDecoderSessionOwned`]
+/// is the same operation owning it instead.
+///
 /// Forgetting a session protects the owner until `recover` or `reconfigure`.
 /// Borrowed events prevent another mutating call until their last use.
 ///
@@ -88,28 +91,8 @@ impl FramedDecoderSession<'_, '_> {
         output: &'a mut [u8],
         operation: DecodeOperation,
     ) -> Result<FramedDecodeProgress<'a>, FramedDecodeFailure> {
-        let (consumed, produced, tag) = self.step(input, output, operation)?;
-        let status = match tag {
-            Tag::Input => FramedDecoderStatus::NeedsInput,
-            Tag::Output => FramedDecoderStatus::NeedsOutput,
-            Tag::Finished => FramedDecoderStatus::Finished,
-            _ => FramedDecoderStatus::Event(
-                self.owner
-                    .engine
-                    .event(tag, &output[..produced])
-                    .ok_or(FramedDecodeFailure {
-                        error: FramedDecodeError::InvalidState,
-                        consumed,
-                        produced,
-                        last_output: None,
-                    })?,
-            ),
-        };
-        Ok(FramedDecodeProgress {
-            consumed,
-            produced,
-            status,
-        })
+        self.owner
+            .session_process(self.resolver, input, output, operation)
     }
     // The by-value failure contract preserves progress even when allocation fails;
     // boxing this 128-byte record would require an allocation on the error path.
@@ -124,8 +107,7 @@ impl FramedDecoderSession<'_, '_> {
         operation: DecodeOperation,
     ) -> Result<(usize, usize, Tag), FramedDecodeFailure> {
         self.owner
-            .engine
-            .process(input, output, operation, self.owner.backend, self.resolver)
+            .session_step(self.resolver, input, output, operation)
     }
     /// Accepted wire bytes, including failing calls.
     ///
@@ -223,6 +205,191 @@ impl ::core::fmt::Debug for FramedDecoderSession<'_, '_> {
             .field("total_in", &self.total_in())
             .field("total_out", &self.total_out())
             .field("format", &self.input_format())
+            .finish_non_exhaustive()
+    }
+}
+
+// The call bodies shared by the borrowed and owned session facades.
+impl FramedDecompressor {
+    // The by-value failure contract preserves progress even when allocation fails;
+    // boxing this 128-byte record would require an allocation on the error path.
+    #[expect(
+        clippy::result_large_err,
+        reason = "allocation-independent progress is part of the public contract"
+    )]
+    fn session_step(
+        &mut self,
+        resolver: Option<DictionaryResolverRef<'_>>,
+        input: &[u8],
+        output: &mut [u8],
+        operation: DecodeOperation,
+    ) -> Result<(usize, usize, Tag), FramedDecodeFailure> {
+        self.engine
+            .process(input, output, operation, self.backend, resolver)
+    }
+    /// Runs one step and lends its event from `output` and the engine for `'a`.
+    // The by-value failure contract preserves progress even when allocation fails;
+    // boxing this 128-byte record would require an allocation on the error path.
+    #[expect(
+        clippy::result_large_err,
+        reason = "allocation-independent progress is part of the public contract"
+    )]
+    fn session_process<'a>(
+        &'a mut self,
+        resolver: Option<DictionaryResolverRef<'_>>,
+        input: &[u8],
+        output: &'a mut [u8],
+        operation: DecodeOperation,
+    ) -> Result<FramedDecodeProgress<'a>, FramedDecodeFailure> {
+        let (consumed, produced, tag) = self.session_step(resolver, input, output, operation)?;
+        let status = match tag {
+            Tag::Input => FramedDecoderStatus::NeedsInput,
+            Tag::Output => FramedDecoderStatus::NeedsOutput,
+            Tag::Finished => FramedDecoderStatus::Finished,
+            _ => FramedDecoderStatus::Event(self.engine.event(tag, &output[..produced]).ok_or(
+                FramedDecodeFailure {
+                    error: FramedDecodeError::InvalidState,
+                    consumed,
+                    produced,
+                    last_output: None,
+                },
+            )?),
+        };
+        Ok(FramedDecodeProgress {
+            consumed,
+            produced,
+            status,
+        })
+    }
+}
+
+/// Exclusive operation that owns its [`FramedDecompressor`].
+///
+/// [`FramedDecoderSession`] borrows its decoder with `&mut` and its resolver
+/// for `'dict`. This session owns both, so a composition layer can hold the
+/// whole streaming operation as one value with no lifetime. It keeps no
+/// references into its own fields, and it is the same synchronous,
+/// caller-driven API: calls run the borrowed session's code on the same
+/// framing engine, so events, progress and errors are identical.
+///
+/// `R` is the owned resolver of external dictionaries. A session started by
+/// [`FramedDecompressor::into_session`] has none and leaves `R` at its default,
+/// [`NoDictionaries`]. The session is `Send` exactly when `R` is.
+///
+/// Events still borrow the session and `output`, so the next call cannot run
+/// while an event is alive:
+/// ```compile_fail
+/// use mbrotli::framing::{FramedDecompressor, FramedDecodeConfig, InputMode};
+/// use mbrotli::DecodeOperation;
+/// let decoder = FramedDecompressor::new(
+///     FramedDecodeConfig::default().with_input_mode(InputMode::Auto)).unwrap();
+/// let mut session = decoder.into_session(Default::default()).unwrap();
+/// let mut output = [0; 1];
+/// let event = session.process(&[0x3b], &mut output, DecodeOperation::Finish).unwrap();
+/// session.process(&[0x3b], &mut [], DecodeOperation::Finish).unwrap();
+/// println!("{event:?}"); // The first borrow is still live.
+/// ```
+///
+/// [`Self::into_framed_decompressor`] cancels the object exactly as dropping a
+/// borrowed session does and hands the decoder back for reuse. Dropping the
+/// owned session instead drops the decoder with it.
+///
+/// # Examples
+///
+/// ```
+/// use mbrotli::framing::*;
+/// use mbrotli::DecodeOperation;
+/// let bytes = [0x91, 10, 66, 82, 0, 6, 2, 0, 0, b'a', b'b', b'c'];
+/// let decoder = FramedDecompressor::new(Default::default())?;
+/// let mut session = decoder.into_session(Default::default())?;
+/// let mut remaining = bytes.as_slice();
+/// let mut payload = Vec::new();
+/// loop {
+///     let mut buffer = [0; 1];
+///     let progress = session.process(remaining, &mut buffer, DecodeOperation::Finish)?;
+///     remaining = &remaining[progress.consumed..];
+///     match progress.status {
+///         FramedDecoderStatus::Event(FramedEvent::ResourceData(data)) =>
+///             payload.extend_from_slice(data.bytes),
+///         FramedDecoderStatus::Finished => break,
+///         _ => {}
+///     }
+/// }
+/// assert_eq!(payload, b"abc");
+/// let decoder = session.into_framed_decompressor();
+/// let next = decoder.into_session(Default::default())?;
+/// assert_eq!(next.total_in(), 0);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub struct FramedDecoderSessionOwned<R = NoDictionaries> {
+    pub(super) owner: FramedDecompressor,
+    pub(super) resolver: Option<R>,
+}
+impl<R: DictionaryResolver + 'static> FramedDecoderSessionOwned<R> {
+    /// Advances one object, as [`FramedDecoderSession::process`].
+    ///
+    /// Output events borrow `output[..produced]` and the session for `'a`.
+    ///
+    /// # Errors
+    /// As [`FramedDecoderSession::process`].
+    // The by-value failure contract preserves progress even when allocation fails;
+    // boxing this 128-byte record would require an allocation on the error path.
+    #[expect(
+        clippy::result_large_err,
+        reason = "allocation-independent progress is part of the public contract"
+    )]
+    pub fn process<'a>(
+        &'a mut self,
+        input: &[u8],
+        output: &'a mut [u8],
+        operation: DecodeOperation,
+    ) -> Result<FramedDecodeProgress<'a>, FramedDecodeFailure> {
+        let resolver = self.resolver.as_ref().map(DictionaryResolverRef::from);
+        self.owner
+            .session_process(resolver, input, output, operation)
+    }
+    /// Accepted wire bytes, including failing calls.
+    pub const fn total_in(&self) -> u64 {
+        self.owner.engine.total_in
+    }
+    /// Delivered resource bytes, including failing calls.
+    pub const fn total_out(&self) -> u64 {
+        self.owner.engine.total_out
+    }
+    /// Regenerated resource and metadata bytes.
+    pub const fn total_decoded(&self) -> u64 {
+        self.owner.engine.total_decoded
+    }
+    /// Locally completed resource payloads; not an authentication count.
+    pub const fn resources_decoded(&self) -> u64 {
+        self.owner.engine.completed
+    }
+    /// Whether all object validation succeeded.
+    pub const fn is_finished(&self) -> bool {
+        self.owner.engine.finished
+    }
+    /// Selected input format, or `None` before detection.
+    pub const fn input_format(&self) -> Option<StreamInfo> {
+        self.owner.engine.format
+    }
+    /// Ends the object and returns the decoder, ready for the next one.
+    ///
+    /// Cancels exactly as dropping a [`FramedDecoderSession`] does, after a
+    /// finished, incomplete, backpressured or failed operation. The resolver
+    /// is dropped.
+    #[must_use]
+    pub fn into_framed_decompressor(self) -> FramedDecompressor {
+        let Self { mut owner, .. } = self;
+        owner.cancel();
+        owner
+    }
+}
+impl<R> ::core::fmt::Debug for FramedDecoderSessionOwned<R> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("FramedDecoderSessionOwned")
+            .field("total_in", &self.owner.engine.total_in)
+            .field("total_out", &self.owner.engine.total_out)
+            .field("format", &self.owner.engine.format)
             .finish_non_exhaustive()
     }
 }

@@ -69,7 +69,12 @@ need native execution evidence. Runtime checks and measurements are recorded bel
 
 `FramedDecompressor` owns configuration, the selected `Backend`, retention policy,
 raw `Stream` workspace and framing bookkeeping. `start` and
-`start_with_dictionaries` create an exclusive `FramedDecoderSession`. Sessions and the std seek reader borrow resolvers through
+`start_with_dictionaries` create an exclusive `FramedDecoderSession`;
+`into_session` and `into_session_with_dictionaries` create a
+`FramedDecoderSessionOwned` that owns the decoder and a
+`R: DictionaryResolver + 'static` resolver. Both go through one private
+`begin_session`, one `session_process` event path over `Engine::process`, and
+`cancel` on release. See [owned sessions](owned-sessions.md). Sessions and the std seek reader borrow resolvers through
 `DictionaryResolverRef`. Dictionary-taking
 entry points accept `impl Into<DictionaryResolverRef<'dict>>`; borrowed concrete
 resolvers convert without allocation. The wrapper privately erases the resolver
@@ -87,6 +92,8 @@ classDiagram
     Engine *-- Stream
     FramedDecoderSession --> FramedDecompressor : exclusive borrow
     FramedDecoderSession --> DictionaryResolver : immutable operation borrow
+    FramedDecoderSessionOwned *-- FramedDecompressor
+    FramedDecoderSessionOwned *-- DictionaryResolver : optional owned R
     FramedReader *-- FramedDecoderSession
     FramedReader *-- BufRead
     Engine --> FramedOutput : transfer validated metadata and layout
