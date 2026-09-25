@@ -338,7 +338,7 @@ pub(crate) fn assign_blocks<S: Simd>(simd: S, input: BlockCosts<'_>) {
                 }
                 let mut min_cost = 1e99;
                 let mut best_id = u64::MAX;
-                for (value, id) in minima.as_array().into_iter().zip(ids.as_array()) {
+                for (value, id) in minima.to_array().into_iter().zip(ids.to_array()) {
                     if value < min_cost || (value == min_cost && id < best_id) {
                         min_cost = value;
                         best_id = id;

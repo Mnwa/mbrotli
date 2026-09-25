@@ -334,7 +334,7 @@ graph TD
     C --> E0["match_len_at: first word settled scalar"]
     D --> E0
     E0 -->|"first word equal"| E["match_len_windows&lt;S&gt; over the rest"]
-    E --> F{"S::u8s::N"}
+    E --> F{"S::u8s::LEN"}
     F -->|16| G["u8x16 loop, stride 16"]
     F -->|32| H["u8x32 loop, stride 32"]
     F -->|64| I["u8x64 loop, stride 64"]
@@ -379,7 +379,7 @@ rather than the lane count: every width without a vector loop degrades to the
 byte scan, whose stride is one. Rounding by a lane count the scan does not use
 would round the window up past what the scan can report and truncate a match
 that ran to the limit. No backend `fearless_simd` ships reaches that arm —
-NEON, SSE2 and the fallback all have `u8s::N == 16` — so it is an invariant kept
+NEON, SSE2 and the fallback all have `u8s::LEN == 16` — so it is an invariant kept
 honest rather than a live path.
 
 ### 7.2. Vector entry

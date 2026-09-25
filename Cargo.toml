@@ -23,7 +23,7 @@ exclude = [
 ]
 
 [dependencies.fearless_simd]
-version = "0.7"
+version = "1"
 optional = true
 default-features = false
 
@@ -40,7 +40,7 @@ optional = true
 # the proc-macro crate into its tree; every `#[hotpath::measure]` anchor in
 # `src/` is written as `#[cfg_attr(feature = "hotpath", hotpath::measure)]`.
 [dependencies.hotpath]
-version = "0.25"
+version = "0.26"
 optional = true
 
 [dev-dependencies]
@@ -49,7 +49,7 @@ tempfile = "3.27"
 
 # Retain the independent scalar oracle only for development builds.
 [dev-dependencies.fearless_simd]
-version = "0.7"
+version = "1"
 default-features = false
 features = ["force_support_fallback", "std"]
 

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Update `fearless_simd` 0.7 → 1.0 and `hotpath` 0.25 → 0.26. Follow the
+  `fearless_simd` 1.0 renames: the lane-count constant `SimdBase::N` is now
+  `SimdBase::LEN`, and `as_array` now borrows, so the HQ block splitter reads
+  its lane minima through `to_array`. Encoded bytes are unchanged.
+
 - Refresh the implementation comparison: Burli 0.3.1 → 0.3.2 and Rust brotli's
   decoder (`brotli-decompressor`) 6.0.0 → 6.0.1; Rust brotli 9.0.0 and
   simd-brotli 10.0.1 are already the latest releases. Re-measure all 432

@@ -190,7 +190,7 @@ vector_scan!(match_len_vectors_64, u8x64, 64);
 /// byte-at-a-time scan, whose stride is one.
 #[inline(always)]
 const fn native_vector_stride<S: Simd>() -> usize {
-    match <S::u8s as SimdBase<S>>::N {
+    match <S::u8s as SimdBase<S>>::LEN {
         16 => 16,
         32 => 32,
         64 => 64,
@@ -200,11 +200,11 @@ const fn native_vector_stride<S: Simd>() -> usize {
 
 /// Runs the vector scan with the backend's native lane count baked in.
 ///
-/// The match resolves at monomorphisation time, because `S::u8s::N` is a
+/// The match resolves at monomorphisation time, because `S::u8s::LEN` is a
 /// constant for every backend; no branch survives into the generated code.
 #[inline(always)]
 fn match_len_native_vectors<S: Simd>(simd: S, left: &[u8], right: &[u8]) -> usize {
-    match <S::u8s as SimdBase<S>>::N {
+    match <S::u8s as SimdBase<S>>::LEN {
         16 => match_len_vectors_16(simd, left, right),
         32 => match_len_vectors_32(simd, left, right),
         64 => match_len_vectors_64(simd, left, right),
