@@ -294,13 +294,23 @@ pub(crate) fn create_backward_references<
     // so they are refreshed here and again whenever a command changes them.
     prepare_distance_cache(&mut state.dist_cache, block.last_distances);
 
-    let mut cursor = matcher.visit_run(SearchLoop::<S, ENABLE_PREFIX, INDEPENDENT> {
-        simd,
-        block,
-        cursor,
-        state,
-        commands,
-    });
+    let mut cursor = cursor;
+    let mut advance = matcher.checkpoint(position, num_bytes);
+    loop {
+        cursor = matcher.visit_run(SearchLoop::<S, ENABLE_PREFIX, INDEPENDENT> {
+            simd,
+            block,
+            // At least one position, so every pass makes progress.
+            yield_at: cursor.position.saturating_add(advance.max(1)),
+            cursor,
+            state: &mut *state,
+            commands: &mut *commands,
+        });
+        if cursor.position + M::HASH_TYPE_LENGTH >= pos_end {
+            break;
+        }
+        advance = matcher.checkpoint(cursor.position, pos_end - cursor.position);
+    }
 
     cursor.insert_length += pos_end - cursor.position;
     state.last_insert_len = cursor.insert_length;
@@ -311,6 +321,9 @@ pub(crate) fn create_backward_references<
 struct SearchLoop<'a, S, const ENABLE_PREFIX: bool, const INDEPENDENT: bool> {
     simd: S,
     block: Block<'a>,
+    /// Position from which the loop hands control back to the matcher
+    /// (see [`Matcher::checkpoint`]).
+    yield_at: usize,
     cursor: Cursor,
     state: &'a mut ReferenceState,
     commands: &'a mut Vec<Command>,
@@ -336,16 +349,22 @@ impl<S: Simd, const ENABLE_PREFIX: bool, const INDEPENDENT: bool> RunVisitor
         let Self {
             simd,
             mut block,
+            yield_at,
             cursor,
             state,
             commands,
         } = self;
         let pos_end = block.pos_end;
-        block.store_end = if pos_end - cursor.position >= R::STORE_LOOKAHEAD {
+        // `store_end` still holds the block's first position, so a loop
+        // resumed after a checkpoint bounds its stores as the first did.
+        block.store_end = if pos_end - block.store_end >= R::STORE_LOOKAHEAD {
             pos_end - R::STORE_LOOKAHEAD + 1
         } else {
-            cursor.position
+            block.store_end
         };
+        // One bound for both exits: the end of the searchable input and
+        // the checkpoint, so resuming costs the loop nothing.
+        let loop_end = pos_end.saturating_sub(R::HASH_TYPE_LENGTH).min(yield_at);
         let block = block;
         // Enter the selected feature context after specializing the matcher.
         // This keeps vector operations inline without merging every matcher
@@ -368,7 +387,7 @@ impl<S: Simd, const ENABLE_PREFIX: bool, const INDEPENDENT: bool> RunVisitor
                     mut insert_length,
                     mut apply_random_heuristics,
                 } = cursor;
-                while position + R::HASH_TYPE_LENGTH < pos_end {
+                while position < loop_end {
                     let max_length = pos_end - position;
                     let mut sr = SearchResult::empty();
                     hot.search::<S, R, ENABLE_PREFIX>(
@@ -542,7 +561,7 @@ fn commit_match<S: Simd, R: MatchRun, const ENABLE_PREFIX: bool, const INDEPENDE
 mod tests {
     use super::*;
     use crate::compressor::core::greedy::hashers::{
-        INITIAL_DISTANCE_CACHE, NUM_REMEMBERED_DISTANCES, QuickMatcher,
+        self, BucketMatcher, INITIAL_DISTANCE_CACHE, NUM_REMEMBERED_DISTANCES, QuickMatcher,
     };
     use crate::compressor::core::greedy::params::GreedyQuality;
     use crate::compressor::{CompressParams, QualityLevel, WindowBits};
@@ -714,6 +733,163 @@ mod tests {
             let code = compute_distance_code(distance, 1 << 20, &cache);
             assert!(code < 16 || code == distance + 15, "distance {distance}");
         }
+    }
+
+    /// Delegates to `M` but asks the search loop to hand control back every
+    /// `interval` positions.
+    struct Yielding<M> {
+        inner: M,
+        interval: usize,
+        checkpoints: usize,
+    }
+
+    impl<M: Matcher> Matcher for Yielding<M> {
+        const HASH_TYPE_LENGTH: usize = M::HASH_TYPE_LENGTH;
+        const STORE_LOOKAHEAD: usize = M::STORE_LOOKAHEAD;
+
+        fn visit_run<V: RunVisitor>(&mut self, visitor: V) -> V::Output {
+            self.inner.visit_run(visitor)
+        }
+
+        fn last_distances_to_check(&self) -> usize {
+            self.inner.last_distances_to_check()
+        }
+
+        fn checkpoint(&mut self, position: usize, remaining: usize) -> usize {
+            self.checkpoints += 1;
+            self.inner.checkpoint(position, remaining);
+            self.interval
+        }
+
+        fn prepare(
+            &mut self,
+            one_shot: bool,
+            input_size: usize,
+            data: &[u8],
+            clear: bool,
+        ) -> hashers::Sweep {
+            self.inner.prepare(one_shot, input_size, data, clear)
+        }
+
+        fn store(&mut self, data: &[u8], mask: usize, ix: usize) {
+            self.inner.store(data, mask, ix);
+        }
+
+        fn find_longest_match<S: Simd>(
+            &mut self,
+            simd: S,
+            stats: &mut DictionaryStats,
+            query: MatchQuery<'_>,
+            out: &mut SearchResult,
+        ) {
+            self.inner.find_longest_match(simd, stats, query, out);
+        }
+    }
+
+    /// Runs one block of `payload` through `matcher` at `quality`; `data`
+    /// is the payload plus the tail the match finder may read past it.
+    fn references<M: Matcher>(
+        quality: QualityLevel,
+        matcher: &mut M,
+        data: &[u8],
+        payload: usize,
+    ) -> (Vec<Command>, ReferenceState) {
+        let params = params(quality);
+        matcher.prepare(true, payload, data, true);
+        let mut state = ReferenceState::default();
+        let mut commands = Vec::new();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
+        let window = Window {
+            data,
+            mask: usize::MAX,
+        };
+        let span = BlockSpan {
+            position: 0,
+            bytes: payload as u32,
+        };
+        dispatch!(level, simd => create_backward_references::<_, _, false, false>(
+            simd, matcher, &params, window, span, None, &mut state, &mut commands,
+        ));
+        (commands, state)
+    }
+
+    #[test]
+    fn a_search_resumed_at_every_checkpoint_emits_the_same_commands() {
+        let mut data: Vec<u8> = b"the quick brown fox jumps over the lazy dog; "
+            .iter()
+            .chain(b"a b c d e f g h i j k l m n o p q r s t u v w x y z ")
+            .copied()
+            .cycle()
+            .take(20_000)
+            .enumerate()
+            .map(|(i, byte)| if i % 97 == 0 { (i % 251) as u8 } else { byte })
+            .collect();
+        let payload = data.len();
+        data.extend_from_slice(&[0u8; 8]);
+        // Zero still advances one position per pass.
+        for interval in [0, 1, 7, 4096] {
+            let expected = references(
+                QualityLevel::Q3,
+                &mut QuickMatcher::<{ 1 << 16 }, 1, 5, false>::new(),
+                &data,
+                payload,
+            );
+            let mut yielding = Yielding {
+                inner: QuickMatcher::<{ 1 << 16 }, 1, 5, false>::new(),
+                interval,
+                checkpoints: 0,
+            };
+            let actual = references(QualityLevel::Q3, &mut yielding, &data, payload);
+            assert!(yielding.checkpoints > 1, "interval {interval}");
+            assert_eq!(actual.0, expected.0, "interval {interval}");
+            assert_eq!(actual.1.last_insert_len, expected.1.last_insert_len);
+            assert_eq!(actual.1.dist_cache, expected.1.dist_cache);
+
+            type Q7 = BucketMatcher<false, { 1 << 15 }, 64, { (1 << 15) * 64 }>;
+            let expected = references(QualityLevel::Q7, &mut Q7::new(payload), &data, payload);
+            let mut yielding = Yielding {
+                inner: Q7::new(payload),
+                interval,
+                checkpoints: 0,
+            };
+            let actual = references(QualityLevel::Q7, &mut yielding, &data, payload);
+            assert!(yielding.checkpoints > 1, "interval {interval}");
+            assert_eq!(actual.0, expected.0, "interval {interval}");
+            assert_eq!(actual.1.last_insert_len, expected.1.last_insert_len);
+        }
+    }
+
+    #[test]
+    fn the_yielding_wrapper_stores_and_searches_through_its_matcher() {
+        let data = b"abcdefgh abcdefgh ........".to_vec();
+        let mut yielding = Yielding {
+            inner: QuickMatcher::<{ 1 << 16 }, 1, 5, false>::new(),
+            interval: 1,
+            checkpoints: 0,
+        };
+        yielding.prepare(true, data.len(), &data, true);
+        yielding.store(&data, usize::MAX, 0);
+        let cache = INITIAL_DISTANCE_CACHE;
+        let query = MatchQuery {
+            #[cfg(feature = "experimental")]
+            custom: None,
+            data: &data,
+            window: &data,
+            mask: usize::MAX,
+            cache: &cache,
+            cur_ix: 9,
+            max_length: data.len() - 9,
+            max_backward: 9,
+            position_offset: 0,
+            dictionary_limit: 9,
+            gap: 0,
+            max_distance: u32::MAX as usize,
+        };
+        let mut out = SearchResult::empty();
+        let mut stats = DictionaryStats::default();
+        let level = Level::try_detect().unwrap_or_else(Level::baseline);
+        dispatch!(level, simd => yielding.find_longest_match(simd, &mut stats, query, &mut out));
+        assert_eq!((out.distance, out.len), (9, 9));
     }
 
     #[test]

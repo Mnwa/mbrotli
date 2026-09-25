@@ -255,9 +255,11 @@ Compact one-shot streams instead link their stores into one chain. Promotion
 from compact to sparse reuses the larger word buffer; promotion from sparse to
 dense flattens the larger position and tag pools and releases the unused storage.
 A prepared sparse or dense table remains in use even for subsequent tiny streams. The dense layout, taken when the matcher's size hint is at
-least the shape's dense limit (a sixteenth of the table for tagged q5/q6
-shapes; for deep q7–q9 shapes an eighth on the first stream and a
-sixty-fourth once the matcher is reused), preallocates every
+least the shape's dense limit (a thirty-second of the table for the tagged
+q5 shape and a sixteenth for q6; for deep q7–q9 shapes an eighth on the
+first stream and a sixty-fourth once the matcher is reused), or switched to
+mid-stream by a sparse stream whose store rate repays the clear (a fresh
+table the live buckets are copied into), preallocates every
 block at `key << block_bits`, zeroed once per matcher, and clears only its
 `u16` counters per stream. Counters, or the generation stamp, govern
 validity; a block's stale bytes are never read. Preparation reports

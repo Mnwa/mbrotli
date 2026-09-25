@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+- Refresh the implementation comparison: Burli 0.3.1 → 0.3.2 and Rust brotli's
+  decoder (`brotli-decompressor`) 6.0.0 → 6.0.1; Rust brotli 9.0.0 and
+  simd-brotli 10.0.1 are already the latest releases. Re-measure all 432
+  encoder and 384 decoder cases on 2026-09-25 and regenerate the quality
+  pages, charts, reports and environment records; archive both size manifests.
+
+- Speed up cold greedy compression at qualities 5–8 without changing the
+  encoded bytes. Quality 5 now takes the dense bucket table from 32 KiB of
+  input (was 64 KiB). A sparse bucket table now switches to the dense layout
+  mid-stream when the store rate measured every 16 KiB predicts that the
+  rest of the stream repays clearing the table. The search loop hands
+  control back at these checkpoints at no per-position cost. Cold time
+  against the previous code (alternating runs, minimum of three): q5 text
+  and incompressible 32–48 KiB 25–29% faster, q6 text 96 KiB 14%, q7 text
+  and map data 150–430 KiB 5–11%, q7 incompressible 384 KiB 14%, q8
+  incompressible 1 MiB 30%. Inputs of at most 16 KiB are unchanged; q8 on
+  the 152 KB alice29 text is about 3% slower, since it switches late in the
+  stream and pays the 16 MiB clear.
+
 - Reuse the greedy compact key map allocation during growth and reset. Rehash
   wrapping probe clusters in place after resizing, preserving keys and values.
 

@@ -312,6 +312,18 @@ pub(crate) trait Matcher {
         NUM_REMEMBERED_DISTANCES
     }
 
+    /// Lets the matcher reorganize its tables before a search resumes at
+    /// `position`, with `remaining` bytes of the current block still to
+    /// come; returns how many positions the search may advance before it
+    /// calls back, or `usize::MAX` if it never has to.
+    ///
+    /// Only the layout changes: every candidate a search would have seen is
+    /// still seen, in the same order, so the output does not depend on when
+    /// or whether the matcher reorganizes.
+    fn checkpoint(&mut self, _position: usize, _remaining: usize) -> usize {
+        usize::MAX
+    }
+
     /// Clears the table before the first block (`Prepare`).
     ///
     /// `clear` may be false only when construction or a previous reset sweep
@@ -890,6 +902,14 @@ impl<
 /// slots indexes after a sixteen-kilobyte clear.
 const COMPACT_INPUT_LIMIT: usize = 1024;
 
+/// Positions an on-demand search runs between two looks at its store rate
+/// (see [`Matcher::checkpoint`]).
+///
+/// Long enough that a repetitive input, which stores at almost every
+/// position of its first few kibibytes and then copies for the rest, has
+/// usually reached its long copy before it is first judged.
+const CHECKPOINT_INTERVAL: usize = 1 << 14;
+
 /// Slots a starter block holds; a bucket's fifth store grows it to full depth.
 ///
 /// Quality nine keeps two hundred and fifty-six positions per bucket, a
@@ -1092,6 +1112,12 @@ struct SparseLayout<const BUCKETS: usize, const BLOCK: usize> {
     block_tags: Vec<[u8; BLOCK]>,
     starters: Vec<[u32; STARTER_SLOTS]>,
     starter_tags: Vec<[u8; STARTER_SLOTS]>,
+    /// Positions stored this stream, and the count and stream position at
+    /// the last [`Matcher::checkpoint`]: the store rate they give decides
+    /// whether the rest of the stream repays the dense table.
+    stores: usize,
+    checked_stores: usize,
+    checked_position: usize,
 }
 
 /// Preallocated buckets; only their counters are cleared between streams.
@@ -1203,6 +1229,22 @@ impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize, const SLOTS: 
     /// How many cached distances a search probes.
     const LAST_DISTANCES: usize = last_distances_for(BLOCK);
 
+    /// Slots of the dense table each store the rest of a stream is expected
+    /// to make has to repay before the matcher leaves its on-demand layout.
+    ///
+    /// Leaving costs a clear of the whole table and a copy of every live
+    /// bucket, and saves the on-demand index's dependent load and block
+    /// bookkeeping at every store that follows. On text a deep shape's store
+    /// saves about as much as clearing thirty-two slots costs; a lower bar
+    /// switched too early on incompressible and repetitive input, whose store
+    /// rate falls once the random-data heuristic starts skipping or long
+    /// copies stop storing, and doubled their time. A tagged shape's block
+    /// is shallow, so a store saves less and the copy weighs more against
+    /// its one- or two-mebibyte table: at thirty-two, forty-eight kibibytes
+    /// of incompressible input switched at quality five and took half as
+    /// long again, so the bar there is sixteen.
+    const PROMOTION_SLOTS_PER_STORE: usize = if Self::TAGGED { 16 } else { 32 };
+
     /// Returns the bytes this match finder keeps allocated.
     pub(crate) const fn retained_bytes(&self) -> usize {
         match &self.layout {
@@ -1264,8 +1306,15 @@ impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize, const SLOTS: 
     ///
     /// The table is zeroed once per matcher, which costs a clear or the
     /// page faults of its whole size, so it has to be small against what
-    /// the matcher will see. The tagged shapes' one or two mebibytes are
-    /// worth it from a sixteenth of that in input. The deep shapes' eight
+    /// the matcher will see. Quality five's one mebibyte is worth it from a
+    /// thirty-second of that in input: on text the on-demand index's
+    /// dependent load and block bookkeeping cost a quarter of the whole
+    /// search from sixteen kibibytes up, and from thirty-two the clear is
+    /// repaid on text, incompressible and repetitive binary input alike.
+    /// Quality six's two mebibytes take a sixteenth: below that a highly
+    /// repetitive input stores so little that the clear quadruples its
+    /// time, and the stores of text are caught by a mid-stream switch
+    /// instead ([`Matcher::checkpoint`]). The deep shapes' eight
     /// to thirty-two mebibytes are cleared for a first stream only when the
     /// input is at least an eighth of the table: a short compressible
     /// stream stores few positions, and clearing sixteen mebibytes for it
@@ -1281,7 +1330,11 @@ impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize, const SLOTS: 
     const fn dense_limit(&self) -> usize {
         let table_bytes = BUCKETS * BLOCK * size_of::<u32>();
         if Self::TAGGED {
-            table_bytes / 16
+            if BLOCK <= 16 {
+                table_bytes / 32
+            } else {
+                table_bytes / 16
+            }
         } else if self.streams == 0 {
             table_bytes / 8
         } else {
@@ -1326,6 +1379,9 @@ impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize, const SLOTS: 
                 } else {
                     layout.generation += 1;
                 }
+                layout.stores = 0;
+                layout.checked_stores = 0;
+                layout.checked_position = 0;
                 Layout::Sparse(layout)
             }
             previous => {
@@ -1430,6 +1486,79 @@ impl<const BUCKETS: usize, const BLOCK: usize, const SLOTS: usize>
     }
 }
 
+impl<const BUCKETS: usize, const BLOCK: usize, const SLOTS: usize>
+    From<&SparseLayout<BUCKETS, BLOCK>> for DenseLayout<BUCKETS, BLOCK, SLOTS>
+{
+    /// Moves a stream's on-demand buckets into a fresh dense table.
+    ///
+    /// Every live bucket keeps its counter and its slots: a starter's four
+    /// slots are the top of a full block, as when it grows. Untagged
+    /// shapes only; the tagged ones never switch mid-stream.
+    fn from(sparse: &SparseLayout<BUCKETS, BLOCK>) -> Self {
+        let mut layout = Self::default();
+        let Ok(dense) = layout.dense.as_chunks_mut::<BLOCK>().0.try_into() else {
+            unreachable!("dense positions have the bucket shape");
+        };
+        let dense: &mut [[u32; BLOCK]; BUCKETS] = dense;
+        for ((&entry, count), slots) in sparse
+            .entries
+            .iter()
+            .zip(layout.num.iter_mut())
+            .zip(dense.iter_mut())
+        {
+            if entry >> GENERATION_SHIFT != sparse.generation {
+                continue;
+            }
+            let (stored, offset) = sparse.decode_entry(entry);
+            *count = stored;
+            match SparseLayout::<BUCKETS, BLOCK>::block(offset) {
+                Some(BlockRef::Full(index)) => {
+                    if let Some(block) = sparse.blocks.get(index) {
+                        *slots = *block;
+                    }
+                }
+                Some(BlockRef::Starter(index)) => {
+                    if let Some(starter) = sparse.starters.get(index)
+                        && let Some(top) = slots.last_chunk_mut::<STARTER_SLOTS>()
+                    {
+                        *top = *starter;
+                    }
+                }
+                None => {}
+            }
+        }
+        if let Some(tags) = layout.dense_tags.as_deref_mut() {
+            let Ok(tags): Result<&mut [[u8; BLOCK]; BUCKETS], _> =
+                tags.as_chunks_mut::<BLOCK>().0.try_into()
+            else {
+                unreachable!("dense tags have the bucket shape");
+            };
+            for (&entry, bucket) in sparse.entries.iter().zip(tags.iter_mut()) {
+                if entry >> GENERATION_SHIFT != sparse.generation {
+                    continue;
+                }
+                let (_, offset) = sparse.decode_entry(entry);
+                match SparseLayout::<BUCKETS, BLOCK>::block(offset) {
+                    Some(BlockRef::Full(index)) => {
+                        if let Some(block) = sparse.block_tags.get(index) {
+                            *bucket = *block;
+                        }
+                    }
+                    Some(BlockRef::Starter(index)) => {
+                        if let Some(starter) = sparse.starter_tags.get(index)
+                            && let Some(top) = bucket.last_chunk_mut::<STARTER_SLOTS>()
+                        {
+                            *top = *starter;
+                        }
+                    }
+                    None => {}
+                }
+            }
+        }
+        layout
+    }
+}
+
 impl<const BUCKETS: usize, const BLOCK: usize> From<CompactLayout>
     for SparseLayout<BUCKETS, BLOCK>
 {
@@ -1449,6 +1578,9 @@ impl<const BUCKETS: usize, const BLOCK: usize> From<CompactLayout>
             block_tags: Vec::new(),
             starters: Vec::new(),
             starter_tags: Vec::new(),
+            stores: 0,
+            checked_stores: 0,
+            checked_position: 0,
         }
     }
 }
@@ -1578,6 +1710,7 @@ impl<const BUCKETS: usize, const BLOCK: usize> SparseLayout<BUCKETS, BLOCK> {
         tag: u8,
         size_hint: usize,
     ) {
+        self.stores += 1;
         let offset = self.push_block(count, offset, ix, tag, size_hint);
         let entry = self.encode_entry(count.wrapping_add(1), offset);
         self.entries[key & (BUCKETS - 1)] = entry;
@@ -2337,6 +2470,29 @@ impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize, const SLOTS: 
 
     fn last_distances_to_check(&self) -> usize {
         Self::LAST_DISTANCES
+    }
+
+    fn checkpoint(&mut self, position: usize, remaining: usize) -> usize {
+        let Layout::Sparse(sparse) = &mut self.layout else {
+            return usize::MAX;
+        };
+        let stores = sparse.stores - sparse.checked_stores;
+        let span = position.saturating_sub(sparse.checked_position);
+        sparse.checked_stores = sparse.stores;
+        sparse.checked_position = position;
+        // The size hint covers the rest of the stream; without one only
+        // the current block is known to follow.
+        let remaining = self.size_hint.saturating_sub(position).max(remaining);
+        // Stores the rest of the stream will make at the rate of the last
+        // interval, against the table's slots.
+        if span != 0
+            && stores.saturating_mul(remaining)
+                >= span.saturating_mul(SLOTS / Self::PROMOTION_SLOTS_PER_STORE)
+        {
+            self.layout = Layout::Dense(DenseLayout::from(&*sparse));
+            return usize::MAX;
+        }
+        CHECKPOINT_INTERVAL
     }
 
     fn prepare(&mut self, one_shot: bool, input_size: usize, _data: &[u8], _clear: bool) -> Sweep {
@@ -3333,6 +3489,171 @@ mod tests {
             panic!("sparse layout")
         };
         assert_eq!(layout.generation, 2);
+    }
+
+    /// The shape quality seven resolves to.
+    type Q7Bucket = BucketMatcher<false, { 1 << 15 }, 64, { (1 << 15) * 64 }>;
+
+    #[test]
+    fn a_deep_on_demand_table_turns_dense_once_the_rest_of_the_stream_repays_it() {
+        let data = repeated();
+        let expected = search_at(&mut primed(Q7Bucket::new(1 << 20), &data), &data, REPEAT_AT);
+        assert!(expected.is_match());
+        // A quarter-mebibyte stream is below the first-stream dense limit.
+        let mut matcher = Q7Bucket::new(1 << 18);
+        matcher.prepare(true, 1 << 18, &data, true);
+        assert!(matches!(matcher.layout, Layout::Sparse(_)));
+        // The first look has no interval to judge a rate by.
+        assert_eq!(matcher.checkpoint(0, 1 << 16), CHECKPOINT_INTERVAL);
+        matcher.store_range(&data, usize::MAX, 0, REPEAT_AT);
+        // One store per position, with most of the stream to come.
+        assert_eq!(matcher.checkpoint(REPEAT_AT, 1 << 16), usize::MAX);
+        assert!(matches!(matcher.layout, Layout::Dense(_)));
+        let found = search_at(&mut matcher, &data, REPEAT_AT);
+        assert_eq!(
+            (found.distance, found.len, found.score),
+            (expected.distance, expected.len, expected.score)
+        );
+        // Dense layouts have nothing left to decide.
+        assert_eq!(matcher.checkpoint(1 << 17, 1 << 16), usize::MAX);
+    }
+
+    #[test]
+    fn a_stream_that_stores_little_keeps_its_on_demand_table() {
+        let data = repeated();
+        let mut matcher = Q7Bucket::new(1 << 18);
+        matcher.prepare(true, 1 << 18, &data, true);
+        assert_eq!(matcher.checkpoint(0, 1 << 16), CHECKPOINT_INTERVAL);
+        matcher.store_range(&data, usize::MAX, 0, 16);
+        // Sixteen stores across sixty-four kibibytes predict too few for
+        // the rest of the stream.
+        assert_eq!(matcher.checkpoint(1 << 16, 1 << 16), CHECKPOINT_INTERVAL);
+        assert!(matches!(matcher.layout, Layout::Sparse(_)));
+        // Without a size hint only the block's own remainder counts.
+        let mut matcher = Q7Bucket::new(0);
+        matcher.prepare(false, 0, &data, true);
+        assert!(matches!(matcher.layout, Layout::Sparse(_)));
+        matcher.checkpoint(0, 64);
+        matcher.store_range(&data, usize::MAX, 0, REPEAT_AT);
+        assert_eq!(matcher.checkpoint(REPEAT_AT, 64), CHECKPOINT_INTERVAL);
+        // A new stream starts counting again.
+        matcher.prepare(false, 0, &data, true);
+        let Layout::Sparse(layout) = &matcher.layout else {
+            panic!("sparse layout")
+        };
+        assert_eq!(
+            (
+                layout.stores,
+                layout.checked_stores,
+                layout.checked_position
+            ),
+            (0, 0, 0)
+        );
+    }
+
+    /// The shape quality six resolves to.
+    type Q6Bucket = BucketMatcher<false, { 1 << 14 }, 32, { (1 << 14) * 32 }>;
+
+    #[test]
+    fn a_tagged_shape_needs_twice_the_store_rate_of_a_deep_one() {
+        let data = repeated();
+        let expected = search_at(&mut primed(Q6Bucket::new(1 << 20), &data), &data, REPEAT_AT);
+        assert!(expected.is_match());
+        // Short enough that the block's remainder, not the hint, decides.
+        let mut matcher = Q6Bucket::new(20_000);
+        matcher.prepare(true, 20_000, &data, true);
+        assert!(matches!(matcher.layout, Layout::Sparse(_)));
+        matcher.checkpoint(0, 20_000);
+        matcher.store_range(&data, usize::MAX, 0, REPEAT_AT);
+        // One store per position predicts twenty-four thousand more: enough
+        // for a deep table of this size (sixteen thousand), not for a
+        // tagged one (thirty-two thousand).
+        assert_eq!(matcher.checkpoint(REPEAT_AT, 24_576), CHECKPOINT_INTERVAL);
+        assert!(matches!(matcher.layout, Layout::Sparse(_)));
+        // Stored again, the same positions only deepen their buckets.
+        matcher.store_range(&data, usize::MAX, 0, REPEAT_AT);
+        assert_eq!(matcher.checkpoint(2 * REPEAT_AT, 40_000), usize::MAX);
+        let Layout::Dense(layout) = &matcher.layout else {
+            panic!("dense layout")
+        };
+        assert!(layout.dense_tags.is_some());
+        // The tag mask of the copied block still admits the repeat.
+        let found = search_at(&mut matcher, &data, REPEAT_AT);
+        assert_eq!(
+            (found.distance, found.len, found.score),
+            (expected.distance, expected.len, expected.score)
+        );
+    }
+
+    #[test]
+    fn compact_layouts_never_ask_for_a_checkpoint() {
+        let data = repeated();
+        let mut matcher = Q7Bucket::new(data.len());
+        matcher.prepare(true, data.len(), &data, true);
+        assert!(matches!(matcher.layout, Layout::Compact(_)));
+        assert_eq!(matcher.checkpoint(0, data.len()), usize::MAX);
+    }
+
+    #[test]
+    fn the_dense_copy_keeps_live_buckets_and_forgets_stale_ones() {
+        const BLOCK: usize = 64;
+        let mut matcher = Q7Bucket::new(1 << 18);
+        matcher.prepare(true, 1 << 18, &[], true);
+        let Layout::Sparse(layout) = &mut matcher.layout else {
+            panic!("sparse layout")
+        };
+        // A bucket from an earlier stream still names its block.
+        layout.push(9, 900, 0, 1 << 18);
+        layout.generation += 1;
+        // Three stores stay in a starter; seventy wrap a full block.
+        for ix in 0..3 {
+            layout.push(1, 100 + ix, 0, 1 << 18);
+        }
+        for ix in 0..70 {
+            layout.push(2, 200 + ix, 0, 1 << 18);
+        }
+        let dense = DenseLayout::<{ 1 << 15 }, BLOCK, { (1 << 15) * BLOCK }>::from(&*layout);
+        assert_eq!(dense.num[1], 3);
+        assert_eq!(dense.num[2], 70);
+        assert_eq!(dense.num[9], 0);
+        assert_eq!(dense.num[0], 0);
+        let slots = |key: usize| &dense.dense[key * BLOCK..(key + 1) * BLOCK];
+        // Slots fill downwards: the newest store sits lowest.
+        assert_eq!(slots(1)[BLOCK - 3..], [102, 101, 100]);
+        assert!(slots(1)[..BLOCK - 3].iter().all(|&slot| slot == 0));
+        for age in 0..BLOCK as u32 {
+            let slot = (BLOCK - 70 % BLOCK + age as usize) % BLOCK;
+            assert_eq!(slots(2)[slot], 269 - age, "age {age}");
+        }
+        assert!(slots(9).iter().all(|&slot| slot == 0));
+        assert!(dense.dense_tags.is_none());
+
+        // A tagged shape carries each bucket's tags along with its slots.
+        const TAGGED: usize = 32;
+        let mut matcher = Q6Bucket::new(1 << 16);
+        matcher.prepare(true, 1 << 16, &[], true);
+        let Layout::Sparse(layout) = &mut matcher.layout else {
+            panic!("sparse layout")
+        };
+        layout.push(9, 900, 90, 1 << 16);
+        layout.generation += 1;
+        for ix in 0..3u8 {
+            layout.push(1, u32::from(ix), 10 + ix, 1 << 16);
+        }
+        for ix in 0..40u8 {
+            layout.push(2, u32::from(ix), 100 + ix, 1 << 16);
+        }
+        let dense = DenseLayout::<{ 1 << 14 }, TAGGED, { (1 << 14) * TAGGED }>::from(&*layout);
+        let Some(tags) = dense.dense_tags.as_deref() else {
+            panic!("a tagged shape keeps its tags")
+        };
+        let tags = |key: usize| &tags[key * TAGGED..(key + 1) * TAGGED];
+        assert_eq!(tags(1)[TAGGED - 3..], [12, 11, 10]);
+        for age in 0..TAGGED as u8 {
+            let slot = (TAGGED - 40 % TAGGED + usize::from(age)) % TAGGED;
+            assert_eq!(tags(2)[slot], 139 - age, "age {age}");
+        }
+        assert!(tags(9).iter().all(|&tag| tag == 0));
     }
 
     #[test]

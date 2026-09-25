@@ -1,13 +1,16 @@
-# Compression comparison — 2026-09-14
+# Compression comparison — 2026-09-25
 
 [Benchmark index](README.md) · [Results by quality](encoders/README.md)
 
 The [432-case CSV](encoder-comparison.csv) and
-[environment record](encoder-comparison-environment.json) describe the optimized
-working tree based on `090db88b4efb8836fe4dde74444bbfba63091c9a`, recorded as
-`encoder-final-20260914`. The CSV is identical to the
-[final optimization sweep](encoder-optimization-2026-09-14/comparison-after.csv).
-The environment records the measured source and executable hashes.
+[environment record](encoder-comparison-environment.json) describe the working
+tree based on `7d3430edc415bd76acd0cfed9cbf08718cf7a79e` with the q5–q8 cold
+bucket-layout change, recorded as `enc-2026-09-25`. Competitors are Rust brotli
+9.0.0 and simd-brotli 10.0.1 (still the latest releases) and Burli 0.3.2
+(was 0.3.1). The [size manifest](encoder-comparison-2026-09-25/sizes.csv) is
+archived with the run; the environment records source and executable hashes.
+The previous publication is the
+[September 14 sweep](encoder-optimization-2026-09-14/comparison-after.csv).
 
 ## Final measurements
 
@@ -21,29 +24,36 @@ times. Higher speed and lower output are better.
 
 | Quality | mbrotli median speed / C ↑ | mbrotli median output / C ↓ |
 | --- | ---: | ---: |
-| 0 | 1.129× | 1.000× |
-| 1 | 1.224× | 1.000× |
-| 2 | 1.102× | 1.000× |
-| 3 | 1.099× | 1.000× |
-| 4 | 0.998× | 1.000× |
-| 5 | 0.976× | 1.000× |
-| 6 | 0.963× | 1.000× |
-| 7 | 0.929× | 1.000× |
-| 8 | 0.898× | 1.000× |
-| 9 | 2.555× | 1.000× |
+| 0 | 1.141× | 1.000× |
+| 1 | 1.198× | 1.000× |
+| 2 | 1.169× | 1.000× |
+| 3 | 1.084× | 1.000× |
+| 4 | 0.974× | 1.000× |
+| 5 | 0.955× | 1.000× |
+| 6 | 0.911× | 1.000× |
+| 7 | 0.934× | 1.000× |
+| 8 | 0.905× | 1.000× |
+| 9 | 2.684× | 1.000× |
 | 10 | 1.124× | 1.000× |
-| 11 | 1.228× | 1.000× |
+| 11 | 1.250× | 1.000× |
 
-mbrotli has a lower mean latency than C in 55 of 96 shared cases and the lowest
+mbrotli has a lower mean latency than C in 54 of 96 shared cases and the lowest
 mean among supported implementations in 48 of 96 cases. These counts compare
-point estimates, not statistical significance. In 44 cases, mbrotli's 95% mean
+point estimates, not statistical significance. In 47 cases, mbrotli's 95% mean
 timing interval is wholly below every competitor's interval. The medians also
 retain qualities where mbrotli is slower than C.
 
-For Alice at q5, mbrotli measures 58.00 MiB/s against C's 63.44 MiB/s, both
-producing 52,809 bytes. Burli measures 65.94 MiB/s with 54,231 bytes. At q11,
-mbrotli measures 1.365 MiB/s against C's 1.088 MiB/s, both producing 46,487 bytes;
-SIMD Brotli measures 1.335 MiB/s with 46,493 bytes.
+For Alice at q5, mbrotli measures 58.48 MiB/s against C's 63.84 MiB/s, both
+producing 52,809 bytes. Burli measures 65.55 MiB/s with 54,231 bytes. At q11,
+mbrotli measures 1.406 MiB/s against C's 1.087 MiB/s, both producing 46,487 bytes;
+SIMD Brotli measures 1.347 MiB/s with 46,493 bytes.
+
+Against the September 14 publication, every implementation's output sizes are
+unchanged. Median speed shifts are within a few percent except q2 (1.102× →
+1.169×) and q6 (0.963× → 0.911×); this run samples ten times longer
+(1 s warmup, 3 s measurement), so small shifts mix code and method changes.
+The q5–q8 layout change mainly helps 32 KiB–1 MiB inputs that this matrix
+covers only with Alice, 64 KiB and 1 MiB datasets.
 
 The [quality pages](encoders/README.md) retain all datasets, all implementations,
 and exact timings with 95% mean confidence bounds. Burli supports q0–q5 only.
@@ -51,10 +61,8 @@ Equal quality numbers describe each encoder's effort policy and do not imply
 equal output size.
 
 mbrotli and Google C produce equal output lengths in all 96 shared cases in
-this run. Equal lengths alone do not establish compressed byte identity. The
-[optimization report](encoder-optimization-2026-09-14.md) separately checks
-before/after byte equality and records paired speed changes, streaming results,
-retained workspace, profiles, and memory tradeoffs.
+this run. Equal lengths alone do not establish compressed byte identity; the
+greedy differential tests check byte identity with Google C separately.
 
 ## Measurement contract
 
@@ -65,10 +73,10 @@ retained workspace, profiles, and memory tradeoffs.
 | Rust | rustc 1.98.1; release defaults; runtime SIMD dispatch |
 | C compiler | GCC 11.4.0; vendored release defaults |
 | C Brotli | 1.2.0; commit `4508218e7fef90fa4273286f7a415065946f2c43` |
-| Rust brotli / simd-brotli / burli | 9.0.0 / 10.0.1 / 0.3.1 |
+| Rust brotli / simd-brotli / burli | 9.0.0 / 10.0.1 / 0.3.2 |
 | Compression | Generic mode, window 22, complete known input, no dictionary or explicit flush |
 | API | Cold native serial helpers; construction, allocation, compression, and disposal timed |
-| Sampling | 20 samples; 0.1 s warmup; 0.3 s requested measurement per case |
+| Sampling | 20 samples; 1 s warmup; 3 s requested measurement per case |
 | Validation | All 432 outputs decoded to the original input through Google C Brotli before timing |
 
 Inputs are empty, 44-byte text, vendored `alice29.txt` (152,089 bytes), cyclic
@@ -89,32 +97,29 @@ Run from the repository root; use a fresh baseline name when repeating timings:
 
 ```sh
 cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench implementations --locked -- --test
-taskset -c 2 cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench implementations --locked -- --save-baseline encoder-final-20260914 --sample-size 20 --warm-up-time 0.1 --measurement-time 0.3 --noplot
-python3 benchmarks/comparison/report.py --baseline encoder-final-20260914 --csv docs/benchmarks/encoder-comparison.csv
+taskset -c 2 cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench implementations --locked -- --save-baseline enc-2026-09-25
+python3 benchmarks/comparison/report.py --baseline enc-2026-09-25 --csv docs/benchmarks/encoder-comparison.csv
 python3 benchmarks/comparison/quality_docs.py --csv docs/benchmarks/encoder-comparison.csv --environment docs/benchmarks/encoder-comparison-environment.json --report docs/benchmarks/encoder-comparison.md --output docs/benchmarks/encoders
-python3 benchmarks/comparison/plot.py --csv docs/benchmarks/encoder-comparison.csv --output docs/benchmarks/encoders/charts --subtitle 'i7-13700KF; optimized working tree; 20 samples; 2026-09-14'
+python3 benchmarks/comparison/plot.py --csv docs/benchmarks/encoder-comparison.csv --output docs/benchmarks/encoders/charts --subtitle 'i7-13700KF; working tree; 20 samples; 2026-09-25'
 ```
 
 Plotting uses Matplotlib 3.10.8. Criterion extends slow cases to collect the
 requested samples. The exporter rejects incomplete matrices and mismatched
 input lengths. Export immediately after timing and archive `sizes.csv` with
-the named baseline: a later preflight replaces that shared manifest.
+the named baseline: a later preflight replaces that shared manifest. This
+run's [size manifest](encoder-comparison-2026-09-25/sizes.csv) is checked in.
 Raw samples remain local under `benchmarks/comparison/target/criterion/`.
-The final [size manifest](encoder-optimization-2026-09-14/sizes-after.csv),
-[run history](encoder-optimization-2026-09-14/run-history.json), and
-[build provenance](encoder-optimization-2026-09-14/environment.json) are checked in
-with the optimization snapshot. The actual timed command runs a saved copy of
-the Cargo-built executable, as recorded in the environment. Chart regeneration
-reuses the final CSV; it does not rerun timings.
+Chart regeneration reuses the CSV; it does not rerun timings.
 
 ## Interpretation limits
 
-This is a short exploratory sweep on one WSL2 host. Affinity restricts CPU
+This is a single sweep on one WSL2 host. Affinity restricts CPU
 migration but does not control frequency, thermal state, or host scheduling.
 Implementation order is fixed. The lowest mean does not necessarily imply a
 statistically significant lead; confidence bounds do not capture every source
-of host or allocator variation. No builds, tests, or profiling were launched
-alongside the timed sweep.
+of host or allocator variation. No builds, tests, or profiling ran alongside
+the timed sweep; a Python package installation ran briefly during its first
+minutes.
 
 The suite measures cold serial compression. Streaming, retained workspace,
 parallel tasks, dictionaries, and experimental formats have separate root API

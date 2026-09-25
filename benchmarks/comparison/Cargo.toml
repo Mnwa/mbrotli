@@ -13,7 +13,7 @@ mbrotli = { path = "../.." }
 google-brotli-ffi = { path = "../../brotli-ffi" }
 brotli = "=9.0.0"
 simd-brotli = "=10.0.1"
-burli = "=0.3.1"
+burli = "=0.3.2"
 criterion = "=0.8.2"
 thiserror = "2"
 

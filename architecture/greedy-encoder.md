@@ -276,7 +276,7 @@ what `prepare` is told about it:
 | --- | --- | --- | --- | --- |
 | Compact | one-shot input of at most 1024 bytes while the matcher is still compact | `KeyMap`, sized two entries per input byte, probed once per position: counter and chain head per bucket | one chain: `Vec<u64>` of `position | next << 32`, one node pushed per store in front of its bucket's previous node; a search walks the newest `BLOCK` nodes, the order a block scan takes | fill a map of at most 16 KiB |
 | Sparse | a known input below the dense limit; an input of unknown length on a deep shape; unless the dense table already exists | a boxed `[u64; BUCKETS]`: generation stamp, block index with a starter flag, counter | typed pools: `Vec<[u32; 4]>` starters that grow into `Vec<[u32; BLOCK]>` full blocks on their fifth store, tags alongside for tagged shapes | bump the generation |
-| Dense | the matcher's size hint is at least the shape's dense limit — a sixteenth of the table for tagged q5/q6 shapes (64 KiB and 128 KiB of input); for deep q7–q9 shapes an eighth of it on the matcher's first stream (1, 2 and 4 MiB) and a sixty-fourth from its second stream on (256 KiB, 256 KiB and 512 KiB) — or the length is unknown on a tagged shape, or the matcher already holds the dense table | `[u16; BUCKETS]` counters | one flat `Box<[u32; SLOTS]>` with `SLOTS = BUCKETS * BLOCK`, viewed as `[[u32; BLOCK]; BUCKETS]` for a run, zeroed once per matcher | zero the counters |
+| Dense | the matcher's size hint is at least the shape's dense limit — a thirty-second of the table for the tagged q5 shape and a sixteenth for q6 (32 KiB and 128 KiB of input); for deep q7–q9 shapes an eighth of it on the matcher's first stream (1, 2 and 4 MiB) and a sixty-fourth from its second stream on (256 KiB, 256 KiB and 512 KiB) — or the length is unknown on a tagged shape, or the matcher already holds the dense table; a sparse stream also switches mid-stream at a checkpoint once its store rate repays the clear (see [Mid-stream promotion](#mid-stream-promotion)) | `[u16; BUCKETS]` counters | one flat `Box<[u32; SLOTS]>` with `SLOTS = BUCKETS * BLOCK`, viewed as `[[u32; BLOCK]; BUCKETS]` for a run, zeroed once per matcher | zero the counters |
 
 `BucketMatcher` owns only `Layout<BUCKETS, BLOCK, SLOTS>`, the retargetable size hint,
 and the saturating stream count. Each enum variant owns its own storage:
@@ -335,7 +335,9 @@ flowchart TD
     Next -->|no| Ready["All keys reachable in resized table"]
 ```
 
-Layout changes occur only during `prepare`, between independent streams. Compact
+Layout changes occur during `prepare`, between independent streams, and at a
+sparse stream's mid-stream checkpoint, which only ever turns sparse into dense
+(see [Mid-stream promotion](#mid-stream-promotion)). Compact
 resets reuse its map and chain. Once sparse or dense storage exists, even a tiny
 one-shot stream keeps it; dense never demotes. Compact-to-sparse moves the larger
 of the map and chain's `Vec<u64>` allocations into the index, clears its previous
@@ -359,8 +361,76 @@ stateDiagram-v2
     Compact --> Dense: dense threshold reached / allocate typed tables
     Sparse --> Sparse: below dense threshold / advance generation
     Sparse --> Dense: dense threshold reached / flatten larger pools, resize and convert to fixed arrays
+    Sparse --> Dense: checkpoint mid-stream, store rate repays the clear / copy live buckets and tags into a fresh table
     Dense --> Dense: every subsequent stream / clear counters
 ```
+
+### Mid-stream promotion
+
+The static dense limits are set by the table's size, not by the input: a
+q6 stream below 128 KiB and a q7 or q8 first stream below 1 or 2 MiB start
+on the sparse layout, which costs no clear but pays a dependent index load
+and block bookkeeping at every store and search. Whether that
+overhead outgrows the clear depends on how much the stream stores, which only
+the stream itself reveals: text stores about one position per input byte,
+incompressible input about a third (the random-data heuristic strides over
+the rest), and long repetitive copies almost none.
+
+`Matcher::checkpoint(position, remaining)` lets a matcher act on that. The
+default returns `usize::MAX` (never call back). `BucketMatcher` answers
+`usize::MAX` for the compact and dense layouts; on its sparse layout it
+counts the stores made since its previous
+checkpoint (`SparseLayout::stores`, one increment per store, reset with the
+generation at `prepare`) and predicts the rest of the stream at that rate.
+The rest is the size hint less the position, or the current block's
+remainder when that is larger or no hint was given. When
+
+`stores × remaining ≥ span × SLOTS / PROMOTION_SLOTS_PER_STORE`
+
+(32 for the deep shapes, 16 for the tagged ones, whose shallow blocks save
+less per store while the copy weighs more against a 1–2 MiB table) it builds
+a fresh dense table (`DenseLayout::from(&SparseLayout)`: each live bucket's
+counter, its full block, or its starter's four slots at the top of the block
+— where the fifth store would have moved them — with the same for its tags,
+and nothing from a stale generation), drops the sparse storage, and returns
+`usize::MAX`.
+Otherwise it asks to be called again after `CHECKPOINT_INTERVAL` (16 KiB)
+more positions. The first checkpoint of a stream has no interval to judge
+and only records its starting point. The interval is long enough that a
+repetitive input, which stores at almost every position of its first few
+kibibytes and then copies to its end, usually reaches that copy before it
+is judged. Lower bars switched incompressible and repetitive inputs whose
+store rate later falls, and doubled their time; at the chosen bars no
+measured input got slower.
+
+```mermaid
+sequenceDiagram
+    participant CBR as create_backward_references
+    participant M as BucketMatcher
+    participant Loop as SearchLoop (per run type)
+
+    CBR->>M: checkpoint(block start, block bytes)
+    M-->>CBR: CHECKPOINT_INTERVAL or usize::MAX
+    loop until position + hash length reaches the block end
+        CBR->>M: visit_run(SearchLoop { yield_at: position + interval })
+        M->>Loop: visit(SparseRun or DenseRun)
+        Loop-->>CBR: cursor (stopped at yield_at or the block end)
+        opt not at the block end
+            CBR->>M: checkpoint(cursor.position, block remainder)
+            alt store rate repays the clear
+                M->>M: Sparse → Dense (copy live buckets)
+                M-->>CBR: usize::MAX
+            else
+                M-->>CBR: CHECKPOINT_INTERVAL
+            end
+        end
+    end
+```
+
+Candidate sets and their order are the same in both layouts, so a switch —
+or none, or one at another position — never changes the output; the
+differential tests and a unit test that resumes the loop at every position
+check exactly that.
 
 The dense decision uses the current retargetable size hint, not `prepare`'s
 `one_shot` flag. Unknown-length streams use dense storage on tagged shapes and
@@ -431,6 +501,8 @@ flowchart LR
     prepare -->|size hint at least the dense limit for a first or a later stream, unknown length on a tagged shape, or table held| dense[Dense: counters and flat key-addressed blocks]
     compact --> run[Matcher::visit_run binds one concrete run for the block]
     sparse --> run
+    sparse --> checkpoint{checkpoint: store rate repays the clear?}
+    checkpoint -->|yes, mid-stream| dense
     sparse --> promoted{1024 full blocks reached?}
     promoted -->|yes| reserve[Reserve bounded pool capacity from size hint]
     reserve --> run
@@ -511,6 +583,13 @@ positions are stored and which are skipped are all visible in the output.
 `create_backward_references` resolves the loop-invariant `Block`, refreshes
 the distance cache, and runs the loop through `Matcher::visit_run` as the
 `SearchLoop` visitor, so the loop is monomorphised per concrete run (§2.3).
+The loop stops at the first of the block's searchable end and the position
+the matcher's last `Matcher::checkpoint` allowed — one precomputed bound, so
+a matcher that never asks to be called back costs the loop nothing — and
+`create_backward_references` then checkpoints and re-enters `visit_run` with
+the cursor, which is how a sparse bucket matcher switches layout mid-block (§2.3).
+`Block::store_end` is derived from the block's first position on every entry,
+so a resumed loop bounds its stores exactly as an uninterrupted one would.
 The loop body is split in two functions. The search at every position stays
 in the loop; everything a found match entails — the delayed search, the
 distance cache update, the command and the stores — lives in `commit_match`,
@@ -886,10 +965,13 @@ sized by the same `2 * bytes + 503` reservation the reference uses.
 - **Histogram accumulation and context sampling remain scalar.** Bucket tag
   filtering and the high-quality match-length scans have SIMD
   implementations; the greedy matchers scan whole words.
-- **Cold bucket matchers initialize their tables.** A cold call on a
-  quarter-mebibyte input at quality seven or eight zeroes an 8 or 16 MiB
-  table the reference leaves uninitialised. This setup work remains part of
-  cold-call latency; reused benchmarks measure a different allocation policy.
+- **Cold bucket matchers initialize their tables.** The reference leaves
+  its bucket table uninitialised; safe Rust cannot. A cold q5–q8 call either
+  zeroes a 1–16 MiB table (from the dense limit, or after a mid-stream
+  promotion) or stays on the sparse layout, whose dependent index load costs
+  10–30% on text below the promotion point. Cold q5–q8 calls on 2–32 KiB
+  inputs still run at roughly 0.7–0.85 of the reference; reused compressors
+  keep their tables and pay neither cost.
 - **Short one-shot inputs pay for initialised memory.** A cold call on at
   most a kibibyte indexes the compact map and allocates and zeroes its
   scratch per call. See the [benchmark guide](../docs/benchmarking.md) for

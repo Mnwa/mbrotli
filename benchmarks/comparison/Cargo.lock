@@ -76,7 +76,7 @@ checksum = "f8b851b75c23ca7873623d612fe49bd1989aeb03d08fb9432187eb253d3d4c6b"
 dependencies = [
  "alloc-no-stdlib 3.0.0",
  "alloc-stdlib 0.3.0",
- "brotli-decompressor 6.0.0",
+ "brotli-decompressor 6.0.1",
 ]
 
 [[package]]
@@ -91,9 +91,9 @@ dependencies = [
 
 [[package]]
 name = "brotli-decompressor"
-version = "6.0.0"
+version = "6.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46087801e40b785410c352bee60e9b6226312709cf52d5fff92776cdf5cf6490"
+checksum = "941cd9bd4ddab83cb46fa5a2d428f1c857b24ac78cb876cf7beb710840934bd7"
 dependencies = [
  "alloc-no-stdlib 3.0.0",
  "alloc-stdlib 0.3.0",
@@ -107,9 +107,9 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
 name = "burli"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0275506fa01dd549adbe22f71715f3b4f75f2803b864e10e2d00f23de4d60321"
+checksum = "7f06d8dee196e11131aa604962fd2d344e1196cb7cc9fd86659943e7f74510f8"
 dependencies = [
  "burli-core",
  "burli-decode",
@@ -124,18 +124,18 @@ checksum = "985ad4a7294ce59124ca438b6ebc7fb8f436ac20775867f52e60a92db8c91e17"
 
 [[package]]
 name = "burli-decode"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1795de8a0b5cc455815fab0381a1b367ef42d94b171ed951d05d4a072330722a"
+checksum = "de3fc040d393d803ded843d68932a5e9a5041ea162fd0a61ca07819150727b01"
 dependencies = [
  "burli-core",
 ]
 
 [[package]]
 name = "burli-encode"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c310d33398486388a60e01eeca7597c7de6ba4f9c17b046018e4433baaf47a1b"
+checksum = "20ad7e059eda0029dd64d7fa05e99ddec3035a3b80bcaa980e7fd633f070dcca"
 dependencies = [
  "burli-core",
 ]
