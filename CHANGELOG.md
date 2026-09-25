@@ -30,6 +30,14 @@
   `Box<T>` and `Arc<T>`, and the new `NoDictionaries` is the default resolver
   type. Wire bytes, events and errors are unchanged.
 
+- Add input-free `flush(output)` and `finish(output)` to every incremental
+  session, borrowed and owned, and to `FramedResourceSession`. Each calls that
+  session's own `process` with empty input. On encoders they are `Flush` and
+  `Finish`. On the framed container they drain queued output (`Process`) and
+  finish it (`Finish`). On decoders, `flush` drains output for input already
+  accepted without declaring EOF, and `finish` declares EOF with no input
+  left.
+
 - Add `reinit` to all four owned sessions. It ends the current operation the
   way the owner-returning methods do, then starts an independent new one in
   place through the same start path as `start`/`into_session`. It keeps the

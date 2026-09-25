@@ -59,6 +59,55 @@ impl FramedEncoderSession<'_> {
     ) -> Result<FramedEncodeProgress, FramedEncodeFailure> {
         self.owner.engine.process(output, operation)
     }
+
+    /// Delivers queued wire bytes without finishing the container.
+    ///
+    /// Shorthand for [`Self::process`] with [`FramedEncodeOperation::Process`].
+    /// Repeat it while it reports [`FramedEncoderStatus::NeedsOutput`];
+    /// commands are accepted once it reports `NeedsInput`.
+    /// # Errors
+    /// As [`Self::process`].
+    /// # Examples
+    /// ```
+    /// use mbrotli::framing::*;
+    /// let mut owner = FramedCompressor::new(Default::default())?;
+    /// let mut session = owner.start(Default::default())?;
+    /// let mut output = [0; 128];
+    /// let progress = session.flush(&mut output)?;
+    /// assert_eq!(&output[..progress.produced], &[0x91, 10, 66, 82, 4]);
+    /// assert_eq!(progress.status, FramedEncoderStatus::NeedsInput);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn flush(
+        &mut self,
+        output: &mut [u8],
+    ) -> Result<FramedEncodeProgress, FramedEncodeFailure> {
+        self.process(output, FramedEncodeOperation::Process)
+    }
+    /// Generates and delivers the container suffix.
+    ///
+    /// Shorthand for [`Self::process`] with [`FramedEncodeOperation::Finish`].
+    /// Repeat it while it reports [`FramedEncoderStatus::NeedsOutput`], until
+    /// [`FramedEncoderStatus::Finished`].
+    /// # Errors
+    /// As [`Self::process`].
+    /// # Examples
+    /// ```
+    /// use mbrotli::framing::*;
+    /// let mut owner = FramedCompressor::new(Default::default())?;
+    /// let mut session = owner.start(Default::default())?;
+    /// let mut output = [0; 128];
+    /// let progress = session.finish(&mut output)?;
+    /// assert_eq!(progress.status, FramedEncoderStatus::Finished);
+    /// assert!(session.is_finished());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn finish(
+        &mut self,
+        output: &mut [u8],
+    ) -> Result<FramedEncodeProgress, FramedEncodeFailure> {
+        self.process(output, FramedEncodeOperation::Finish)
+    }
     /// Queues uncompressed ordered metadata.
     /// # Errors
     /// Rejects pending output, ordering, invalid fields and exhausted budgets before commit.
@@ -296,6 +345,53 @@ impl FramedEncoderSessionOwned {
     ) -> Result<FramedEncodeProgress, FramedEncodeFailure> {
         self.owner.engine.process(output, operation)
     }
+
+    /// Delivers queued wire bytes without finishing the container.
+    ///
+    /// Shorthand for [`Self::process`] with [`FramedEncodeOperation::Process`].
+    /// Repeat it while it reports [`FramedEncoderStatus::NeedsOutput`];
+    /// commands are accepted once it reports `NeedsInput`.
+    /// # Errors
+    /// As [`Self::process`].
+    /// # Examples
+    /// ```
+    /// use mbrotli::framing::*;
+    /// let mut session = FramedCompressor::new(Default::default())?.into_session(Default::default())?;
+    /// let mut output = [0; 128];
+    /// let progress = session.flush(&mut output)?;
+    /// assert_eq!(&output[..progress.produced], &[0x91, 10, 66, 82, 4]);
+    /// assert_eq!(progress.status, FramedEncoderStatus::NeedsInput);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn flush(
+        &mut self,
+        output: &mut [u8],
+    ) -> Result<FramedEncodeProgress, FramedEncodeFailure> {
+        self.process(output, FramedEncodeOperation::Process)
+    }
+    /// Generates and delivers the container suffix.
+    ///
+    /// Shorthand for [`Self::process`] with [`FramedEncodeOperation::Finish`].
+    /// Repeat it while it reports [`FramedEncoderStatus::NeedsOutput`], until
+    /// [`FramedEncoderStatus::Finished`].
+    /// # Errors
+    /// As [`Self::process`].
+    /// # Examples
+    /// ```
+    /// use mbrotli::framing::*;
+    /// let mut session = FramedCompressor::new(Default::default())?.into_session(Default::default())?;
+    /// let mut output = [0; 128];
+    /// let progress = session.finish(&mut output)?;
+    /// assert_eq!(progress.status, FramedEncoderStatus::Finished);
+    /// assert!(session.is_finished());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn finish(
+        &mut self,
+        output: &mut [u8],
+    ) -> Result<FramedEncodeProgress, FramedEncodeFailure> {
+        self.process(output, FramedEncodeOperation::Finish)
+    }
     /// Queues uncompressed metadata, as [`FramedEncoderSession::metadata`].
     /// # Errors
     /// As [`FramedEncoderSession::metadata`].
@@ -469,6 +565,59 @@ impl FramedResourceSession<'_, '_> {
             output,
             operation,
         )
+    }
+
+    /// Emits everything accepted so far as complete chunks, without taking input.
+    ///
+    /// Shorthand for [`Self::process`] with empty input and
+    /// [`Operation::Flush`]. Repeat it while it reports
+    /// [`FramedEncoderStatus::NeedsOutput`], until `NeedsInput`.
+    /// # Errors
+    /// As [`Self::process`].
+    /// # Examples
+    /// ```
+    /// use mbrotli::{Operation, framing::*};
+    /// let mut owner = FramedCompressor::new(Default::default())?;
+    /// let mut session = owner.start(Default::default())?;
+    /// session.flush(&mut [0; 128])?;
+    /// let mut resource = session.resource(Default::default(), Default::default())?;
+    /// resource.process(b"flushed", &mut [0; 128], Operation::Process)?;
+    /// let progress = resource.flush(&mut [0; 128])?;
+    /// assert_eq!(progress.status, FramedEncoderStatus::NeedsInput);
+    /// assert!(progress.produced > 0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn flush(
+        &mut self,
+        output: &mut [u8],
+    ) -> Result<FramedEncodeProgress, FramedEncodeFailure> {
+        self.process(&[], output, Operation::Flush)
+    }
+    /// Ends the resource, without taking input.
+    ///
+    /// Shorthand for [`Self::process`] with empty input and
+    /// [`Operation::Finish`], for when the whole payload has already been
+    /// passed to `process`. Repeat it while it reports
+    /// [`FramedEncoderStatus::NeedsOutput`], until
+    /// [`FramedEncoderStatus::Finished`].
+    /// # Errors
+    /// As [`Self::process`].
+    /// # Examples
+    /// ```
+    /// use mbrotli::{Operation, framing::*};
+    /// let mut owner = FramedCompressor::new(Default::default())?;
+    /// let mut session = owner.start(Default::default())?;
+    /// session.flush(&mut [0; 128])?;
+    /// let mut resource = session.resource(Default::default(), Default::default())?;
+    /// resource.process(b"payload", &mut [0; 128], Operation::Process)?;
+    /// assert_eq!(resource.finish(&mut [0; 128])?.status, FramedEncoderStatus::Finished);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn finish(
+        &mut self,
+        output: &mut [u8],
+    ) -> Result<FramedEncodeProgress, FramedEncodeFailure> {
+        self.process(&[], output, Operation::Finish)
     }
     /// Whether the final resource chunk has been completely delivered.
     pub const fn is_finished(&self) -> bool {

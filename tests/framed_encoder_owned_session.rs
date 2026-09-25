@@ -46,6 +46,12 @@ trait Facade {
         options: ResourceOptions,
     ) -> Result<FramedResourceSession<'_, 'static>, FramedEncodeError>;
     fn counters(&self) -> (u64, u64, u64, bool, u64);
+    fn flush_now(&mut self, output: &mut [u8])
+    -> Result<FramedEncodeProgress, FramedEncodeFailure>;
+    fn finish_now(
+        &mut self,
+        output: &mut [u8],
+    ) -> Result<FramedEncodeProgress, FramedEncodeFailure>;
 }
 
 macro_rules! facade {
@@ -113,6 +119,18 @@ macro_rules! facade {
                     self.next_chunk_offset(),
                 )
             }
+            fn flush_now(
+                &mut self,
+                output: &mut [u8],
+            ) -> Result<FramedEncodeProgress, FramedEncodeFailure> {
+                <$type>::flush(self, output)
+            }
+            fn finish_now(
+                &mut self,
+                output: &mut [u8],
+            ) -> Result<FramedEncodeProgress, FramedEncodeFailure> {
+                <$type>::finish(self, output)
+            }
         }
     };
 }
@@ -141,6 +159,8 @@ struct Driver<'w> {
     widths: &'w [usize],
     turn: usize,
     trace: Trace,
+    /// Use `flush`/`finish` wherever a call would pass no input.
+    shorthand: bool,
 }
 
 impl Driver<'_> {
@@ -152,7 +172,11 @@ impl Driver<'_> {
     fn drain(&mut self, session: &mut impl Facade, operation: FramedEncodeOperation) {
         loop {
             let mut output = vec![0; self.width()];
-            let result = session.process(&mut output, operation);
+            let result = match (self.shorthand, operation) {
+                (true, FramedEncodeOperation::Process) => session.flush_now(&mut output),
+                (true, FramedEncodeOperation::Finish) => session.finish_now(&mut output),
+                (false, operation) => session.process(&mut output, operation),
+            };
             self.trace.log.push(format!("{result:?}"));
             let progress = result.expect("the container encodes");
             self.trace
@@ -174,7 +198,11 @@ impl Driver<'_> {
     ) {
         loop {
             let mut output = vec![0; self.width()];
-            let result = resource.process(input, &mut output, operation);
+            let result = match (self.shorthand && input.is_empty(), operation) {
+                (true, Operation::Flush) => resource.flush(&mut output),
+                (true, Operation::Finish) => resource.finish(&mut output),
+                (_, operation) => resource.process(input, &mut output, operation),
+            };
             self.trace.log.push(format!("{result:?}"));
             let progress = result.expect("the resource encodes");
             input = &input[progress.consumed..];
@@ -225,10 +253,21 @@ impl Driver<'_> {
 
 /// Encodes `input` item by item through `session`, the way `compress` would.
 fn encode(session: &mut impl Facade, input: FramedInput<'_>, schedule: Schedule) -> Trace {
+    encode_with(session, input, schedule, false)
+}
+
+/// As [`encode`], optionally through the input-free `flush`/`finish`.
+fn encode_with(
+    session: &mut impl Facade,
+    input: FramedInput<'_>,
+    schedule: Schedule,
+    shorthand: bool,
+) -> Trace {
     let mut driver = Driver {
         widths: schedule.widths,
         turn: 0,
         trace: Trace::default(),
+        shorthand,
     };
     driver.drain(session, FramedEncodeOperation::Process);
     if let Some(codes) = input.repeat_metadata_fields {
@@ -732,5 +771,54 @@ fn reinit_starts_a_container_identical_to_a_fresh_borrowed_one() {
             }
             session.reinit(Default::default()).expect("reinit again");
         }
+    }
+}
+
+#[test]
+fn flush_and_finish_are_process_without_input_in_both_session_shapes() {
+    let payload = b"flush and finish take no input ".repeat(12);
+    let raw = b"verbatim".to_vec();
+    let footer = [MetadataField {
+        code: *b"YY",
+        value: b"footer",
+    }];
+    let items = [
+        FramedItem::Resource(FramedResource::from(&payload[..])),
+        FramedItem::Metadata {
+            kind: MetadataKind::Footer,
+            fields: &footer,
+            options: Default::default(),
+        },
+        FramedItem::Resource(FramedResource {
+            data: &raw,
+            options: Default::default(),
+            stream: Default::default(),
+            encoding: ResourceEncoding::Uncompressed,
+        }),
+    ];
+    let input = FramedInput::from(items.as_slice());
+    for schedule in SCHEDULES {
+        let mut encoder = owner(false);
+        let expected = encode_with(
+            &mut encoder.start(Default::default()).expect("start"),
+            input,
+            schedule,
+            false,
+        );
+        let borrowed = encode_with(
+            &mut encoder.start(Default::default()).expect("start"),
+            input,
+            schedule,
+            true,
+        );
+        let mut session = owner(false)
+            .into_session(Default::default())
+            .expect("start");
+        let owned = encode_with(&mut session, input, schedule, true);
+        assert_eq!(borrowed, expected, "{schedule:?}");
+        assert_eq!(owned, expected, "{schedule:?}");
+        let idle = session.finish(&mut [0; 4]).expect("finished");
+        assert_eq!(idle.status, FramedEncoderStatus::Finished);
+        assert_eq!((idle.consumed, idle.produced), (0, 0));
     }
 }

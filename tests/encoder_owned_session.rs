@@ -25,6 +25,8 @@ trait Session {
         operation: Operation,
     ) -> Result<Progress, EncodeError>;
     fn finished(&self) -> bool;
+    fn flush_now(&mut self, output: &mut [u8]) -> Result<Progress, EncodeError>;
+    fn finish_now(&mut self, output: &mut [u8]) -> Result<Progress, EncodeError>;
 }
 
 impl Session for EncoderSession<'_, '_> {
@@ -39,6 +41,12 @@ impl Session for EncoderSession<'_, '_> {
     fn finished(&self) -> bool {
         self.is_finished()
     }
+    fn flush_now(&mut self, output: &mut [u8]) -> Result<Progress, EncodeError> {
+        self.flush(output)
+    }
+    fn finish_now(&mut self, output: &mut [u8]) -> Result<Progress, EncodeError> {
+        self.finish(output)
+    }
 }
 
 impl<D: AsRef<PreparedDictionary> + 'static> Session for EncoderSessionOwned<D> {
@@ -52,6 +60,12 @@ impl<D: AsRef<PreparedDictionary> + 'static> Session for EncoderSessionOwned<D> 
     }
     fn finished(&self) -> bool {
         self.is_finished()
+    }
+    fn flush_now(&mut self, output: &mut [u8]) -> Result<Progress, EncodeError> {
+        self.flush(output)
+    }
+    fn finish_now(&mut self, output: &mut [u8]) -> Result<Progress, EncodeError> {
+        self.finish(output)
     }
 }
 
@@ -673,4 +687,82 @@ fn reinit_recovers_from_a_failed_process() {
         drive(&mut session, &data, SCHEDULES[2]),
         borrowed(Quality::Q5, StreamConfig::default(), &data, SCHEDULES[2])
     );
+}
+
+/// Feeds `data`, flushes after the first chunk and finishes, either through
+/// the input-free shorthands or through `process` with empty input.
+fn with_shorthands(session: &mut impl Session, data: &[u8], shorthand: bool) -> Trace {
+    fn empty(
+        session: &mut impl Session,
+        trace: &mut Trace,
+        shorthand: bool,
+        operation: Operation,
+        width: usize,
+    ) {
+        loop {
+            let mut output = vec![0; width];
+            let result = match (shorthand, operation) {
+                (true, Operation::Flush) => session.flush_now(&mut output),
+                (true, _) => session.finish_now(&mut output),
+                (false, operation) => session.step(&[], &mut output, operation),
+            };
+            let progress = result.expect("the stream encodes");
+            trace.bytes.extend_from_slice(&output[..progress.produced]);
+            trace.calls.push(progress);
+            if progress.status != EncoderStatus::NeedsOutput {
+                break;
+            }
+        }
+    }
+    let mut trace = Trace::default();
+    for (index, chunk) in data.chunks(333).enumerate() {
+        let mut remaining = chunk;
+        while !remaining.is_empty() {
+            let progress = call(session, &mut trace, remaining, 7, Operation::Process);
+            remaining = &remaining[progress.consumed..];
+        }
+        if index == 0 {
+            empty(session, &mut trace, shorthand, Operation::Flush, 3);
+        }
+    }
+    empty(session, &mut trace, shorthand, Operation::Finish, 5);
+    assert!(session.finished());
+    trace
+}
+
+#[test]
+fn flush_and_finish_are_process_without_input_in_both_session_shapes() {
+    let data = b"flush and finish take no input ".repeat(60);
+    for quality in PARITY_QUALITIES {
+        let mut compressor = encoder(quality, 22);
+        let expected = with_shorthands(
+            &mut compressor.start(StreamConfig::default()).expect("start"),
+            &data,
+            false,
+        );
+        let borrowed = with_shorthands(
+            &mut compressor.start(StreamConfig::default()).expect("start"),
+            &data,
+            true,
+        );
+        let mut session = encoder(quality, 22)
+            .into_session(StreamConfig::default())
+            .expect("start");
+        let owned = with_shorthands(&mut session, &data, true);
+        assert_eq!(borrowed, expected, "q{}", quality.get());
+        assert_eq!(owned, expected, "q{}", quality.get());
+        assert!(session.is_finished());
+        assert_eq!(
+            c_decompress(&owned.bytes, data.len()).as_deref(),
+            Some(&data[..])
+        );
+        // A finished stream stays finished through the shorthands too.
+        let idle = Progress {
+            consumed: 0,
+            produced: 0,
+            status: EncoderStatus::Finished,
+        };
+        assert_eq!(session.finish(&mut [0; 4]).expect("finished"), idle);
+        assert_eq!(session.flush(&mut [0; 4]).expect("finished"), idle);
+    }
 }

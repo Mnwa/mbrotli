@@ -94,6 +94,118 @@ impl FramedDecoderSession<'_, '_> {
         self.owner
             .session_process(self.resolver, input, output, operation)
     }
+
+    /// Delivers output for input already accepted, without declaring EOF.
+    ///
+    /// Shorthand for [`Self::process`] with empty input and
+    /// [`DecodeOperation::Process`]; events still borrow `output` and the
+    /// session. After a `Finish`, only `Finish` calls are valid.
+    ///
+    /// # Errors
+    /// As [`Self::process`]; after a `Finish` this reports
+    /// [`FramedDecodeError::InvalidState`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::framing::*;
+    /// use mbrotli::DecodeOperation;
+    /// let bytes = [0x91, 10, 66, 82, 0, 6, 2, 0, 0, b'a', b'b', b'c'];
+    /// let mut decoder = FramedDecompressor::new(Default::default())?;
+    /// let mut session = decoder.start(Default::default())?;
+    /// let mut payload = Vec::new();
+    /// let mut buffer = [0; 2];
+    /// let mut remaining = &bytes[..];
+    /// while !remaining.is_empty() {
+    ///     let progress = session.process(remaining, &mut buffer, DecodeOperation::Process)?;
+    ///     remaining = &remaining[progress.consumed..];
+    ///     if let FramedDecoderStatus::Event(FramedEvent::ResourceData(data)) = progress.status {
+    ///         payload.extend_from_slice(data.bytes);
+    ///     }
+    /// }
+    /// // Every input byte is accepted; drain the events it still produces.
+    /// loop {
+    ///     let progress = session.flush(&mut buffer)?;
+    ///     match progress.status {
+    ///         FramedDecoderStatus::Event(FramedEvent::ResourceData(data)) =>
+    ///             payload.extend_from_slice(data.bytes),
+    ///         FramedDecoderStatus::NeedsInput | FramedDecoderStatus::Finished => break,
+    ///         _ => {}
+    ///     }
+    /// }
+    /// assert_eq!(payload, b"abc");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    // The by-value failure contract preserves progress even when allocation fails;
+    // boxing this 128-byte record would require an allocation on the error path.
+    #[expect(
+        clippy::result_large_err,
+        reason = "allocation-independent progress is part of the public contract"
+    )]
+    pub fn flush<'a>(
+        &'a mut self,
+        output: &'a mut [u8],
+    ) -> Result<FramedDecodeProgress<'a>, FramedDecodeFailure> {
+        self.process(&[], output, DecodeOperation::Process)
+    }
+    /// Declares EOF with no input left, and delivers what remains.
+    ///
+    /// Shorthand for [`Self::process`] with empty input and
+    /// [`DecodeOperation::Finish`], for when every input byte has already been
+    /// accepted. Call it until it reports [`FramedDecoderStatus::Finished`],
+    /// handling each event in between.
+    ///
+    /// # Errors
+    /// As [`Self::process`]. An incomplete object reports its truncation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::framing::*;
+    /// use mbrotli::DecodeOperation;
+    /// let bytes = [0x91, 10, 66, 82, 0, 6, 2, 0, 0, b'a', b'b', b'c'];
+    /// let mut decoder = FramedDecompressor::new(Default::default())?;
+    /// let mut session = decoder.start(Default::default())?;
+    /// let mut payload = Vec::new();
+    /// let mut remaining = &bytes[..];
+    /// // Offer all input, handling events, until it has been accepted.
+    /// loop {
+    ///     let mut buffer = [0; 2];
+    ///     let progress = session.process(remaining, &mut buffer, DecodeOperation::Process)?;
+    ///     remaining = &remaining[progress.consumed..];
+    ///     match progress.status {
+    ///         FramedDecoderStatus::Event(FramedEvent::ResourceData(data)) =>
+    ///             payload.extend_from_slice(data.bytes),
+    ///         FramedDecoderStatus::NeedsInput => break,
+    ///         _ => {}
+    ///     }
+    /// }
+    /// // Then declare EOF and take the rest.
+    /// loop {
+    ///     let mut buffer = [0; 2];
+    ///     let progress = session.finish(&mut buffer)?;
+    ///     match progress.status {
+    ///         FramedDecoderStatus::Event(FramedEvent::ResourceData(data)) =>
+    ///             payload.extend_from_slice(data.bytes),
+    ///         FramedDecoderStatus::Finished => break,
+    ///         _ => {}
+    ///     }
+    /// }
+    /// assert_eq!(payload, b"abc");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    // The by-value failure contract preserves progress even when allocation fails;
+    // boxing this 128-byte record would require an allocation on the error path.
+    #[expect(
+        clippy::result_large_err,
+        reason = "allocation-independent progress is part of the public contract"
+    )]
+    pub fn finish<'a>(
+        &'a mut self,
+        output: &'a mut [u8],
+    ) -> Result<FramedDecodeProgress<'a>, FramedDecodeFailure> {
+        self.process(&[], output, DecodeOperation::Finish)
+    }
     // The by-value failure contract preserves progress even when allocation fails;
     // boxing this 128-byte record would require an allocation on the error path.
     #[expect(
@@ -347,6 +459,116 @@ impl<R: DictionaryResolver + 'static> FramedDecoderSessionOwned<R> {
         let resolver = self.resolver.as_ref().map(DictionaryResolverRef::from);
         self.owner
             .session_process(resolver, input, output, operation)
+    }
+
+    /// Delivers output for input already accepted, without declaring EOF.
+    ///
+    /// Shorthand for [`Self::process`] with empty input and
+    /// [`DecodeOperation::Process`]; events still borrow `output` and the
+    /// session. After a `Finish`, only `Finish` calls are valid.
+    ///
+    /// # Errors
+    /// As [`Self::process`]; after a `Finish` this reports
+    /// [`FramedDecodeError::InvalidState`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::framing::*;
+    /// use mbrotli::DecodeOperation;
+    /// let bytes = [0x91, 10, 66, 82, 0, 6, 2, 0, 0, b'a', b'b', b'c'];
+    /// let mut session = FramedDecompressor::new(Default::default())?.into_session(Default::default())?;
+    /// let mut payload = Vec::new();
+    /// let mut buffer = [0; 2];
+    /// let mut remaining = &bytes[..];
+    /// while !remaining.is_empty() {
+    ///     let progress = session.process(remaining, &mut buffer, DecodeOperation::Process)?;
+    ///     remaining = &remaining[progress.consumed..];
+    ///     if let FramedDecoderStatus::Event(FramedEvent::ResourceData(data)) = progress.status {
+    ///         payload.extend_from_slice(data.bytes);
+    ///     }
+    /// }
+    /// // Every input byte is accepted; drain the events it still produces.
+    /// loop {
+    ///     let progress = session.flush(&mut buffer)?;
+    ///     match progress.status {
+    ///         FramedDecoderStatus::Event(FramedEvent::ResourceData(data)) =>
+    ///             payload.extend_from_slice(data.bytes),
+    ///         FramedDecoderStatus::NeedsInput | FramedDecoderStatus::Finished => break,
+    ///         _ => {}
+    ///     }
+    /// }
+    /// assert_eq!(payload, b"abc");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    // The by-value failure contract preserves progress even when allocation fails;
+    // boxing this 128-byte record would require an allocation on the error path.
+    #[expect(
+        clippy::result_large_err,
+        reason = "allocation-independent progress is part of the public contract"
+    )]
+    pub fn flush<'a>(
+        &'a mut self,
+        output: &'a mut [u8],
+    ) -> Result<FramedDecodeProgress<'a>, FramedDecodeFailure> {
+        self.process(&[], output, DecodeOperation::Process)
+    }
+    /// Declares EOF with no input left, and delivers what remains.
+    ///
+    /// Shorthand for [`Self::process`] with empty input and
+    /// [`DecodeOperation::Finish`], for when every input byte has already been
+    /// accepted. Call it until it reports [`FramedDecoderStatus::Finished`],
+    /// handling each event in between.
+    ///
+    /// # Errors
+    /// As [`Self::process`]. An incomplete object reports its truncation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::framing::*;
+    /// use mbrotli::DecodeOperation;
+    /// let bytes = [0x91, 10, 66, 82, 0, 6, 2, 0, 0, b'a', b'b', b'c'];
+    /// let mut session = FramedDecompressor::new(Default::default())?.into_session(Default::default())?;
+    /// let mut payload = Vec::new();
+    /// let mut remaining = &bytes[..];
+    /// // Offer all input, handling events, until it has been accepted.
+    /// loop {
+    ///     let mut buffer = [0; 2];
+    ///     let progress = session.process(remaining, &mut buffer, DecodeOperation::Process)?;
+    ///     remaining = &remaining[progress.consumed..];
+    ///     match progress.status {
+    ///         FramedDecoderStatus::Event(FramedEvent::ResourceData(data)) =>
+    ///             payload.extend_from_slice(data.bytes),
+    ///         FramedDecoderStatus::NeedsInput => break,
+    ///         _ => {}
+    ///     }
+    /// }
+    /// // Then declare EOF and take the rest.
+    /// loop {
+    ///     let mut buffer = [0; 2];
+    ///     let progress = session.finish(&mut buffer)?;
+    ///     match progress.status {
+    ///         FramedDecoderStatus::Event(FramedEvent::ResourceData(data)) =>
+    ///             payload.extend_from_slice(data.bytes),
+    ///         FramedDecoderStatus::Finished => break,
+    ///         _ => {}
+    ///     }
+    /// }
+    /// assert_eq!(payload, b"abc");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    // The by-value failure contract preserves progress even when allocation fails;
+    // boxing this 128-byte record would require an allocation on the error path.
+    #[expect(
+        clippy::result_large_err,
+        reason = "allocation-independent progress is part of the public contract"
+    )]
+    pub fn finish<'a>(
+        &'a mut self,
+        output: &'a mut [u8],
+    ) -> Result<FramedDecodeProgress<'a>, FramedDecodeFailure> {
+        self.process(&[], output, DecodeOperation::Finish)
     }
     /// Accepted wire bytes, including failing calls.
     pub const fn total_in(&self) -> u64 {

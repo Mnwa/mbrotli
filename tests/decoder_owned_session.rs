@@ -26,6 +26,8 @@ trait Session {
         operation: DecodeOperation,
     ) -> Result<DecodeProgress, DecodeFailure>;
     fn totals(&self) -> Totals;
+    fn flush_now(&mut self, output: &mut [u8]) -> Result<DecodeProgress, DecodeFailure>;
+    fn finish_now(&mut self, output: &mut [u8]) -> Result<DecodeProgress, DecodeFailure>;
 }
 
 /// Everything a session reports about itself between calls.
@@ -56,6 +58,12 @@ impl Session for DecoderSession<'_, '_> {
             window: self.window(),
         }
     }
+    fn flush_now(&mut self, output: &mut [u8]) -> Result<DecodeProgress, DecodeFailure> {
+        self.flush(output)
+    }
+    fn finish_now(&mut self, output: &mut [u8]) -> Result<DecodeProgress, DecodeFailure> {
+        self.finish(output)
+    }
 }
 
 impl<D: AsRef<DecodeDictionary> + 'static> Session for DecoderSessionOwned<D> {
@@ -75,6 +83,12 @@ impl<D: AsRef<DecodeDictionary> + 'static> Session for DecoderSessionOwned<D> {
             members: self.members_decoded(),
             window: self.window(),
         }
+    }
+    fn flush_now(&mut self, output: &mut [u8]) -> Result<DecodeProgress, DecodeFailure> {
+        self.flush(output)
+    }
+    fn finish_now(&mut self, output: &mut [u8]) -> Result<DecodeProgress, DecodeFailure> {
+        self.finish(output)
     }
 }
 
@@ -770,4 +784,116 @@ fn reinit_keeps_the_dictionary_of_the_session() {
     );
     assert_eq!(drive(&mut session, &compressed, 11, 13), expected);
     assert_eq!(expected.output, payload);
+}
+
+/// Accepts all of `compressed` with `Process`, then drains and finishes with
+/// either the input-free shorthands or `process` with empty input.
+fn with_shorthands(session: &mut impl Session, compressed: &[u8], shorthand: bool) -> Trace {
+    let mut trace = Trace::default();
+    let mut remaining = compressed;
+    while !remaining.is_empty() {
+        let progress = call(session, &mut trace, remaining, 3, DecodeOperation::Process)
+            .expect("the member decodes");
+        remaining = &remaining[progress.consumed..];
+        if progress.status == DecoderStatus::Finished {
+            break;
+        }
+    }
+    for (operation, done) in [
+        (DecodeOperation::Process, DecoderStatus::NeedsInput),
+        (DecodeOperation::Finish, DecoderStatus::Finished),
+    ] {
+        loop {
+            let mut buffer = [0; 5];
+            let result = match (shorthand, operation) {
+                (true, DecodeOperation::Process) => session.flush_now(&mut buffer),
+                (true, DecodeOperation::Finish) => session.finish_now(&mut buffer),
+                (false, operation) => session.step(&[], &mut buffer, operation),
+            };
+            let progress = result.expect("the member decodes");
+            trace.output.extend_from_slice(&buffer[..progress.produced]);
+            trace.calls.push(Call::Progress(progress));
+            trace.totals.push(session.totals());
+            if progress.status == done || progress.status == DecoderStatus::Finished {
+                break;
+            }
+        }
+    }
+    trace
+}
+
+#[test]
+fn flush_and_finish_are_process_without_input_in_both_session_shapes() {
+    let payload = b"flush and finish take no input ".repeat(80);
+    for quality in [0, 5, 11] {
+        let compressed = c_compress(quality, 22, &payload);
+        for config in [
+            DecoderConfig::default(),
+            DecoderConfig::default().with_member_mode(MemberMode::Concatenated),
+        ] {
+            let mut owner = decoder(config);
+            let expected = with_shorthands(
+                &mut owner.start(Default::default()).expect("start"),
+                &compressed,
+                false,
+            );
+            let borrowed = with_shorthands(
+                &mut owner.start(Default::default()).expect("start"),
+                &compressed,
+                true,
+            );
+            let owned = with_shorthands(
+                &mut decoder(config)
+                    .into_session(Default::default())
+                    .expect("start"),
+                &compressed,
+                true,
+            );
+            assert_eq!(borrowed, expected, "q{quality}");
+            assert_eq!(owned, expected, "q{quality}");
+            assert_eq!(owned.output, payload);
+        }
+    }
+}
+
+#[test]
+fn the_shorthands_keep_the_finish_contract() {
+    let compressed = c_compress(5, 22, &b"a member cut short ".repeat(50));
+    let mut session = decoder(DecoderConfig::default())
+        .into_session(Default::default())
+        .expect("start");
+    session
+        .process(
+            &compressed[..compressed.len() / 2],
+            &mut [0; 4096],
+            DecodeOperation::Process,
+        )
+        .expect("half");
+    // EOF mid-member is truncation.
+    assert!(matches!(
+        session.finish(&mut [0; 4096]).unwrap_err().into_error(),
+        DecodeError::UnexpectedEndOfInput
+    ));
+
+    // After a `Finish`, the non-EOF shorthand breaks the contract.
+    let mut session = session
+        .into_decompressor()
+        .into_session(Default::default())
+        .expect("start");
+    let progress = session
+        .process(&compressed, &mut [0; 2], DecodeOperation::Finish)
+        .expect("first finish");
+    assert_eq!(progress.status, DecoderStatus::NeedsOutput);
+    let mut owner = decoder(DecoderConfig::default());
+    let mut borrowed = owner.start(Default::default()).expect("start");
+    borrowed
+        .process(&compressed, &mut [0; 2], DecodeOperation::Finish)
+        .expect("first finish");
+    for failure in [
+        session.flush(&mut [0; 8]).unwrap_err(),
+        borrowed.flush(&mut [0; 8]).unwrap_err(),
+    ] {
+        assert_eq!((failure.consumed, failure.produced), (0, 0));
+        assert!(matches!(failure.into_error(), DecodeError::InvalidState));
+    }
 }

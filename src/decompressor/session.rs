@@ -178,6 +178,75 @@ impl DecoderSession<'_, '_> {
         )
     }
 
+    /// Delivers output for input already accepted, without declaring EOF.
+    ///
+    /// Shorthand for [`Self::process`] with empty input and
+    /// [`DecodeOperation::Process`]. Use it to drain a
+    /// [`DecoderStatus::NeedsOutput`] into fresh space; it never declares the
+    /// input complete. After a `Finish`, only `Finish` calls are valid.
+    ///
+    /// # Errors
+    /// As [`Self::process`]; after a `Finish` this reports
+    /// [`DecodeError::InvalidState`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{DecodeOperation, DecoderStatus, Decompressor};
+    /// let compressed = [0x0b, 0x02, 0x80, b'h', b'e', b'l', b'l', b'o', 0x03];
+    /// let mut decoder = Decompressor::new(Default::default())?;
+    /// let mut session = decoder.start(Default::default())?;
+    /// let mut decoded = Vec::new();
+    /// let mut buffer = [0; 2];
+    /// let mut remaining = &compressed[..];
+    /// while !remaining.is_empty() {
+    ///     let progress = session.process(remaining, &mut buffer, DecodeOperation::Process)?;
+    ///     remaining = &remaining[progress.consumed..];
+    ///     decoded.extend_from_slice(&buffer[..progress.produced]);
+    /// }
+    /// // Every input byte is accepted; drain whatever it still produces.
+    /// loop {
+    ///     let progress = session.flush(&mut buffer)?;
+    ///     decoded.extend_from_slice(&buffer[..progress.produced]);
+    ///     if progress.status != DecoderStatus::NeedsOutput {
+    ///         break;
+    ///     }
+    /// }
+    /// assert_eq!(decoded, b"hello");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn flush(&mut self, output: &mut [u8]) -> Result<DecodeProgress, DecodeFailure> {
+        self.process(&[], output, DecodeOperation::Process)
+    }
+
+    /// Declares EOF with no input left, and delivers the remaining output.
+    ///
+    /// Shorthand for [`Self::process`] with empty input and
+    /// [`DecodeOperation::Finish`], for when every input byte has already been
+    /// accepted. Repeat it while it reports [`DecoderStatus::NeedsOutput`],
+    /// until [`DecoderStatus::Finished`].
+    ///
+    /// # Errors
+    /// As [`Self::process`]. Stopping mid-member reports
+    /// [`DecodeError::UnexpectedEndOfInput`], and an unconsumed suffix left
+    /// by an earlier `Finish` reports [`DecodeError::InvalidState`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{DecodeOperation, DecoderStatus, Decompressor};
+    /// let compressed = [0x0b, 0x02, 0x80, b'h', b'e', b'l', b'l', b'o', 0x03];
+    /// let mut decoder = Decompressor::new(Default::default())?;
+    /// let mut session = decoder.start(Default::default())?;
+    /// let progress = session.process(&compressed, &mut [0; 16], DecodeOperation::Process)?;
+    /// assert_eq!(progress.consumed, compressed.len());
+    /// assert_eq!(session.finish(&mut [])?.status, DecoderStatus::Finished);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn finish(&mut self, output: &mut [u8]) -> Result<DecodeProgress, DecodeFailure> {
+        self.process(&[], output, DecodeOperation::Finish)
+    }
+
     /// Collects at most one history window without a second output allocation.
     pub(super) fn collect(&mut self, input: &[u8]) -> Result<DecodeProgress, DecodeFailure> {
         let capacity = self.operation.window().map_or(0, |window| {
@@ -348,6 +417,73 @@ impl<D: AsRef<DecodeDictionary> + 'static> DecoderSessionOwned<D> {
             operation,
             None,
         )
+    }
+
+    /// Delivers output for input already accepted, without declaring EOF.
+    ///
+    /// Shorthand for [`Self::process`] with empty input and
+    /// [`DecodeOperation::Process`]. Use it to drain a
+    /// [`DecoderStatus::NeedsOutput`] into fresh space; it never declares the
+    /// input complete. After a `Finish`, only `Finish` calls are valid.
+    ///
+    /// # Errors
+    /// As [`Self::process`]; after a `Finish` this reports
+    /// [`DecodeError::InvalidState`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{DecodeOperation, DecoderStatus, Decompressor};
+    /// let compressed = [0x0b, 0x02, 0x80, b'h', b'e', b'l', b'l', b'o', 0x03];
+    /// let mut session = Decompressor::new(Default::default())?.into_session(Default::default())?;
+    /// let mut decoded = Vec::new();
+    /// let mut buffer = [0; 2];
+    /// let mut remaining = &compressed[..];
+    /// while !remaining.is_empty() {
+    ///     let progress = session.process(remaining, &mut buffer, DecodeOperation::Process)?;
+    ///     remaining = &remaining[progress.consumed..];
+    ///     decoded.extend_from_slice(&buffer[..progress.produced]);
+    /// }
+    /// // Every input byte is accepted; drain whatever it still produces.
+    /// loop {
+    ///     let progress = session.flush(&mut buffer)?;
+    ///     decoded.extend_from_slice(&buffer[..progress.produced]);
+    ///     if progress.status != DecoderStatus::NeedsOutput {
+    ///         break;
+    ///     }
+    /// }
+    /// assert_eq!(decoded, b"hello");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn flush(&mut self, output: &mut [u8]) -> Result<DecodeProgress, DecodeFailure> {
+        self.process(&[], output, DecodeOperation::Process)
+    }
+
+    /// Declares EOF with no input left, and delivers the remaining output.
+    ///
+    /// Shorthand for [`Self::process`] with empty input and
+    /// [`DecodeOperation::Finish`], for when every input byte has already been
+    /// accepted. Repeat it while it reports [`DecoderStatus::NeedsOutput`],
+    /// until [`DecoderStatus::Finished`].
+    ///
+    /// # Errors
+    /// As [`Self::process`]. Stopping mid-member reports
+    /// [`DecodeError::UnexpectedEndOfInput`], and an unconsumed suffix left
+    /// by an earlier `Finish` reports [`DecodeError::InvalidState`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{DecodeOperation, DecoderStatus, Decompressor};
+    /// let compressed = [0x0b, 0x02, 0x80, b'h', b'e', b'l', b'l', b'o', 0x03];
+    /// let mut session = Decompressor::new(Default::default())?.into_session(Default::default())?;
+    /// let progress = session.process(&compressed, &mut [0; 16], DecodeOperation::Process)?;
+    /// assert_eq!(progress.consumed, compressed.len());
+    /// assert_eq!(session.finish(&mut [])?.status, DecoderStatus::Finished);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn finish(&mut self, output: &mut [u8]) -> Result<DecodeProgress, DecodeFailure> {
+        self.process(&[], output, DecodeOperation::Finish)
     }
 
     /// Whether all members and the exact-size contract were validated.

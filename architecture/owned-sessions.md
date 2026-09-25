@@ -162,6 +162,35 @@ sessions in [compressor](compressor.md) and
 - **No hot-path changes.** Encoder and decoder algorithms, SIMD dispatch and
   output bytes are unchanged.
 
+## Input-free `flush` and `finish`
+
+Every session, borrowed or owned, plus `FramedResourceSession`, has
+`flush(output)` and `finish(output)`. Each is a one-line call to that type's own
+`process`, so it inherits every contract of `process` unchanged.
+
+| Session | `flush(output)` | `finish(output)` |
+| --- | --- | --- |
+| `EncoderSession`, `EncoderSessionOwned` | `process(&[], output, Operation::Flush)` | `process(&[], output, Operation::Finish)` |
+| `FramedResourceSession` | `process(&[], output, Operation::Flush)` | `process(&[], output, Operation::Finish)` |
+| `FramedEncoderSession`, `FramedEncoderSessionOwned` | `process(output, FramedEncodeOperation::Process)`: drain queued wire bytes | `process(output, FramedEncodeOperation::Finish)` |
+| `DecoderSession`, `DecoderSessionOwned` | `process(&[], output, DecodeOperation::Process)`: deliver output for accepted input, no EOF | `process(&[], output, DecodeOperation::Finish)`: EOF with an empty suffix |
+| `FramedDecoderSession`, `FramedDecoderSessionOwned` | as the raw decoder; events are still lent | as the raw decoder |
+
+- **Decoders have no `Flush` operation.** Their `flush` only drains output for
+  input that has already been accepted. A stored payload is accepted only
+  when there is room to deliver it, so after a `NeedsOutput` it may have
+  nothing to drain.
+- **The final-suffix contract still applies after `Finish`.** Once a decoder
+  has seen `Finish`, `flush` reports `InvalidState`, because it would change
+  the operation. `finish` is correct only once every input byte has been
+  accepted: stopping mid-member reports truncation, and leaving a suffix
+  offered to an earlier `Finish` unconsumed reports `InvalidState`.
+- **Tests.** Each test file drives the same schedule twice, once through
+  `process` with empty input and once through the shorthands, on both the
+  borrowed and the owned session, and requires identical traces. It also
+  checks the idempotent `Finished` state and the `Finish` contract errors
+  above.
+
 ## Reinitialization
 
 All four owned sessions have a `reinit(&mut self, stream)` method. It ends the

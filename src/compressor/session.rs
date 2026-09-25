@@ -390,6 +390,75 @@ impl<'c, 'd> EncoderSession<'c, 'd> {
         self.core.process(input, output, operation)
     }
 
+    /// Makes everything accepted so far decodable, without taking input.
+    ///
+    /// Shorthand for [`Self::process`] with empty input and
+    /// [`Operation::Flush`]. Repeat it while it reports
+    /// [`EncoderStatus::NeedsOutput`]; `NeedsInput` means the flush has been
+    /// delivered and the stream stays open.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::process`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{Compressor, EncoderStatus, Operation};
+    ///
+    /// let mut encoder = Compressor::new(Default::default())?;
+    /// let mut session = encoder.start(Default::default())?;
+    /// let mut output = [0u8; 256];
+    /// session.process(b"flushed payload", &mut output, Operation::Process)?;
+    /// let progress = session.flush(&mut output)?;
+    /// assert_eq!(progress.status, EncoderStatus::NeedsInput);
+    /// assert!(progress.produced > 0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn flush(&mut self, output: &mut [u8]) -> Result<Progress, EncodeError> {
+        self.process(&[], output, Operation::Flush)
+    }
+
+    /// Terminates the stream, without taking input.
+    ///
+    /// Shorthand for [`Self::process`] with empty input and
+    /// [`Operation::Finish`], for when every input byte has already been
+    /// passed to `process`. Repeat it while it reports
+    /// [`EncoderStatus::NeedsOutput`], until [`EncoderStatus::Finished`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::process`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{Compressor, EncoderStatus, Operation};
+    ///
+    /// let mut encoder = Compressor::new(Default::default())?;
+    /// let mut session = encoder.start(Default::default())?;
+    /// let mut compressed = Vec::new();
+    /// let mut output = [0u8; 4];
+    /// let mut input = &b"finished without input"[..];
+    /// while !input.is_empty() {
+    ///     let progress = session.process(input, &mut output, Operation::Process)?;
+    ///     input = &input[progress.consumed..];
+    ///     compressed.extend_from_slice(&output[..progress.produced]);
+    /// }
+    /// loop {
+    ///     let progress = session.finish(&mut output)?;
+    ///     compressed.extend_from_slice(&output[..progress.produced]);
+    ///     if progress.status == EncoderStatus::Finished {
+    ///         break;
+    ///     }
+    /// }
+    /// assert!(session.is_finished());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn finish(&mut self, output: &mut [u8]) -> Result<Progress, EncodeError> {
+        self.process(&[], output, Operation::Finish)
+    }
+
     /// Returns whether the stream has been terminated and delivered.
     ///
     /// # Examples
@@ -518,6 +587,73 @@ impl<D: AsRef<PreparedDictionary> + 'static> EncoderSessionOwned<D> {
         operation: Operation,
     ) -> Result<Progress, EncodeError> {
         self.core.process(input, output, operation)
+    }
+
+    /// Makes everything accepted so far decodable, without taking input.
+    ///
+    /// Shorthand for [`Self::process`] with empty input and
+    /// [`Operation::Flush`]. Repeat it while it reports
+    /// [`EncoderStatus::NeedsOutput`]; `NeedsInput` means the flush has been
+    /// delivered and the stream stays open.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::process`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{Compressor, EncoderStatus, Operation};
+    ///
+    /// let mut session = Compressor::new(Default::default())?.into_session(Default::default())?;
+    /// let mut output = [0u8; 256];
+    /// session.process(b"flushed payload", &mut output, Operation::Process)?;
+    /// let progress = session.flush(&mut output)?;
+    /// assert_eq!(progress.status, EncoderStatus::NeedsInput);
+    /// assert!(progress.produced > 0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn flush(&mut self, output: &mut [u8]) -> Result<Progress, EncodeError> {
+        self.process(&[], output, Operation::Flush)
+    }
+
+    /// Terminates the stream, without taking input.
+    ///
+    /// Shorthand for [`Self::process`] with empty input and
+    /// [`Operation::Finish`], for when every input byte has already been
+    /// passed to `process`. Repeat it while it reports
+    /// [`EncoderStatus::NeedsOutput`], until [`EncoderStatus::Finished`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::process`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{Compressor, EncoderStatus, Operation};
+    ///
+    /// let mut session = Compressor::new(Default::default())?.into_session(Default::default())?;
+    /// let mut compressed = Vec::new();
+    /// let mut output = [0u8; 4];
+    /// let mut input = &b"finished without input"[..];
+    /// while !input.is_empty() {
+    ///     let progress = session.process(input, &mut output, Operation::Process)?;
+    ///     input = &input[progress.consumed..];
+    ///     compressed.extend_from_slice(&output[..progress.produced]);
+    /// }
+    /// loop {
+    ///     let progress = session.finish(&mut output)?;
+    ///     compressed.extend_from_slice(&output[..progress.produced]);
+    ///     if progress.status == EncoderStatus::Finished {
+    ///         break;
+    ///     }
+    /// }
+    /// assert!(session.is_finished());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn finish(&mut self, output: &mut [u8]) -> Result<Progress, EncodeError> {
+        self.process(&[], output, Operation::Finish)
     }
 
     /// Returns whether the stream has been terminated and delivered.

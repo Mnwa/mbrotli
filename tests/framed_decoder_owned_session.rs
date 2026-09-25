@@ -102,6 +102,12 @@ trait Facade {
         operation: DecodeOperation,
     ) -> (String, Option<(usize, bool)>);
     fn counters(&self) -> String;
+    /// `flush` (for `Process`) or `finish` (for `Finish`), recorded like `record`.
+    fn record_shorthand(
+        &mut self,
+        output: &mut [u8],
+        operation: DecodeOperation,
+    ) -> (String, Option<(usize, bool)>);
 }
 
 fn describe(
@@ -128,6 +134,16 @@ macro_rules! facade {
             ) -> (String, Option<(usize, bool)>) {
                 describe(self.process(input, output, operation))
             }
+            fn record_shorthand(
+                &mut self,
+                output: &mut [u8],
+                operation: DecodeOperation,
+            ) -> (String, Option<(usize, bool)>) {
+                describe(match operation {
+                    DecodeOperation::Process => self.flush(output),
+                    DecodeOperation::Finish => self.finish(output),
+                })
+            }
             fn counters(&self) -> String {
                 format!(
                     "{} {} {} {} {} {:?}",
@@ -151,6 +167,16 @@ impl<R: DictionaryResolver + 'static> Facade for FramedDecoderSessionOwned<R> {
         operation: DecodeOperation,
     ) -> (String, Option<(usize, bool)>) {
         describe(self.process(input, output, operation))
+    }
+    fn record_shorthand(
+        &mut self,
+        output: &mut [u8],
+        operation: DecodeOperation,
+    ) -> (String, Option<(usize, bool)>) {
+        describe(match operation {
+            DecodeOperation::Process => self.flush(output),
+            DecodeOperation::Finish => self.finish(output),
+        })
     }
     fn counters(&self) -> String {
         format!(
@@ -698,4 +724,96 @@ fn reinit_keeps_the_resolver_of_the_session() {
     end_first_object(&mut session, "failed");
     session.reinit(Default::default()).expect("reinit");
     assert_eq!(drive(&mut session, &input, 5, &[1, 0, 3]), expected);
+}
+
+/// Accepts all of `input` with `Process`, then drains with the non-EOF call
+/// and ends with the EOF call, through the shorthands or through `process`.
+fn with_shorthands(session: &mut impl Facade, input: &[u8], shorthand: bool) -> Vec<String> {
+    let mut log = Vec::new();
+    let mut remaining = input;
+    while !remaining.is_empty() {
+        let (text, next) = session.record(remaining, &mut [0; 2], DecodeOperation::Process);
+        log.push(text);
+        let (consumed, _) = next.expect("the object decodes");
+        remaining = &remaining[consumed..];
+    }
+    for operation in [DecodeOperation::Process, DecodeOperation::Finish] {
+        loop {
+            let mut output = [0; 2];
+            let (text, next) = if shorthand {
+                session.record_shorthand(&mut output, operation)
+            } else {
+                session.record(&[], &mut output, operation)
+            };
+            let stop = text.contains("NeedsInput") || text.contains("status: Finished");
+            log.push(text);
+            log.push(session.counters());
+            let (_, finished) = next.expect("the object decodes");
+            if finished || (stop && operation == DecodeOperation::Process) {
+                break;
+            }
+        }
+    }
+    log
+}
+
+#[test]
+fn flush_and_finish_are_process_without_input_in_both_session_shapes() {
+    let footerless = {
+        let mut b = vec![0x91, 10, 66, 82, 0];
+        b.extend(chunk(&[2, 0, 0], b"footerless"));
+        b
+    };
+    let mut inputs = vec![footerless];
+    inputs.extend(
+        corpus()
+            .into_iter()
+            .filter(|(name, _)| !name.starts_with("dictionary"))
+            .map(|(_, bytes)| bytes),
+    );
+    for input in inputs {
+        let mut owner = decoder(Default::default());
+        let expected = with_shorthands(
+            &mut owner.start(Default::default()).expect("start"),
+            &input,
+            false,
+        );
+        let borrowed = with_shorthands(
+            &mut owner.start(Default::default()).expect("start"),
+            &input,
+            true,
+        );
+        let owned = with_shorthands(
+            &mut decoder(Default::default())
+                .into_session(Default::default())
+                .expect("start"),
+            &input,
+            true,
+        );
+        assert_eq!(borrowed, expected);
+        assert_eq!(owned, expected);
+        assert!(finished(&owned));
+    }
+}
+
+#[test]
+fn the_framed_shorthands_keep_the_finish_contract() {
+    let bytes = full(&[chunk(&[2, 0, 0], b"abcdef")]);
+    let mut session = decoder(Default::default())
+        .into_session(Default::default())
+        .expect("start");
+    session
+        .process(&bytes[..7], &mut [0; 64], DecodeOperation::Process)
+        .expect("partial");
+    // EOF inside the object is truncation, not success.
+    assert!(session.finish(&mut [0; 64]).is_err());
+
+    session.reinit(Default::default()).expect("reinit");
+    let mut output = [0; 1];
+    session
+        .process(&bytes, &mut output, DecodeOperation::Finish)
+        .expect("first finish");
+    let failure = session.flush(&mut [0; 8]).unwrap_err();
+    assert!(matches!(failure.error, FramedDecodeError::InvalidState));
+    assert_eq!((failure.consumed, failure.produced), (0, 0));
 }
