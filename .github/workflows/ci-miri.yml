@@ -37,7 +37,7 @@ jobs:
       # `compressor::core::stream::tests` is also a substring of
       # `decompressor::core::stream::tests`, whose golden and ring-boundary
       # tests take hours under Miri; skip them.
-      - run: cargo miri test --lib compressor::core::stream::tests -- --skip decompressor::
+      - run: cargo miri test --lib compressor::core::stream::tests -- --skip decompressor::core::stream
 
       - run: cargo miri test --test decompress_golden
       - run: cargo miri test --test decompress_golden --features experimental

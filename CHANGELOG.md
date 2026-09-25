@@ -6,7 +6,7 @@
   running the nine `decompressor::core::stream::tests`. libtest filters match
   substrings, so the step ran the decoder's golden and ring-boundary tests
   under the interpreter, which took hours. It now passes
-  `--skip decompressor::` and runs only its one intended test.
+  `--skip decompressor::core::stream` and runs only its one intended test.
 
 - Skip `a_deep_shape_takes_the_dense_table_once_it_is_reused` in the Miri
   workflow. It checks the sparse-to-dense layout policy rather than memory
