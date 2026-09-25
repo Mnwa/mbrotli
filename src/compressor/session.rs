@@ -412,6 +412,161 @@ impl<'c, 'd> EncoderSession<'c, 'd> {
     }
 }
 
+/// One incremental Brotli stream that owns its compressor.
+///
+/// [`EncoderSession`] borrows its [`Compressor`] with `&mut` for as long as it
+/// lives. `EncoderSessionOwned` consumes the compressor instead, so the stream
+/// state is one ordinary owned value with no lifetime tied to the compressor.
+/// That suits wrappers which have to store the codec state themselves, such as
+/// adapters that keep it in a struct between calls. It is still the same
+/// synchronous, caller-driven API: it is not an async interface, and it keeps
+/// no references into its own fields.
+///
+/// Created by [`Compressor::into_session`](super::Compressor::into_session) or
+/// [`Compressor::into_session_with_dictionary`](super::Compressor::into_session_with_dictionary).
+/// [`Self::process`] runs the same state machine as
+/// [`EncoderSession::process`], so the same calls produce the same bytes,
+/// counts, statuses and errors. [`Self::into_compressor`] ends the stream the
+/// way dropping a borrowed session does and hands the compressor back ready for
+/// the next operation. Dropping the owned session instead drops the compressor
+/// with it.
+///
+/// The session has no lifetime. A dictionary, when one is attached, is owned
+/// too, as any `D: AsRef<PreparedDictionary> + 'static`: an
+/// `Arc<PreparedDictionary>` to share one without copying it, a
+/// `&'static PreparedDictionary`, or the dictionary itself. Without one, `D`
+/// stays at its default and is never constructed.
+///
+/// # Examples
+///
+/// ```
+/// use mbrotli::{Compressor, EncoderStatus, Operation};
+///
+/// let compressor = Compressor::new(Default::default())?;
+/// let mut session = compressor.into_session(Default::default())?;
+/// let mut output = [0u8; 256];
+///
+/// let progress = session.process(b"owned stream", &mut output, Operation::Finish)?;
+/// assert_eq!(progress.status, EncoderStatus::Finished);
+///
+/// let mut compressor = session.into_compressor();
+/// assert!(!compressor.compress(b"reused")?.is_empty());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug)]
+pub struct EncoderSessionOwned<D = PreparedDictionary> {
+    core: super::core::session::OwnedSessionCore<D>,
+}
+
+impl<D: AsRef<PreparedDictionary> + 'static> EncoderSessionOwned<D> {
+    /// Starts a stream that owns `compressor`.
+    ///
+    /// The caller has already validated the stream configuration and acquired
+    /// the encoder, which is what fixes `limit`.
+    pub(crate) fn new(
+        compressor: Compressor,
+        dictionary: Option<D>,
+        limit: usize,
+        stream: StreamConfig,
+    ) -> Self {
+        Self {
+            core: super::core::session::OwnedSessionCore::new(
+                compressor, dictionary, limit, stream,
+            ),
+        }
+    }
+
+    /// Moves the stream forward by one step.
+    ///
+    /// Behaves exactly as [`EncoderSession::process`]: the same operations,
+    /// the same exact `consumed` and `produced` counts, the same statuses, and
+    /// a `Finish` that returns `NeedsOutput` must be repeated until it reports
+    /// `Finished`, after which further calls are idempotent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EncodeError::InvalidState`] when the stream has already failed,
+    /// and propagates whatever the encoder reports. A failed session encodes
+    /// nothing further; [`Self::into_compressor`] still returns a usable
+    /// compressor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{Compressor, EncoderConfig, EncoderStatus, Operation, Quality};
+    ///
+    /// let compressor = Compressor::new(EncoderConfig::default().with_quality(Quality::Q5))?;
+    /// let mut session = compressor.into_session(Default::default())?;
+    /// let mut compressed = Vec::new();
+    /// let mut buffer = [0u8; 8];
+    /// let mut input = &b"a payload compressed through a tiny buffer"[..];
+    /// loop {
+    ///     let progress = session.process(input, &mut buffer, Operation::Finish)?;
+    ///     input = &input[progress.consumed..];
+    ///     compressed.extend_from_slice(&buffer[..progress.produced]);
+    ///     if progress.status == EncoderStatus::Finished {
+    ///         break;
+    ///     }
+    /// }
+    /// assert!(session.is_finished());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn process(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        operation: Operation,
+    ) -> Result<Progress, EncodeError> {
+        self.core.process(input, output, operation)
+    }
+
+    /// Returns whether the stream has been terminated and delivered.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{Compressor, Operation};
+    ///
+    /// let mut session = Compressor::new(Default::default())?.into_session(Default::default())?;
+    /// let mut output = [0u8; 256];
+    ///
+    /// assert!(!session.is_finished());
+    /// session.process(b"payload", &mut output, Operation::Finish)?;
+    /// assert!(session.is_finished());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub const fn is_finished(&self) -> bool {
+        self.core.is_finished()
+    }
+
+    /// Ends the stream and returns the compressor, ready for the next one.
+    ///
+    /// Releases the operation exactly as dropping an [`EncoderSession`] does,
+    /// whether the stream finished, was left mid-way, was flushed, or failed:
+    /// an unfinished stream is abandoned, and the compressor's retention policy
+    /// is applied.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{Compressor, Operation};
+    ///
+    /// let mut session = Compressor::new(Default::default())?.into_session(Default::default())?;
+    /// let mut output = [0u8; 256];
+    /// session.process(b"never finished", &mut output, Operation::Process)?;
+    ///
+    /// // The abandoned stream does not block the next one.
+    /// let mut compressor = session.into_compressor();
+    /// assert!(!compressor.compress(b"payload")?.is_empty());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn into_compressor(self) -> Compressor {
+        self.core.into_compressor()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

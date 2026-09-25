@@ -26,6 +26,7 @@
 //! | Pull output through `std::io::Read` | [`Compressor::reader`][compressor-reader] | [`Decompressor::reader`][decompressor-reader] |
 //! | Push input through `std::io::Write` | [`Compressor::writer`][compressor-writer] | [`Decompressor::writer`][decompressor-writer] |
 //! | Drive input/output incrementally | [`start`][compressor-start] → [`EncoderSession`][encoder-session] | [`start`][decompressor-start] → [`DecoderSession`][decoder-session] |
+//! | Same, with the session owning the codec | [`into_session`][compressor-into-session] → [`EncoderSessionOwned`][encoder-session-owned] | [`into_session`][decompressor-into-session] → [`DecoderSessionOwned`][decoder-session-owned] |
 //!
 //! ## Reuse memory between payloads
 //!
@@ -426,6 +427,8 @@
 [compressor-compress-to-slice]: crate::Compressor::compress_to_slice
 [compressor-start]: crate::Compressor::start
 [encoder-session]: crate::EncoderSession
+[compressor-into-session]: crate::Compressor::into_session
+[encoder-session-owned]: crate::EncoderSessionOwned
 "#
 )]
 #![cfg_attr(
@@ -437,6 +440,8 @@
 [compressor-compress-to-slice]: #select-only-the-codecs-you-need
 [compressor-start]: #select-only-the-codecs-you-need
 [encoder-session]: #select-only-the-codecs-you-need
+[compressor-into-session]: #select-only-the-codecs-you-need
+[encoder-session-owned]: #select-only-the-codecs-you-need
 "#
 )]
 #![cfg_attr(
@@ -448,6 +453,8 @@
 [decompressor-decompress-to-slice]: crate::Decompressor::decompress_to_slice
 [decompressor-start]: crate::Decompressor::start
 [decoder-session]: crate::DecoderSession
+[decompressor-into-session]: crate::Decompressor::into_session
+[decoder-session-owned]: crate::DecoderSessionOwned
 "#
 )]
 #![cfg_attr(
@@ -459,6 +466,8 @@
 [decompressor-decompress-to-slice]: #select-only-the-codecs-you-need
 [decompressor-start]: #select-only-the-codecs-you-need
 [decoder-session]: #select-only-the-codecs-you-need
+[decompressor-into-session]: #select-only-the-codecs-you-need
+[decoder-session-owned]: #select-only-the-codecs-you-need
 "#
 )]
 #![cfg_attr(
@@ -557,8 +566,8 @@ pub mod compressor;
 pub mod decompressor;
 #[cfg(feature = "decompression")]
 pub use decompressor::{
-    DecodeFailure, DecodeOperation, DecodeProgress, DecoderSession, DecoderStatus, Decompressor,
-    DecompressorBuilder,
+    DecodeFailure, DecodeOperation, DecodeProgress, DecoderSession, DecoderSessionOwned,
+    DecoderStatus, Decompressor, DecompressorBuilder,
 };
 
 #[cfg(feature = "decompression")]
@@ -592,8 +601,8 @@ pub mod io;
 #[cfg(feature = "compression")]
 pub use compressor::{
     BlockBits, BlockSize, CompressionMode, Compressor, CompressorBuilder, DistanceParams,
-    EncodeError, EncoderConfig, EncoderSession, EncoderStatus, InputSize, LiteralContextMode,
-    Operation, Progress, Quality, SizeOverflow, StreamConfig,
+    EncodeError, EncoderConfig, EncoderSession, EncoderSessionOwned, EncoderStatus, InputSize,
+    LiteralContextMode, Operation, Progress, Quality, SizeOverflow, StreamConfig,
 };
 
 #[cfg(all(feature = "experimental", feature = "compression"))]

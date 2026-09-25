@@ -1,6 +1,7 @@
 //! Incremental Brotli decompression and explicit resource policies.
 //!
-//! One decoder owns reusable workspace; each session borrows it exclusively.
+//! One decoder owns reusable workspace; each session borrows it exclusively,
+//! or, as a [`DecoderSessionOwned`], takes ownership of it until handed back.
 //! RAW prefixes and standard/large windows are available in every profile.
 //! Serialized/custom dictionary extensions require `experimental`.
 //!
@@ -54,7 +55,10 @@ mod session;
 pub mod io;
 
 pub use decoder::{Decompressor, DecompressorBuilder};
-pub use session::{DecodeFailure, DecodeOperation, DecodeProgress, DecoderSession, DecoderStatus};
+pub use session::{
+    DecodeFailure, DecodeOperation, DecodeProgress, DecoderSession, DecoderSessionOwned,
+    DecoderStatus,
+};
 
 pub use config::{
     DecodeLimits, DecodeStreamConfig, DecoderConfig, MemberMode, OutputSize, WindowLimit,

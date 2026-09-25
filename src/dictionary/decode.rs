@@ -103,6 +103,27 @@ impl DecodeDictionary {
     }
 }
 
+impl AsRef<Self> for DecodeDictionary {
+    /// Borrows the dictionary itself, so an owned dictionary, a `&'static`
+    /// one and an `Arc` of one all satisfy `AsRef<DecodeDictionary>`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use mbrotli::dictionary::{DecodeDictionary, DictionaryAttachment};
+    ///
+    /// let shared = Arc::new(DecodeDictionary::new(
+    ///     &[DictionaryAttachment::Raw(b"prefix")], Default::default())?);
+    /// let view: &DecodeDictionary = shared.as_ref().as_ref();
+    /// assert!(std::ptr::eq(view, &*shared));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    fn as_ref(&self) -> &Self {
+        self
+    }
+}
+
 /// Borrowed immutable dictionary source for a single decoding operation.
 ///
 /// Decoder entry points accept `impl Into<DictionaryRef>`, so a shared reference

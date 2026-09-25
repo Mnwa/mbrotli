@@ -108,6 +108,12 @@ history, distances, contexts and entropy state between members, but keep aggrega
 counters and policy; a boundary is `NeedsInput` until final EOF confirms success.
 At least one member is required.
 
+Per-operation fields live in the private `core::session::OperationState`, which
+holds neither the decoder nor the dictionary. `DecoderSession` wraps it over
+`&mut Decompressor` and runs `OperationState::release` on drop.
+`DecoderSessionOwned` wraps the same state over an owned decoder and dictionary;
+see [owned sessions](owned-sessions.md).
+
 A session stores the dictionary borrow itself. The reusable workspace never
 stores that reference, so forgetting a session cannot leave a dereferenceable
 stale pointer. The owner active flag survives `trim`; only explicit recovery or

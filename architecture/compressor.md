@@ -10,6 +10,7 @@ and state machines. See the [user guide](../docs/README.md) for usage.
 graph TD
     API[Compressor and EncoderConfig] --> Driver[private core::driver and EncoderCache]
     Session[EncoderSession] --> Core[private core::session]
+    Owned[EncoderSessionOwned] --> Core
     IO[EncoderReader and EncoderWriter] --> Session
     Core --> Stream[private core::stream: scheduling and delivery]
     Driver --> Stream
@@ -60,8 +61,11 @@ stateDiagram-v2
     Abandoned --> Idle: recover
 ```
 
-Sessions borrow the compressor exclusively. `fork_empty` copies settings without
-workspace; concurrent independent streams need separate compressors.
+Sessions borrow the compressor exclusively. `into_session` instead moves it into
+an `EncoderSessionOwned` over the same `OperationState`, and `into_compressor`
+runs the drop-time release path; see [owned sessions](owned-sessions.md).
+`fork_empty` copies settings without workspace; concurrent independent streams
+need separate compressors.
 
 ## One-shot and incremental flow
 

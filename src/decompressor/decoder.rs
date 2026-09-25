@@ -1,8 +1,10 @@
 use super::{
     DecodeConfigError, DecodeError, DecodeOperation, DecodeStreamConfig, DecoderConfig,
-    DecoderSession, DecoderStatus, core::Stream,
+    DecoderSession, DecoderSessionOwned, DecoderStatus, core::Stream,
 };
-use crate::{Backend, RetentionPolicy, dictionary::DictionaryRef};
+use crate::Backend;
+use crate::RetentionPolicy;
+use crate::dictionary::{DecodeDictionary, DictionaryRef};
 use ::core::ops::Range;
 use alloc::vec::Vec;
 
@@ -231,6 +233,33 @@ impl Decompressor {
     ) -> Result<DecoderSession<'_, 'static>, DecodeError> {
         DecoderSession::start(self, stream, None)
     }
+    /// Starts an incremental operation that takes ownership of this decoder.
+    ///
+    /// Validates and starts exactly as [`Self::start`] does, but the returned
+    /// [`DecoderSessionOwned`] owns the decoder rather than borrowing it.
+    /// Recover the decoder with [`DecoderSessionOwned::into_decompressor`].
+    ///
+    /// # Errors
+    /// As [`Self::start`]. The decoder is dropped with the error; use
+    /// [`Self::start`] when it must survive a rejected start.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{DecodeOperation, DecoderStatus, Decompressor};
+    /// let decoder = Decompressor::new(Default::default())?;
+    /// let mut session = decoder.into_session(Default::default())?;
+    /// let progress = session.process(&[0x3b], &mut [], DecodeOperation::Finish)?;
+    /// assert_eq!(progress.status, DecoderStatus::Finished);
+    /// let _decoder = session.into_decompressor();
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn into_session(
+        self,
+        stream: DecodeStreamConfig,
+    ) -> Result<DecoderSessionOwned, DecodeError> {
+        DecoderSessionOwned::start(self, stream, None)
+    }
     /// Decodes all input into a new vector. Single mode rejects trailing data.
     ///
     /// Empty input is truncated, not an empty Brotli member. See [`Decompressor`]
@@ -454,6 +483,40 @@ impl Decompressor {
         stream: DecodeStreamConfig,
     ) -> Result<DecoderSession<'d, 'dict>, DecodeError> {
         DecoderSession::start(self, stream, Some(dictionary.into()))
+    }
+
+    /// Starts an owned operation decoding against an external dictionary.
+    ///
+    /// As [`Self::start_with_dictionary`], but the returned
+    /// [`DecoderSessionOwned`] owns both the decoder and `dictionary`, so it
+    /// carries no lifetime. Pass an `Arc<DecodeDictionary>` to share one
+    /// dictionary between sessions without copying its payload.
+    ///
+    /// # Errors
+    /// As [`Self::start_with_dictionary`]. The decoder is dropped with the
+    /// error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use mbrotli::dictionary::{DecodeDictionary, DictionaryAttachment};
+    /// use mbrotli::{DecodeOperation, DecoderStatus, Decompressor};
+    /// let dictionary = Arc::new(DecodeDictionary::new(
+    ///     &[DictionaryAttachment::Raw(b"prefix")], Default::default())?);
+    /// let decoder = Decompressor::new(Default::default())?;
+    /// let mut session =
+    ///     decoder.into_session_with_dictionary(Arc::clone(&dictionary), Default::default())?;
+    /// let progress = session.process(&[0x3b], &mut [], DecodeOperation::Finish)?;
+    /// assert_eq!(progress.status, DecoderStatus::Finished);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn into_session_with_dictionary<D: AsRef<DecodeDictionary> + 'static>(
+        self,
+        dictionary: D,
+        stream: DecodeStreamConfig,
+    ) -> Result<DecoderSessionOwned<D>, DecodeError> {
+        DecoderSessionOwned::start(self, stream, Some(dictionary))
     }
 
     /// Decodes a stream using the supplied effective external dictionary.

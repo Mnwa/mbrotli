@@ -14,6 +14,19 @@ pub(crate) struct SessionCore<'c, 'd> {
     operation: OperationState,
 }
 
+/// Owned stream state: the compressor and dictionary move in.
+///
+/// Holds the same [`OperationState`] a borrowed [`SessionCore`] does, beside
+/// the compressor rather than over a reference to it, so nothing here points
+/// into its own fields. It has no `Drop`: dropping it drops the compressor
+/// too, and [`Self::into_compressor`] runs the one shared release path.
+#[derive(Debug)]
+pub(crate) struct OwnedSessionCore<D> {
+    compressor: Compressor,
+    dictionary: Option<D>,
+    operation: OperationState,
+}
+
 /// Non-borrowing operation shared by raw guards and framed drivers.
 #[derive(Debug)]
 pub(crate) struct OperationState {
@@ -47,6 +60,49 @@ impl<'c, 'd> SessionCore<'c, 'd> {
     }
     pub(crate) const fn is_finished(&self) -> bool {
         self.operation.is_finished(self.compressor)
+    }
+}
+
+impl<D: AsRef<PreparedDictionary>> OwnedSessionCore<D> {
+    /// Starts after stream validation and workspace acquisition have succeeded.
+    pub(crate) fn new(
+        compressor: Compressor,
+        dictionary: Option<D>,
+        limit: usize,
+        stream: StreamConfig,
+    ) -> Self {
+        Self {
+            compressor,
+            dictionary,
+            operation: OperationState::new(limit, stream),
+        }
+    }
+    pub(crate) fn process(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        operation: Operation,
+    ) -> Result<Progress, EncodeError> {
+        self.operation.process(
+            &mut self.compressor,
+            self.dictionary.as_ref().map(AsRef::as_ref),
+            input,
+            output,
+            operation,
+        )
+    }
+    pub(crate) const fn is_finished(&self) -> bool {
+        self.operation.is_finished(&self.compressor)
+    }
+    /// Ends the operation exactly as dropping a borrowed session does.
+    pub(crate) fn into_compressor(self) -> Compressor {
+        let Self {
+            mut compressor,
+            operation,
+            ..
+        } = self;
+        operation.release(&mut compressor);
+        compressor
     }
 }
 

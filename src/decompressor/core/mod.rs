@@ -8,10 +8,12 @@ mod distance;
 mod header;
 mod huffman;
 mod memory;
+mod session;
 mod stored;
 mod stream;
 
 pub(crate) use bits::Input;
+pub(crate) use session::OperationState;
 pub(crate) use stored::payload as stored_payload;
 pub(crate) use stream::{Output, Stop, Stream};
 

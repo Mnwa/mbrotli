@@ -38,7 +38,10 @@ pub use config::{
 };
 pub use encoder::{Compressor, CompressorBuilder};
 pub use error::EncodeError;
-pub use session::{EncoderSession, EncoderStatus, InputSize, Operation, Progress, StreamConfig};
+pub use session::{
+    EncoderSession, EncoderSessionOwned, EncoderStatus, InputSize, Operation, Progress,
+    StreamConfig,
+};
 
 // The `core` tree is written against the encoders' own parameter and error
 // shapes. They stay reachable under their original names so that redesigning

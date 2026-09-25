@@ -10,7 +10,7 @@ use super::core::driver::{
 use super::dictionary::PreparedDictionary;
 use super::error::EncodeError;
 use super::internal::{CompressParams, QualityLevel, WindowBits};
-use super::session::{EncoderSession, StreamConfig};
+use super::session::{EncoderSession, EncoderSessionOwned, StreamConfig};
 use ::core::ops::Range;
 use fearless_simd::Level;
 
@@ -531,6 +531,84 @@ impl Compressor {
     ) -> Result<EncoderSession<'c, 'd>, EncodeError> {
         let limit = self.begin(Some(dictionary), stream)?;
         Ok(EncoderSession::new(self, Some(dictionary), limit, stream))
+    }
+
+    /// Starts an incremental stream that takes ownership of this compressor.
+    ///
+    /// Validates and starts the stream exactly as [`Compressor::start`] does,
+    /// but the returned [`EncoderSessionOwned`] owns the compressor rather than
+    /// borrowing it. Recover the compressor with
+    /// [`EncoderSessionOwned::into_compressor`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Compressor::start`]. The compressor is dropped with the error; use
+    /// [`Compressor::start`] when it must survive a failed start.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{Compressor, EncoderConfig, EncoderStatus, Operation, Quality};
+    ///
+    /// let compressor = Compressor::new(EncoderConfig::default().with_quality(Quality::Q1))?;
+    /// let mut session = compressor.into_session(Default::default())?;
+    /// let mut output = [0u8; 512];
+    ///
+    /// let progress = session.process(b"streamed payload", &mut output, Operation::Finish)?;
+    ///
+    /// assert_eq!(progress.status, EncoderStatus::Finished);
+    /// let _compressor = session.into_compressor();
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn into_session(
+        mut self,
+        stream: StreamConfig,
+    ) -> Result<EncoderSessionOwned, EncodeError> {
+        let limit = self.begin(None, stream)?;
+        Ok(EncoderSessionOwned::new(self, None, limit, stream))
+    }
+
+    /// Starts an owned incremental stream compressed against `dictionary`.
+    ///
+    /// The session takes `dictionary` by value, so it carries no lifetime.
+    /// Pass an `Arc<PreparedDictionary>` to share one dictionary between
+    /// sessions without copying its payload.
+    ///
+    /// # Errors
+    ///
+    /// As [`Compressor::start_with_dictionary`]. The compressor is dropped with
+    /// the error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use mbrotli::dictionary::DictionaryBuilder;
+    /// use mbrotli::{Compressor, EncoderConfig, EncoderStatus, Operation, Quality};
+    ///
+    /// let dictionary = Arc::new(DictionaryBuilder::new().add_prefix(&b"a common prefix"[..]).build()?);
+    /// let compressor = Compressor::new(EncoderConfig::default().with_quality(Quality::Q5))?;
+    /// let mut session =
+    ///     compressor.into_session_with_dictionary(Arc::clone(&dictionary), Default::default())?;
+    /// let mut output = [0u8; 512];
+    ///
+    /// let progress = session.process(b"a common prefix", &mut output, Operation::Finish)?;
+    ///
+    /// assert_eq!(progress.status, EncoderStatus::Finished);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn into_session_with_dictionary<D: AsRef<PreparedDictionary> + 'static>(
+        mut self,
+        dictionary: D,
+        stream: StreamConfig,
+    ) -> Result<EncoderSessionOwned<D>, EncodeError> {
+        let limit = self.begin(Some(dictionary.as_ref()), stream)?;
+        Ok(EncoderSessionOwned::new(
+            self,
+            Some(dictionary),
+            limit,
+            stream,
+        ))
     }
 
     /// Returns how many bytes this compressor is keeping allocated.

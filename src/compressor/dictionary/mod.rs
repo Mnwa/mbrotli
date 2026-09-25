@@ -291,6 +291,26 @@ impl PreparedDictionary {
     }
 }
 
+impl AsRef<Self> for PreparedDictionary {
+    /// Borrows the dictionary itself, so an owned dictionary, a `&'static`
+    /// one and an `Arc` of one all satisfy `AsRef<PreparedDictionary>`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use mbrotli::dictionary::{DictionaryBuilder, PreparedDictionary};
+    ///
+    /// let shared = Arc::new(DictionaryBuilder::new().add_prefix(&b"prefix"[..]).build()?);
+    /// let view: &PreparedDictionary = shared.as_ref().as_ref();
+    /// assert!(std::ptr::eq(view, &*shared));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    fn as_ref(&self) -> &Self {
+        self
+    }
+}
+
 /// Where a dictionary matched an input, and for how long.
 ///
 /// Returned by [`PreparedDictionary::longest_match`]. The offset is into the

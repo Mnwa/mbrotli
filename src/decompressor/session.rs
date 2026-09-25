@@ -1,8 +1,6 @@
-use super::{
-    DecodeError, DecodeStreamConfig, Decompressor, MemberMode, OutputSize,
-    core::{Input, Output, Stop},
-};
-use crate::{Window, dictionary::DictionaryRef};
+use super::{DecodeError, DecodeStreamConfig, Decompressor, core::OperationState};
+use crate::Window;
+use crate::dictionary::{DecodeDictionary, DictionaryRef};
 
 /// Whether more input may follow this call.
 ///
@@ -86,21 +84,13 @@ impl DecodeFailure {
 /// lifetime. Dropping the session permits decoder reuse and applies its
 /// retention policy, even after failure or incomplete input. Forgetting it with
 /// [`core::mem::forget`] requires [`Decompressor::recover`] before reuse.
-/// See [`Self::process`] for a loop with a small output buffer.
+/// See [`Self::process`] for a loop with a small output buffer, and
+/// [`DecoderSessionOwned`] for a session that owns its decoder instead.
 #[derive(Debug)]
 pub struct DecoderSession<'d, 'dict> {
     decoder: &'d mut Decompressor,
-    stream: DecodeStreamConfig,
-    total_in: u64,
-    total_out: u64,
-    members: u64,
-    window: Option<Window>,
-    final_end: u64,
-    finishing: bool,
-    boundary: bool,
-    finished: bool,
-    failed: bool,
     dictionary: Option<DictionaryRef<'dict>>,
+    operation: OperationState,
 }
 
 impl<'d, 'dict> DecoderSession<'d, 'dict> {
@@ -114,39 +104,11 @@ impl<'d, 'dict> DecoderSession<'d, 'dict> {
         stream: DecodeStreamConfig,
         dictionary: Option<DictionaryRef<'dict>>,
     ) -> Result<Self, DecodeError> {
-        if decoder.active {
-            return Err(DecodeError::AbandonedSession);
-        }
-        if let (OutputSize::Exact(expected), Some(limit)) = (
-            stream.output_size(),
-            decoder.config.limits().max_output_bytes(),
-        ) && expected > limit
-        {
-            return Err(DecodeError::OutputLimitExceeded { limit });
-        }
-        if decoder
-            .config
-            .limits()
-            .max_workspace_bytes()
-            .is_some_and(|limit| decoder.retained_bytes() > limit)
-        {
-            decoder.recover();
-        }
-        decoder.workspace.reset(decoder.config);
-        decoder.active = true;
+        let operation = OperationState::start(decoder, stream)?;
         Ok(Self {
             decoder,
-            stream,
-            total_in: 0,
-            total_out: 0,
-            members: 0,
-            window: None,
-            final_end: 0,
-            finishing: false,
-            boundary: false,
-            finished: false,
-            failed: false,
             dictionary,
+            operation,
         })
     }
 }
@@ -206,126 +168,29 @@ impl DecoderSession<'_, '_> {
         output: &mut [u8],
         operation: DecodeOperation,
     ) -> Result<DecodeProgress, DecodeFailure> {
-        self.process_inner(input, output, operation, None)
+        self.operation.process(
+            self.decoder,
+            self.dictionary,
+            input,
+            output,
+            operation,
+            None,
+        )
     }
 
-    // The owned one-shot API may use history as its destination until the first
-    // wrap. The public streaming API always supplies a separate output slice.
-    fn process_inner(
-        &mut self,
-        input: &[u8],
-        output: &mut [u8],
-        operation: DecodeOperation,
-        collect: Option<usize>,
-    ) -> Result<DecodeProgress, DecodeFailure> {
-        let invalid = |error| DecodeFailure {
-            error,
-            consumed: 0,
-            produced: 0,
-        };
-        if self.failed {
-            return Err(invalid(DecodeError::InvalidState));
-        }
-        if self.finished {
-            return Ok(DecodeProgress {
-                consumed: 0,
-                produced: 0,
-                status: DecoderStatus::Finished,
-            });
-        }
-        let Some(end) = self.total_in.checked_add(input.len() as u64) else {
-            self.failed = true;
-            return Err(invalid(DecodeError::SizeOverflow));
-        };
-        if self.finishing {
-            if operation != DecodeOperation::Finish || end != self.final_end {
-                self.failed = true;
-                return Err(invalid(DecodeError::InvalidState));
-            }
-        } else if operation == DecodeOperation::Finish {
-            self.final_end = end;
-            self.finishing = true;
-        }
-        let config = self.decoder.config;
-        let limits = config.limits();
-        let mut input = Input::new(input, self.total_in, limits.max_input_bytes());
-        let mut output = Output {
-            collect,
-            bytes: output,
-            produced: 0,
-            total_before: self.total_out,
-            limit: limits.max_output_bytes(),
-            exact: self.stream.output_size(),
-        };
-        let result = (|| loop {
-            if self.boundary {
-                if config.member_mode() == MemberMode::Single
-                    || (self.finishing && input.consumed == input.bytes.len())
-                {
-                    if let OutputSize::Exact(expected) = self.stream.output_size() {
-                        let actual = self.total_out + output.produced as u64;
-                        if actual != expected {
-                            return Err(DecodeError::OutputSizeMismatch { expected, actual });
-                        }
-                    }
-                    self.finished = true;
-                    return Ok(DecoderStatus::Finished);
-                }
-                if input.consumed == input.bytes.len() {
-                    return Ok(DecoderStatus::NeedsInput);
-                }
-                self.decoder.workspace.reset(config);
-                self.boundary = false;
-            }
-            let outcome = self.decoder.workspace.run(
-                self.decoder.backend,
-                &mut input,
-                &mut output,
-                config,
-                self.dictionary,
-            );
-            if let Some(window) = self.decoder.workspace.window {
-                self.window = Some(window);
-            }
-            match outcome? {
-                Stop::Input if self.finishing => {
-                    return Err(DecodeError::UnexpectedEndOfInput);
-                }
-                Stop::Input => return Ok(DecoderStatus::NeedsInput),
-                Stop::Output => return Ok(DecoderStatus::NeedsOutput),
-                Stop::Member => {
-                    self.members = self
-                        .members
-                        .checked_add(1)
-                        .ok_or(DecodeError::SizeOverflow)?;
-                    self.boundary = true;
-                }
-            }
-        })();
-        self.total_in += input.consumed as u64;
-        self.total_out += output.produced as u64;
-        match result {
-            Ok(status) => Ok(DecodeProgress {
-                consumed: input.consumed,
-                produced: output.produced,
-                status,
-            }),
-            Err(error) => {
-                self.failed = true;
-                Err(DecodeFailure {
-                    error,
-                    consumed: input.consumed,
-                    produced: output.produced,
-                })
-            }
-        }
-    }
     /// Collects at most one history window without a second output allocation.
     pub(super) fn collect(&mut self, input: &[u8]) -> Result<DecodeProgress, DecodeFailure> {
-        let capacity = self.window.map_or(0, |window| {
+        let capacity = self.operation.window().map_or(0, |window| {
             usize::try_from(1u64 << window.bits()).unwrap_or(usize::MAX)
         });
-        self.process_inner(input, &mut [], DecodeOperation::Finish, Some(capacity))
+        self.operation.process(
+            self.decoder,
+            self.dictionary,
+            input,
+            &mut [],
+            DecodeOperation::Finish,
+            Some(capacity),
+        )
     }
 
     pub(super) fn take_collected(&mut self) -> alloc::vec::Vec<u8> {
@@ -338,33 +203,201 @@ impl DecoderSession<'_, '_> {
 
     /// Whether all members and the exact-size contract were validated.
     pub const fn is_finished(&self) -> bool {
-        self.finished
+        self.operation.is_finished()
     }
     /// Total accepted compressed bytes, including failing calls.
     pub const fn total_in(&self) -> u64 {
-        self.total_in
+        self.operation.total_in()
     }
     /// Total payload bytes delivered, including failing calls.
     pub const fn total_out(&self) -> u64 {
-        self.total_out
+        self.operation.total_out()
     }
     /// Number of validated members whose output has been delivered.
     pub const fn members_decoded(&self) -> u64 {
-        self.members
+        self.operation.members_decoded()
     }
     /// Most recently accepted window header.
     ///
     /// Returns `None` before the first header is accepted. Between concatenated
     /// members, retains the preceding member's window until a new one is accepted.
     pub const fn window(&self) -> Option<Window> {
-        self.window
+        self.operation.window()
     }
 }
 
 impl Drop for DecoderSession<'_, '_> {
     fn drop(&mut self) {
-        self.decoder.active = false;
-        self.decoder.workspace.reset(self.decoder.config);
-        self.decoder.trim(self.decoder.retention());
+        self.operation.release(self.decoder);
+    }
+}
+
+/// Incremental decoding operation that owns its decoder.
+///
+/// [`DecoderSession`] borrows its [`Decompressor`] with `&mut` for as long as
+/// it lives. `DecoderSessionOwned` consumes the decoder instead, so the stream
+/// state is one ordinary owned value with no lifetime tied to the decoder. That
+/// suits wrappers which have to store the codec state themselves, such as
+/// adapters that keep it in a struct between calls. It is still the same
+/// synchronous, caller-driven API: it is not an async interface, and it keeps
+/// no references into its own fields.
+///
+/// The session has no lifetime. An external dictionary, when one is attached,
+/// is owned too, as any `D: AsRef<DecodeDictionary> + 'static`: an
+/// `Arc<DecodeDictionary>` to share one without copying it, a
+/// `&'static DecodeDictionary`, or the dictionary itself. Without one, `D`
+/// stays at its default and is never constructed.
+///
+/// Created by [`Decompressor::into_session`] or
+/// [`Decompressor::into_session_with_dictionary`]. [`Self::process`] runs the
+/// same state machine as [`DecoderSession::process`], so the same calls decode
+/// the same bytes with the same counts, statuses and errors.
+/// [`Self::into_decompressor`] ends the operation the way dropping a borrowed
+/// session does and hands the decoder back ready for reuse. Dropping the owned
+/// session instead drops the decoder with it.
+///
+/// # Examples
+///
+/// ```
+/// use mbrotli::{DecodeOperation, DecoderStatus, Decompressor};
+/// let compressed = [0x0b, 0x02, 0x80, b'h', b'e', b'l', b'l', b'o', 0x03];
+///
+/// let decoder = Decompressor::new(Default::default())?;
+/// let mut session = decoder.into_session(Default::default())?;
+/// let mut output = [0u8; 16];
+///
+/// let progress = session.process(&compressed, &mut output, DecodeOperation::Finish)?;
+/// assert_eq!(progress.status, DecoderStatus::Finished);
+/// assert_eq!(&output[..progress.produced], b"hello");
+///
+/// let mut decoder = session.into_decompressor();
+/// assert_eq!(decoder.decompress(&compressed)?, b"hello");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug)]
+pub struct DecoderSessionOwned<D = DecodeDictionary> {
+    decoder: Decompressor,
+    dictionary: Option<D>,
+    operation: OperationState,
+}
+
+impl<D: AsRef<DecodeDictionary> + 'static> DecoderSessionOwned<D> {
+    pub(super) fn start(
+        mut decoder: Decompressor,
+        stream: DecodeStreamConfig,
+        dictionary: Option<D>,
+    ) -> Result<Self, DecodeError> {
+        let operation = OperationState::start(&mut decoder, stream)?;
+        Ok(Self {
+            decoder,
+            dictionary,
+            operation,
+        })
+    }
+
+    /// Decodes available bytes without retaining caller slices.
+    ///
+    /// Behaves exactly as [`DecoderSession::process`], including the
+    /// `Finish` suffix contract, concatenated members, exact output sizes,
+    /// limits and the exact progress carried by a failure.
+    ///
+    /// # Errors
+    /// As [`DecoderSession::process`]. A failure is terminal for this session;
+    /// [`Self::into_decompressor`] still returns a reusable decoder.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{DecodeOperation, DecoderStatus, Decompressor, OutputSize};
+    /// let compressed = [0x0b, 0x02, 0x80, b'h', b'e', b'l', b'l', b'o', 0x03];
+    /// let mut session = Decompressor::new(Default::default())?
+    ///     .into_session(OutputSize::Exact(5).into())?;
+    /// let mut remaining = compressed.as_slice();
+    /// let mut decoded = Vec::new();
+    /// loop {
+    ///     let mut buffer = [0; 2];
+    ///     let progress = session.process(remaining, &mut buffer, DecodeOperation::Finish)?;
+    ///     remaining = &remaining[progress.consumed..];
+    ///     decoded.extend_from_slice(&buffer[..progress.produced]);
+    ///     if progress.status == DecoderStatus::Finished {
+    ///         break;
+    ///     }
+    /// }
+    /// assert_eq!(decoded, b"hello");
+    /// assert_eq!(session.total_in(), compressed.len() as u64);
+    /// assert_eq!(session.total_out(), 5);
+    /// assert_eq!(session.members_decoded(), 1);
+    /// assert!(session.window().is_some());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn process(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+        operation: DecodeOperation,
+    ) -> Result<DecodeProgress, DecodeFailure> {
+        let dictionary = self
+            .dictionary
+            .as_ref()
+            .map(|dictionary| DictionaryRef::from(dictionary.as_ref()));
+        self.operation.process(
+            &mut self.decoder,
+            dictionary,
+            input,
+            output,
+            operation,
+            None,
+        )
+    }
+
+    /// Whether all members and the exact-size contract were validated.
+    pub const fn is_finished(&self) -> bool {
+        self.operation.is_finished()
+    }
+    /// Total accepted compressed bytes, including failing calls.
+    pub const fn total_in(&self) -> u64 {
+        self.operation.total_in()
+    }
+    /// Total payload bytes delivered, including failing calls.
+    pub const fn total_out(&self) -> u64 {
+        self.operation.total_out()
+    }
+    /// Number of validated members whose output has been delivered.
+    pub const fn members_decoded(&self) -> u64 {
+        self.operation.members_decoded()
+    }
+    /// Most recently accepted window header, as [`DecoderSession::window`].
+    pub const fn window(&self) -> Option<Window> {
+        self.operation.window()
+    }
+
+    /// Ends the operation and returns the decoder, ready for the next one.
+    ///
+    /// Releases the operation exactly as dropping a [`DecoderSession`] does,
+    /// whether it finished, stopped mid-stream or failed, and applies the
+    /// decoder's retention policy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mbrotli::{DecodeOperation, Decompressor};
+    /// let compressed = [0x0b, 0x02, 0x80, b'h', b'e', b'l', b'l', b'o', 0x03];
+    /// let mut session = Decompressor::new(Default::default())?.into_session(Default::default())?;
+    /// // Stop part-way through the member.
+    /// session.process(&compressed[..4], &mut [0; 16], DecodeOperation::Process)?;
+    ///
+    /// let mut decoder = session.into_decompressor();
+    /// assert_eq!(decoder.decompress(&compressed)?, b"hello");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn into_decompressor(self) -> Decompressor {
+        let Self {
+            mut decoder,
+            operation,
+            ..
+        } = self;
+        operation.release(&mut decoder);
+        decoder
     }
 }

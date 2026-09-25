@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+- Add `EncoderSessionOwned` and `DecoderSessionOwned`: incremental sessions
+  that take ownership of their `Compressor` or `Decompressor` instead of
+  borrowing it. They have no lifetime parameter. Create them with
+  `Compressor::into_session` or `Decompressor::into_session`; the
+  `into_session_with_dictionary` variants take an owned dictionary
+  (`D: AsRef<PreparedDictionary> + 'static` for the encoder,
+  `D: AsRef<DecodeDictionary> + 'static` for the decoder, for example an
+  `Arc`). `into_compressor` and `into_decompressor` hand the codec back, ready
+  for reuse. Owned sessions run the same state machines as the borrowed ones,
+  so their bytes, progress and errors are identical. The decoder's
+  per-operation state moved into a private `core::session::OperationState`,
+  which both session types share. `PreparedDictionary` and `DecodeDictionary`
+  now implement `AsRef<Self>`. Existing APIs and output are unchanged.
+
 - Update `fearless_simd` 0.7 → 1.0 and `hotpath` 0.25 → 0.26. Follow the
   `fearless_simd` 1.0 renames: the lane-count constant `SimdBase::N` is now
   `SimdBase::LEN`, and `as_array` now borrows, so the HQ block splitter reads
