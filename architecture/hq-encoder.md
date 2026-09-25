@@ -445,18 +445,50 @@ assignment pass. `MetaBlockBuilder::build`, `BlockSplitter::split`, and
 prepared, one `assign_blocks` call enters a feature-enabled loop over the entire
 symbol stream. No backend detection or dynamic dispatch occurs per symbol.
 
-The borrowed `BlockCosts` holds finite f64 insertion costs, mutable accumulated
+The borrowed `BlockCosts` holds f64 insertion costs, mutable accumulated
 costs, switch bits, and block ids; histogram counts fit in a byte and each symbol
-addresses a complete row. Eight histogram lanes update independently with
-`fearless_simd::f64x8`. Lane minima retain their histogram indices; reduction
-chooses the lowest index among equal minima. Subtraction and clamping retain
-the scalar arithmetic order, including the first 2000 symbols' switch-cost
-adjustment. Each eight-lane comparison supplies one switch bitmap byte, and
-remaining histograms use scalar operations. The fallback backend executes the
-original scalar pass. Traceback and clustering stay scalar. No extra allocation
-or public API is introduced. Differential tests compare cost bits, ids, and
-switch bitmaps on every available backend, including ties, tails, empty streams,
-and the prologue boundary; full encoder tests also check C output identity.
+addresses a complete row. `find_blocks` lays rows out at
+`padded_histograms(n)`, the histogram count rounded up to whole eight-lane
+vectors (`COST_LANES`), and the retained arena is sized for the first, largest
+count of a split. Padding lanes carry a zero price and a NaN cost: `NaN < x`
+and `NaN >= x` are both false, so a padding lane never becomes the minimum,
+never sets a switch bit and stays NaN, and the scalar oracle over the same
+padded rows gives the same answer. The switch bitmap keeps `ceil(n / 8)` bytes
+per symbol, which the padded width fills exactly; traceback only reads bits of
+real ids.
+
+Eight histogram lanes update independently with `fearless_simd::f64x8`. Each
+lane keeps its first strict minimum and that histogram's id, carried as an
+exact small integer in a second `f64x8` (ids are below 256; `u64` lanes have no
+vector minimum before AVX-512 and `fearless_simd` lowers them lane by lane).
+After the row, `reduce_min` gives the minimum cost, and a masked `reduce_min`
+over the ids of the lanes equal to it gives the smallest tied id — the
+scalar scan's tie order, including ties whose smaller id sits in a higher lane
+of a later chunk. Unclaimed lanes hold `NO_HISTOGRAM` (+∞), which converts to
+the `u64::MAX` id the kernel reports when nothing undercut the `1e99` start.
+Subtraction and clamping retain the scalar arithmetic order, including the
+first 2000 symbols' switch-cost adjustment. Each eight-lane comparison supplies
+one switch bitmap byte. A row that is not a whole number of vectors (only unit
+tests pass one) finishes with scalar operations. The fallback backend executes
+the original scalar pass. Traceback and clustering stay scalar. No public API
+is introduced. Differential tests compare cost bits, ids, and switch bitmaps on
+every available backend, including ties, cross-chunk ties, NaN padding, tails,
+empty streams, and the prologue boundary; full encoder tests also check C
+output identity.
+
+```mermaid
+flowchart TD
+    Row["symbol row: padded_histograms(n) lanes"] --> Chunk["per f64x8 chunk:<br/>cost += price, store"]
+    Chunk --> Lt{"cost < lane minimum?<br/>(false for NaN padding)"}
+    Lt -->|yes| Keep["lane minimum = cost<br/>lane id = chunk id"]
+    Lt -->|no| Next[next chunk]
+    Keep --> Next
+    Next --> Chunk
+    Next -->|row done| Min["min_cost = minima.reduce_min()"]
+    Min --> Id["best_id = select(minima == min_cost, ids, +inf).reduce_min()"]
+    Id --> Sub["per chunk: delta = cost - min_cost<br/>delta >= switch cost → clamp, set bit"]
+    Sub --> Out["block_id[byte] = best_id"]
+```
 
 Copy-length codes below 2118 use a compile-time table derived from the format's
 copy-length bases. Lengths below ten retain their direct subtraction, and longer
@@ -565,6 +597,12 @@ the reference's `limit`; only `extend_last_command` runs on across seams.
   long transforms' base lengths intact. Headerless continuations shift logical
   dictionary placement but not history availability. See
   [rfc9841-encoding.md](rfc9841-encoding.md) for both flows and their limits.
+- **Histogram merging runs at the baseline instruction set.**
+  `BlockSplitter::split` and the histogram helpers it calls
+  (`Histogram::add_histogram`, block histogram rebuilds) sit outside every
+  `S::vectorize` region, so on x86-64 their autovectorized loops use SSE2
+  `xmm` registers even on AVX2 hosts (about 1.6% of quality 10 on
+  `mapsdatazrh`). Only the block-assignment pass enters the selected backend.
 - **`hotpath` instrumentation.** Encoder block operations, Zopfli search passes,
   literal-cost estimation, and `find_blocks` have timing hooks. Individual
   per-candidate updates and clustering do not have separate timing hooks;

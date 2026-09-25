@@ -7,6 +7,23 @@
   `SimdBase::LEN`, and `as_array` now borrows, so the HQ block splitter reads
   its lane minima through `to_array`. Encoded bytes are unchanged.
 
+- Use the `fearless_simd` 1.0 reductions in the HQ block splitter's forward
+  assignment pass. The per-symbol minimum and its smallest tied histogram id
+  now come from two `f64x8::reduce_min` calls (ids ride in exact f64 lanes,
+  since `u64` minima are lane-by-lane before AVX-512), replacing an 8-way
+  branchy scalar tie-break. `find_blocks` also pads its cost rows to whole
+  vectors with NaN-cost lanes, which never win or switch, so the 100-literal
+  and 50-command histogram rows no longer end in a scalar tail. Output is
+  byte-identical. Scratch harness, min of 9 × 400 ms rounds, one pinned core
+  (i7-13700KF, AVX2): q11 `mapsdatazrh` 205.8 → 190.8 ms (−7.3%), q11
+  `alice29.txt` 102.1 → 97.2 ms (−4.8%), q11 `plrabn12.txt` −2.5%, q10
+  `alice29.txt`/`lcet10.txt`/`mapsdatazrh` −1.2%/−0.2%/−2.2%; callgrind Ir
+  q11 `alice29.txt` 3125.6M → 3054.7M, q10 `mapsdatazrh` 2530.3M → 2480.9M.
+  `match_len` was evaluated with a `reduce_min` mismatch locator and left
+  unchanged: on AVX2 its loop already lowers to `vpxor`/`vptest` and exits
+  through one `vpmovmskb` + `tzcnt`, and the reduction added 0.03–0.15% Ir with
+  no measurable time change.
+
 - Refresh the implementation comparison: Burli 0.3.1 → 0.3.2 and Rust brotli's
   decoder (`brotli-decompressor`) 6.0.0 → 6.0.1; Rust brotli 9.0.0 and
   simd-brotli 10.0.1 are already the latest releases. Re-measure all 432

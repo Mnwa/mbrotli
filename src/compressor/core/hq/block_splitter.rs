@@ -15,7 +15,7 @@
 
 use alloc::vec::Vec;
 
-use fearless_simd::{Select, Simd, SimdBase, SimdMask, f64x8, u64x8};
+use fearless_simd::{Select, Simd, SimdBase, SimdMask, f64x8};
 
 use super::cluster::{HistogramPair, combine_batch, move_cost};
 use super::params::HqParams;
@@ -85,6 +85,23 @@ const PROLOGUE_MULTIPLIER: f64 = 0.07 / 2000.0;
 
 /// Base of the switch discount at the very first byte.
 const PROLOGUE_BASE: f64 = 0.77;
+
+/// The id lane of a vector minimum no histogram has claimed yet.
+///
+/// Larger than every real id, and it converts to `u64::MAX`, the id the
+/// vector scan reports when no histogram undercut the `1e99` start.
+const NO_HISTOGRAM: f64 = f64::INFINITY;
+
+/// Histogram costs [`assign_blocks`] updates per vector.
+const COST_LANES: usize = 8;
+
+/// Rounds a histogram count up to whole cost vectors.
+///
+/// [`find_blocks`] lays its cost rows out at this width, so the vector kernel
+/// never falls back to its scalar tail.
+const fn padded_histograms(num_histograms: usize) -> usize {
+    num_histograms.next_multiple_of(COST_LANES)
+}
 
 /// The reference's pseudo-random generator (`MyRand`).
 ///
@@ -320,30 +337,33 @@ pub(crate) fn assign_blocks<S: Simd>(simd: S, input: BlockCosts<'_>) {
             for (byte_ix, &symbol) in data.iter().enumerate() {
                 let row = &insert_cost[usize::from(symbol) * num_histograms..][..num_histograms];
                 let mut minima = f64x8::splat(simd, 1e99);
-                let mut ids = u64x8::splat(simd, u64::MAX);
-                let lanes = u64x8::load_array(simd, [0, 1, 2, 3, 4, 5, 6, 7]);
-                for (chunk_ix, (values, prices)) in cost[..vector_end]
+                // Histogram ids are below 256, so f64 lanes hold them exactly
+                // and the tie-break below stays on native `min` instructions;
+                // `u64` lanes have no vector minimum before AVX-512.
+                let mut ids = f64x8::splat(simd, NO_HISTOGRAM);
+                let mut chunk_ids = f64x8::load_array(simd, [0., 1., 2., 3., 4., 5., 6., 7.]);
+                for (values, prices) in cost[..vector_end]
                     .as_chunks_mut::<8>()
                     .0
                     .iter_mut()
                     .zip(row[..vector_end].as_chunks::<8>().0)
-                    .enumerate()
                 {
                     let updated =
                         f64x8::load_array_ref(simd, values) + f64x8::load_array_ref(simd, prices);
                     updated.store_array(values);
                     let improved = updated.simd_lt(minima);
                     minima = improved.select(updated, minima);
-                    ids = improved.select(lanes + (chunk_ix * 8) as u64, ids);
+                    ids = improved.select(chunk_ids, ids);
+                    chunk_ids += 8.0;
                 }
-                let mut min_cost = 1e99;
-                let mut best_id = u64::MAX;
-                for (value, id) in minima.to_array().into_iter().zip(ids.to_array()) {
-                    if value < min_cost || (value == min_cost && id < best_id) {
-                        min_cost = value;
-                        best_id = id;
-                    }
-                }
+                // Each lane kept its first strict minimum; across lanes the
+                // smallest id among the equal minima wins, as in the scalar
+                // scan. Costs are never NaN, so both minima are exact.
+                let mut min_cost = minima.reduce_min();
+                let mut best_id = minima
+                    .simd_eq(f64x8::splat(simd, min_cost))
+                    .select(ids, f64x8::splat(simd, NO_HISTOGRAM))
+                    .reduce_min() as u64;
                 for k in vector_end..num_histograms {
                     cost[k] += row[k];
                     if cost[k] < min_cost {
@@ -414,27 +434,32 @@ fn find_blocks<const N: usize>(
         return 1;
     }
 
+    // Rows are padded to whole vectors so the kernel runs no scalar tail. A
+    // padding lane costs NaN: it never undercuts the minimum and never
+    // reaches the switch cost, so it changes no id and sets no switch bit.
+    let lanes = padded_histograms(num_histograms);
+
     // Cost of each symbol under each code: `log2(total) - log2(count)`, with an
     // unseen symbol priced two bits above the total.
-    insert_cost[..alphabet_size * num_histograms].fill(0.0);
+    insert_cost[..alphabet_size * lanes].fill(0.0);
     for index in 0..num_histograms {
         insert_cost[index] = fast_log2(histograms[index].total_count);
     }
     for symbol in (0..alphabet_size).rev() {
         // Reversed, so the first row can serve as scratch for the totals.
         for j in 0..num_histograms {
-            insert_cost[symbol * num_histograms + j] =
-                insert_cost[j] - bit_cost(histograms[j].data[symbol]);
+            insert_cost[symbol * lanes + j] = insert_cost[j] - bit_cost(histograms[j].data[symbol]);
         }
     }
 
     cost[..num_histograms].fill(0.0);
+    cost[num_histograms..lanes].fill(f64::NAN);
     switch_signal[..length * bitmap_len].fill(0);
     kernels.assign_blocks(BlockCosts {
         data,
         block_switch_bitcost,
         insert_cost,
-        cost: &mut cost[..num_histograms],
+        cost: &mut cost[..lanes],
         switch_signal,
         block_id,
     });
@@ -730,9 +755,9 @@ fn split_byte_vector<const N: usize>(
     arena.insert_cost.clear();
     arena
         .insert_cost
-        .resize(alphabet_size * num_histograms, 0.0);
+        .resize(alphabet_size * padded_histograms(num_histograms), 0.0);
     arena.cost.clear();
-    arena.cost.resize(num_histograms, 0.0);
+    arena.cost.resize(padded_histograms(num_histograms), 0.0);
     arena.switch_signal.clear();
     arena.switch_signal.resize(length * bitmaplen, 0);
     arena.new_id.clear();
@@ -934,6 +959,98 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// `find_blocks` pads its rows with NaN-cost lanes; those lanes must not
+    /// change an id, a switch bit, or a real lane's cost.
+    #[test]
+    fn nan_padding_lanes_leave_the_assignment_unchanged() {
+        for count in [2usize, 5, 9, 50, 100] {
+            let lanes = padded_histograms(count);
+            let length = PROLOGUE_LENGTH + 3;
+            let data: Vec<u16> = (0..length).map(|i| ((i * 73 + i / 7) % 3) as u16).collect();
+            let prices: Vec<f64> = (0..3 * count)
+                .map(|i| ((i * 71 + i / 3) % 151) as f64 / 13.0)
+                .collect();
+            let mut padded_prices = vec![0.0; 3 * lanes];
+            for (row, padded) in prices.chunks(count).zip(padded_prices.chunks_mut(lanes)) {
+                padded[..count].copy_from_slice(row);
+            }
+            let mut expected_cost = vec![0.0; count];
+            let mut expected_signal = vec![0; length * count.div_ceil(8)];
+            let mut expected_ids = vec![0; length];
+            assign_blocks_scalar(BlockCosts {
+                data: &data,
+                block_switch_bitcost: 13.5,
+                insert_cost: &prices,
+                cost: &mut expected_cost,
+                switch_signal: &mut expected_signal,
+                block_id: &mut expected_ids,
+            });
+            for backend in crate::Backend::available() {
+                let mut cost = vec![f64::NAN; lanes];
+                cost[..count].fill(0.0);
+                let mut signal = vec![0; expected_signal.len()];
+                let mut ids = vec![0; length];
+                crate::compressor::core::dispatch::select(backend.0).assign_blocks(BlockCosts {
+                    data: &data,
+                    block_switch_bitcost: 13.5,
+                    insert_cost: &padded_prices,
+                    cost: &mut cost,
+                    switch_signal: &mut signal,
+                    block_id: &mut ids,
+                });
+                assert_eq!(
+                    cost[..count]
+                        .iter()
+                        .map(|x| x.to_bits())
+                        .collect::<Vec<_>>(),
+                    expected_cost
+                        .iter()
+                        .map(|x| x.to_bits())
+                        .collect::<Vec<_>>(),
+                    "backend={backend} histograms={count}"
+                );
+                assert!(cost[count..].iter().all(|x| x.is_nan()));
+                assert_eq!(
+                    signal, expected_signal,
+                    "backend={backend} histograms={count}"
+                );
+                assert_eq!(ids, expected_ids, "backend={backend} histograms={count}");
+            }
+        }
+    }
+
+    #[test]
+    fn histogram_counts_pad_to_whole_cost_vectors() {
+        assert_eq!(padded_histograms(0), 0);
+        assert_eq!(padded_histograms(1), COST_LANES);
+        assert_eq!(padded_histograms(COST_LANES), COST_LANES);
+        assert_eq!(padded_histograms(100), 104);
+    }
+
+    /// A tie across chunks goes to the smaller id, not the lower lane: id 5
+    /// sits in lane 5 of the first chunk, id 11 in lane 3 of the second.
+    #[test]
+    fn tied_minima_in_different_chunks_pick_the_smallest_id() {
+        for backend in crate::Backend::available() {
+            let mut cost = vec![10.0; 16];
+            cost[5] = 1.0;
+            cost[11] = 1.0;
+            let mut signal = vec![0; 2];
+            let mut ids = vec![0; 1];
+            crate::compressor::core::dispatch::select(backend.0).assign_blocks(BlockCosts {
+                data: &[0],
+                block_switch_bitcost: 100.0,
+                insert_cost: &[0.0; 16],
+                cost: &mut cost,
+                switch_signal: &mut signal,
+                block_id: &mut ids,
+            });
+            assert_eq!(ids, [5], "backend={backend}");
+            assert_eq!(cost[5], 0.0);
+            assert_eq!(cost[11], 0.0);
         }
     }
 
