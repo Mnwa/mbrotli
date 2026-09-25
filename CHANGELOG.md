@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v0.5.0](https://github.com/Mnwa/mbrotli/releases/tag/v0.5.0) - 2026-09-25
+
 - Add `EncoderSessionOwned` and `DecoderSessionOwned`: incremental sessions
   that take ownership of their `Compressor` or `Decompressor` instead of
   borrowing it. They have no lifetime parameter. Create them with
