@@ -25,6 +25,8 @@ graph TD
     ECore --> SIMD[fearless_simd: selected backend]
     DCore --> SIMD
     C[google-brotli-ffi] -. tests and benchmarks .-> Root
+    CABI[mbrotli-ffi: C ABI crate] --> Root
+    CABI --> CCore[private mbrotli_ffi::core]
 ```
 
 Public modules own ergonomic configuration and high-level errors. Private `core`
@@ -73,6 +75,12 @@ FFI do not appear in public signatures. Each codec compiles independently.
 | [Serialized dictionaries](serialized-dictionary.md) | Experimental wire format, transforms and resource limits. |
 | [Custom encoding and continuations](rfc9841-encoding.md) | Static indexes, contexts and headerless stream offsets. |
 | [Framed compressor](framing.md) | Reusable owner, shared alloc engine, structured input, sessions, std adapters, metadata and wire compatibility. |
+
+## Language bindings
+
+| Specification | Scope |
+| --- | --- |
+| [C ABI](c-abi.md) | `mbrotli-ffi`: one-shot C functions, pointer validation, panic guard, byte identity with Google's one-shot API and status mapping. |
 
 ## Development tools
 

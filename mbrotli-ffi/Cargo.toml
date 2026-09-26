@@ -1,0 +1,37 @@
+[package]
+name = "mbrotli-ffi"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT"
+description = "C ABI for mbrotli: one-shot Brotli compression and decompression"
+repository = "https://github.com/Mnwa/mbrotli"
+homepage = "https://github.com/Mnwa/mbrotli"
+readme = "README.md"
+keywords = ["brotli", "compression", "ffi", "c"]
+categories = ["compression", "external-ffi-bindings"]
+include = ["src/**", "include/**", "README.md"]
+
+[lib]
+# `cdylib` and `staticlib` are what C links against; `rlib` lets the Rust
+# integration tests call the exported symbols directly.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies.mbrotli]
+path = ".."
+version = "0.5.1"
+default-features = false
+features = ["std", "compression", "decompression"]
+
+[dependencies.thiserror]
+version = "2"
+
+[dev-dependencies.google-brotli-ffi]
+path = "../brotli-ffi"
+
+[dev-dependencies.criterion]
+version = "0.8"
+
+[[bench]]
+name = "one_shot"
+harness = false

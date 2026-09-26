@@ -77,6 +77,7 @@ the forkserver for `afl-cmin` folder-mode coverage collection.
 | `serialized_dictionary` (`experimental`) | `regressions/serialized_dictionary` | Parsing, canonical serialization, bounded preparation, and C decoding |
 | `framing` (`experimental`) | `regressions/framing` | Resource/metadata sequences, chunking, directory completeness, and payload decoding |
 | `parallel` | `regressions/parallel` | Scheduling, encoder reconfiguration, source adapters, staging, fragments, and C decoding |
+| `c_abi` | `regressions/c_abi` | `mbrotli-ffi` exported functions: parameter rejection, bound sufficiency, byte identity and capacity behaviour against Google's one-shot API, round-trip, and decoding arbitrary bytes against the C decoder |
 
 The common parameter decoder reads six bytes before the payload:
 

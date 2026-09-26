@@ -73,6 +73,15 @@ dependencies = [
  "afl",
  "google-brotli-ffi",
  "mbrotli",
+ "mbrotli-ffi",
+]
+
+[[package]]
+name = "mbrotli-ffi"
+version = "0.1.0"
+dependencies = [
+ "mbrotli",
+ "thiserror",
 ]
 
 [[package]]

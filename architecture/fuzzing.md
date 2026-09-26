@@ -21,12 +21,12 @@ enabling the serialized dictionary parser and its C oracle together. The targets
 `serialized_dictionary`, `framing`, `decode_serialized`, `framed_decode`, and
 `framed_roundtrip` require it: their
 Cargo binary entries, target bodies, private helpers, C helpers, and `TARGETS`
-entries share the gate. The default build contains 27 targets; enabling the
-feature contains all 32.
+entries share the gate. The default build contains 28 targets; enabling the
+feature contains all 33.
 
 ```mermaid
 flowchart TD
-    Build[Fuzz package feature selection] --> Stable[27 stable targets and regression corpora]
+    Build[Fuzz package feature selection] --> Stable[28 stable targets and regression corpora]
     Build --> Enabled{experimental enabled?}
     Enabled -->|yes| Dependencies[Rust experimental APIs and C experimental oracle]
     Dependencies --> Extra[Serialized dictionary, framing and decode_serialized binaries and bodies]
@@ -120,6 +120,12 @@ flowchart TD
     shape -->|"lifecycle"| cl["compressor_lifecycle: 8 bytes, then decode_case"]
     cl --> cln["each byte mod 8 — one command:<br/>compress, append, short destination, trim,<br/>read retained bytes, reconfigure,<br/>abandon a session, leak one and recover"]
     cl --> clr["remainder — a whole decode_case input"]
+
+    shape -->|"C ABI"| ca["c_abi: 3 header bytes"]
+    ca --> caq["byte 0 — C quality b mod 16 minus 2<br/>reaches -2, -1, 12 and 13, all illegal"]
+    ca --> caw["byte 1 — C lgwin b mod 32<br/>reaches below 10 and above 24"]
+    ca --> cac["byte 2 — output capacity selector for both directions"]
+    ca --> car["remainder capped to MAX_PAYLOAD —<br/>compressed as plaintext and decoded as a stream"]
 ```
 
 `decode_case` is closed over the legal domain by construction: its window index
@@ -159,6 +165,7 @@ target that can reach the validating conversions and the large-window refusal.
 | `serialized_dictionary` | dictionary stream | parser validity versus C, excluding its five-byte varint limit and ignored trailing bytes; canonical reserialization; bounded preparation of prefixes/custom indexes; q5/q11 compression independently decoded by C with the serialized dictionary attached |
 | `framing` | settings byte and bounded resource bytes | resource/metadata sequences with bounded chunks, independent metadata compression and selected repeats; identical bytes under one-byte, 37-byte and 2048-byte caller writes; directory completeness including type 8; C decoding of metadata streams; successful finalization or typed validation failure |
 | `parallel` | bounded task/source settings | deterministic task schedules, slice/seek-source equivalence, staged assembly and C decoding |
+| `c_abi` | C ABI | `mbrotli-ffi`'s exported functions: out-of-range quality or window returns `MBROTLI_INVALID_PARAMETER` with `*output_len == 0`; otherwise a `mbrotli_compress_bound` buffer always suffices, the stream round-trips, one byte short decodes as `MBROTLI_OUTPUT_TOO_SMALL`, and output matches Google's `BrotliEncoderCompress` byte for byte, including accept/reject at a selected smaller capacity (qualities 10–11 are skipped on aarch64, where clang's FMA contraction moves the C oracle); the payload decoded as a stream agrees with Google's large-window streaming decoder: a fully consumed success is identical; trailing data or malformed input is `MBROTLI_ERROR`, or `MBROTLI_OUTPUT_TOO_SMALL` when the output fills before the malformation, in which case a 1 MiB buffer must still not succeed |
 | `compressor_lifecycle` | lifecycle | whatever sequence of reuse, appending, deliberate failure, trimming, reconfiguration, abandoned and leaked sessions the input asks for, the compressor still emits the bytes a fresh one would for the configuration it ended up with |
 
 Byte comparison checks the equivalent C encoding policy. Independent C decoding
@@ -270,7 +277,7 @@ forkserver timeouts during corpus minimization. It measures coverage with the
 target per
 feature configuration, each with its own seed corpus and output directory, all
 bounded by the same wall-clock duration and a fixed execution timeout. The
-`experimental` feature reaches into the encoder, so its 22 stable targets are
+`experimental` feature reaches into the encoder, so its 23 stable targets are
 fuzzed twice — once from each build — and the two experimental-only targets
 once. The builds occupy separate target directories, because the shared
 binaries have the same names.

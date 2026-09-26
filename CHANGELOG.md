@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+- Add the `mbrotli-ffi` workspace crate, a C ABI over the one-shot codecs.
+  It builds `libmbrotli_ffi` as a static and a shared library and ships
+  `include/mbrotli.h` with `mbrotli_compress`, `mbrotli_decompress`,
+  `mbrotli_compress_bound` and the `mbrotli_result` status codes. Compression
+  is byte-identical to Google's `BrotliEncoderCompress` with the same quality
+  and window, including its one-byte empty stream and its fallback to an
+  uncompressed stream, and `mbrotli_compress_bound` equals
+  `BrotliEncoderMaxCompressedSize`. Null, oversized and overlapping arguments
+  are rejected with `MBROTLI_INVALID_PARAMETER` before any memory is touched,
+  and panics never unwind into C. `mbrotli_decompress` stops at the first
+  failure it meets, so a stream corrupt only past the point where the output
+  fills up returns `MBROTLI_OUTPUT_TOO_SMALL`, and `MBROTLI_ERROR` with a
+  larger buffer. A new `c_abi` AFL target checks the ABI
+  against Google's one-shot encoder and streaming decoder, and
+  `mbrotli-ffi/benches/one_shot.rs` compares both one-shot APIs.
+
 ## [v0.5.1](https://github.com/Mnwa/mbrotli/releases/tag/v0.5.1) - 2026-09-26
 
 - Stop the Miri workflow's `compressor::core::stream::tests` step from also

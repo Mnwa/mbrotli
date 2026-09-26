@@ -7,7 +7,7 @@ never depend on a running fuzzer.
 
 Run both `cargo afl test --no-default-features` and
 `cargo afl test --no-default-features --features experimental`. The first
-replays the 21 stable targets; the second adds `serialized_dictionary` and
+replays the 28 stable targets; the second adds `serialized_dictionary` and
 `framing`. The registry test checks that these two targets follow the feature.
 
 Two kinds of file live here:

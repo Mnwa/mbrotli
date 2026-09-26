@@ -1,7 +1,9 @@
 # Development
 
 Requires Rust 1.89 or later. The workspace includes `google-brotli-ffi`, which
-builds vendored C Brotli for tests and benchmarks and requires a C compiler.
+builds vendored C Brotli for tests and benchmarks and requires a C compiler,
+and `mbrotli-ffi`, the C ABI crate described in
+[architecture/c-abi.md](../architecture/c-abi.md).
 
 ```sh
 git submodule update --init --recursive

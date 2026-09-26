@@ -14,6 +14,9 @@ path = "../.."
 [dependencies.google-brotli-ffi]
 path = "../../brotli-ffi"
 
+[dependencies.mbrotli-ffi]
+path = "../../mbrotli-ffi"
+
 [features]
 default = []
 # Enable the RFC 9841 targets and their independent C parser/decoder oracle.

@@ -76,6 +76,7 @@ pub const TARGETS: &[(&str, TargetFn)] = &[
     #[cfg(feature = "experimental")]
     ("framing", framing),
     ("compressor_lifecycle", compressor_lifecycle),
+    ("c_abi", crate::c_abi_targets::c_abi),
 ];
 
 /// Quality 0 must never panic and must always round-trip.
