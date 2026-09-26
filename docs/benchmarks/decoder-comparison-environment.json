@@ -1,7 +1,7 @@
 {
- "date": "2026-09-25",
- "baseline": "dec-2026-09-25",
- "source_state": "Working tree based on baseline_commit; decoder sources unchanged from it (the uncommitted change touches only the greedy encoder). Competitor crates refreshed.",
+ "date": "2026-09-26",
+ "baseline": "dec-2026-09-26",
+ "source_state": "Working tree based on baseline_commit with the uncommitted decoder changes: unmasked whole-word refill, byte-exact literal tail run, inline code-length table and linear slice history for decompress_to_slice. Encoder sources unchanged from baseline_commit. Burli refreshed to 0.3.3.",
  "c_revision": "4508218e7fef90fa4273286f7a415065946f2c43",
  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8",
  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
@@ -39,10 +39,10 @@
  ],
  "versions": {
   "c-brotli": "1.2.0",
-  "mbrotli": "0.4.1 working tree",
+  "mbrotli": "0.5.0 working tree",
   "rust-brotli": "9.0.0",
   "brotli-decompressor": "6.0.1",
-  "burli": "0.3.2"
+  "burli": "0.3.3"
  },
  "sampling": {
   "samples": 20,
@@ -52,17 +52,17 @@
  },
  "corpus_generation": "Original eight inputs unchanged: empty, tiny-text, alice29, text-1m, binary-64k, random-64k, random-1m, repeated-1m. Same generator and parameters as decoder-refresh-2026-09-10-080955.",
  "sha256": {
-  "Cargo.toml": "5076208896b8d15693a1dc398c3b271a489afd4770bee75f623b463b23ad600d",
-  "Cargo.lock": "f103d7cd17edbbfa52f152d73da03dda37a6e9aaf3d8f1362b97f707bd808728",
-  "benchmarks/comparison/Cargo.toml": "38f266ed91faf8c01a29ba8549b38842f9e5a2aff68c44fb371906d27eed09ad",
-  "benchmarks/comparison/Cargo.lock": "cfced8702896e94b1d5634e30d7da0270adb3bda8503d00fefe5de604ec79cc4",
+  "Cargo.toml": "6afa7fc5f5d40d7a8f5b3dee05c75c3c9bda604eb110f7dc574ba3a348c8044f",
+  "Cargo.lock": "478675850fbaa922c5edde8ee79c8ba403f9feb16de59158877c842d5f156ea4",
+  "benchmarks/comparison/Cargo.toml": "71fdca7f059fb42e55b553ac414b98e2ab5fd20ff77e20a47b70d2f1cb97bb5f",
+  "benchmarks/comparison/Cargo.lock": "845cc7811c7aa677ea4bc23527c1e86857732bce668035a5c786e4eefe143467",
   "benchmarks/comparison/src/core.rs": "4165ffb8a939cb60a150f7f50117f6d0d2303979aeeb782fa220f1e6ebcef7b8",
   "benchmarks/comparison/src/core/decoder.rs": "588da59f1ccf48afc460085bde988b0b3eeabab73266ab9d286b0366521543d7",
   "benchmarks/comparison/src/lib.rs": "fa7ea60a5102ea7708ef45ea31075afb3278ca2cb0967c3bffaf2f7a0862cb08",
   "benchmarks/comparison/benches/decoders.rs": "1eaaa648a7b1f56cd2c2dede47944def165cf14034c833d8b9f46c5e503427e9",
   "benchmarks/comparison/report.py": "b6d32822384481eec23c27fb46c511b2b2162ad66ab9cab0536c441831eba224",
   "benchmarks/comparison/decoder_docs.py": "abbced417cc4a57b4ca5b9f22ccbd131f965f447c9555a79104d0f7da3c4cfc8",
-  "docs/benchmarks/decoder-comparison.csv": "64335b525040e5fd6b57b50ba52dd4cb9d37f8f8e06e2e99c0c4a13de101fa76"
+  "docs/benchmarks/decoder-comparison.csv": "1e8749b217d252335a1d31a96bcd832edf2f30f620fa9c3f0d85e756452aea49"
  },
  "limitations": [
   "One WSL2 host; frequency, thermals and host scheduling uncontrolled.",
@@ -70,19 +70,19 @@
   "C receives known output capacity; Rust Vec APIs grow output during decode; Rust brotli includes 4 KiB I/O adaptation.",
   "Only cold APIs and C-generated standard-window streams; no streaming, reuse or dictionaries. Historical timings are not paired before/after measurements."
  ],
- "binary": "benchmarks/comparison/target/release/deps/decoders-375588707b3a2e6b",
- "binary_sha256": "e71ff3c7a91067a1fc1849a21ab2066374c9ea8b8f882468119a61428b8c693b",
+ "binary": "benchmarks/comparison/target/release/deps/decoders-4b138dd4458333bf",
+ "binary_sha256": "6b9f8e558ac8cf0dcae066e5e3b5c36a3f82f4516172b38d54c4108ed84f6f64",
  "validation": {
   "decoder_preflight_cases": 384,
   "exporter": "report.py --decoding rejected no rows",
-  "compressed_sizes_vs_2026_09_10": "identical"
+  "compressed_sizes_vs_2026_09_25": "identical"
  },
  "plotting": "Matplotlib 3.10.8",
- "command": "taskset -c 2 cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench decoders --locked -- --save-baseline dec-2026-09-25",
- "started_at_utc": "2026-09-25T16:18:01+00:00",
- "finished_at_utc": "2026-09-25T16:59:59+00:00",
+ "command": "taskset -c 2 cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench decoders --locked -- --save-baseline dec-2026-09-26",
+ "started_at_utc": "2026-09-26T00:28:24+00:00",
+ "finished_at_utc": "2026-09-26T01:10:18+00:00",
  "timed_sweep_exit_code": 0,
  "measured_cases": 384,
- "baseline_commit": "7d3430edc415bd76acd0cfed9cbf08718cf7a79e",
- "size_manifest": "decoder-comparison-2026-09-25/sizes.csv"
+ "baseline_commit": "e078a49259639c7b3c8f3c56ad9349970d4573f5",
+ "size_manifest": "decoder-comparison-2026-09-26/sizes.csv"
 }

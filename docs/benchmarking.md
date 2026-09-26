@@ -56,7 +56,7 @@ each encoder's effort policy; it does not guarantee equal output size.
 | mbrotli | Local checkout | Construct `Compressor`, then `compress` |
 | [Rust brotli](https://docs.rs/brotli/9.0.0/brotli/) | 9.0.0 | `BrotliCompress` |
 | [simd-brotli](https://docs.rs/simd-brotli/10.0.1/simd_brotli/) | 10.0.1 | `BrotliCompress` |
-| [burli](https://github.com/paddor/burli) | 0.3.2 | `compress_with_options` |
+| [burli](https://github.com/paddor/burli) | 0.3.3 | `compress_with_options` |
 
 This is **cold end-to-end compression**: configuration, construction, scratch and
 destination allocation, encoding, and disposal occur inside each iteration.
@@ -96,14 +96,14 @@ python3 benchmarks/comparison/quality_docs.py \
 python3 benchmarks/comparison/plot.py \
   --csv docs/benchmarks/encoder-comparison.csv \
   --output docs/benchmarks/encoders/charts \
-  --subtitle 'i7-13700KF; working tree; 20 samples; 2026-09-25'
+  --subtitle 'i7-13700KF; working tree; 20 samples; 2026-09-26'
 ```
 
 `quality_docs.py` writes the index, twelve quality pages and their detailed
 charts. `plot.py` writes `overview.svg`, `throughput.svg` and `size.svg` into
 the same charts directory. All eight corpora contribute to the medians.
-The current encoder CSV is the September 25 sweep (`enc-2026-09-25`), with its
-[size manifest](benchmarks/encoder-comparison-2026-09-25/sizes.csv) archived.
+The current encoder CSV is the September 26 sweep (`enc-2026-09-26`), with its
+[size manifest](benchmarks/encoder-comparison-2026-09-26/sizes.csv) archived.
 Its environment record identifies the measured source and binary; regenerating
 charts reuses those measurements and does not rerun the benchmark.
 
@@ -136,7 +136,7 @@ the encoder comparison and accept the same Criterion overrides.
 | Google C | 1.2.0, pinned vendor revision | `BrotliDecoderDecompress` into a newly allocated, initialized output |
 | mbrotli | Local checkout | Construct `Decompressor`, then `decompress` |
 | Rust brotli | 9.0.0 | `BrotliDecompress` into a new Vec, native 4 KiB I/O buffers |
-| Burli | 0.3.2 | `burli::decompress` |
+| Burli | 0.3.3 | `burli::decompress` |
 
 This measures cold native APIs, including construction, allocation, decode and
 disposal. C requires the known output capacity; the Rust Vec helpers discover

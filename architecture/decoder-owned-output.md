@@ -1,7 +1,8 @@
 # Owned decoder output
 
 The owned Vec path can recognize stored members directly or transfer its history
-allocation to the caller. The same decoder state machine enforces decoded bytes,
+allocation to the caller. The one-shot slice path decodes its first member with
+the caller's slice as history. The same decoder state machine enforces decoded bytes,
 trailing-data policy, window limits, dictionaries and resource budgets.
 
 ## Ownership, control and data flow
@@ -65,6 +66,68 @@ flowchart LR
     Other --> History
 ```
 
+## Linear slice history
+
+`decompress_to_slice` and `decompress_with_dictionary_to_slice` end their
+session with one call, so no later call needs the history of a paused member.
+They call the private `finish_linear`, which passes `Delivery::Linear` to the
+operation. The operation turns it into `Output::linear` only for a call that
+starts the operation (`total_in == 0 && total_out == 0`), so the first member
+begins at `dst[0]` and every history position equals its slice index. The
+member boundary clears the flag; later members in concatenated mode use the
+ring as before.
+
+With `linear` set the caller's slice is the member's history. The ring is
+neither written nor grown. `emit`, raw copies and the byte-exact literal run
+write only the slice. Context bytes, prefix-crossing history and every copy read
+it. Delivery (`flush_ring`) advances `produced` without copying, as in
+collection. The command loop and the resumable copy and prefix stages take the
+slice out of `Output` (`core::mem::take`) for their bulk work and put it back
+on every exit. The loop's `leave!` does this on pauses and errors.
+
+Bulk work sees the slice only up to `history_end`: the smaller of the call's
+fast end and `position + remaining` of the current meta-block. The 16- and
+32-byte copy kernels may write up to fifteen bytes past a copy, and the bound
+keeps those bytes inside output this meta-block writes. On success or
+`OutputTooSmall` the slice matches ring delivery byte for byte, including an
+untouched suffix. After other errors, bytes past the delivered prefix may hold
+partial output of the failing meta-block. The method has always documented
+that written bytes are not rolled back.
+
+`history_mask` indexes both buffers: a power-of-two length gives `len - 1`
+(the ring wraps; a power-of-two slice is never indexed at or past its length,
+so the mask is the identity), any other length gives `u64::MAX`. The copy
+kernels, `previous_bytes` and the command loop share it, so the SIMD and
+baseline copies are the same code in both modes.
+
+```mermaid
+sequenceDiagram
+    participant API as decompress_to_slice
+    participant Op as OperationState
+    participant Stream as Stream::run
+    participant Fast as fast / Copy / Prefix
+    API->>Op: finish_linear(src, dst)
+    Op->>Op: linear = fresh operation
+    Op->>Stream: Output { bytes: dst, linear }
+    Stream->>Fast: take dst, bound to history_end
+    Fast->>Fast: decode and copy inside dst
+    Fast-->>Stream: restore dst; produced += delivered
+    Stream-->>Op: Stop::Member
+    Op->>Op: linear = false for later members
+    Op-->>API: progress
+```
+
+```mermaid
+flowchart TD
+    Write[history write] --> Linear{Output.linear?}
+    Linear -->|yes| Slice[write dst at position; ring untouched]
+    Linear -->|no| Ring[ensure ring; write position & mask]
+    Ring --> Deliver{delivers?}
+    Deliver -->|slice delivery| CopyOut[flush copies ring bytes to dst]
+    Deliver -->|collect| Count[flush advances produced]
+    Slice --> Count
+```
+
 ## Read-ahead accounting
 
 At output pauses and member boundaries, `Bits::unread` returns speculative whole
@@ -93,4 +156,6 @@ stored recognition, transfer, history wrap, concatenation, limits and read-ahead
 - Collection requires a fresh workspace and destination; transfer gives the
   caller a power-of-two allocation and leaves no history window for reuse.
 - Appended and reused Vec output initializes newly exposed destination slices.
+- Linear slice history covers only the first member of a one-call slice
+  operation; sessions and later concatenated members deliver from the ring.
 - Small compressed streams still build entropy tables and session state.

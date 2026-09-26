@@ -74,14 +74,14 @@ impl Block {
                     self.stage = Stage::TypeTree;
                 }
                 Stage::TypeTree => {
-                    if !builder.read(self.count + 2, bits, input, memory)? {
+                    if !builder.read(self.count + 2, bits, input)? {
                         return Ok(false);
                     }
                     builder.build(self.count + 2, memory, &mut self.types)?;
                     self.stage = Stage::LengthTree;
                 }
                 Stage::LengthTree => {
-                    if !builder.read(26, bits, input, memory)? {
+                    if !builder.read(26, bits, input)? {
                         return Ok(false);
                     }
                     builder.build(26, memory, &mut self.lengths)?;

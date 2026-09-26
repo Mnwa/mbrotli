@@ -64,7 +64,8 @@ impl Bits {
         self.count
     }
 
-    /// Buffered bits, least significant first; bits above `count` are zero.
+    /// Buffered bits, least significant first. Bits above `count` are zero
+    /// or, after a whole-word refill, the input bytes that follow.
     #[inline(always)]
     pub(super) const fn value(&self) -> u64 {
         self.value
@@ -106,9 +107,9 @@ impl Bits {
         Ok(Some(self.value & mask(count)))
     }
 
-    /// Loads whole bytes until at least 57 bits are buffered. Returns false,
+    /// Loads whole bytes until at least 56 bits are buffered. Returns false,
     /// leaving the reservoir unchanged, when fewer than eight acceptable bytes
-    /// remain before the input's fast end.
+    /// remain before the input's fast end and at most 56 bits are buffered.
     #[inline(always)]
     pub(super) fn refill(&mut self, input: &mut Input<'_>) -> bool {
         let Input {
@@ -124,23 +125,28 @@ impl Bits {
     /// cursor held by the caller so a hot loop keeps it in a register.
     #[inline(always)]
     pub(super) fn refill_from(&mut self, fast: &[u8], consumed: &mut usize) -> bool {
-        if self.count > MAX_PEEK {
-            return true;
-        }
         let Some(chunk) = fast
             .get(*consumed..)
             .and_then(|rest| rest.first_chunk::<8>())
         else {
-            return false;
+            return self.count > MAX_PEEK;
         };
-        let bytes = (64 - self.count) >> 3;
-        let keep = bytes * 8;
-        // `keep` is at most 64: shift in two steps so a full word needs no mask.
-        let word = (u64::from_le_bytes(*chunk) << (64 - keep)) >> (64 - keep);
-        self.value |= word << self.count;
-        self.count += keep;
+        debug_assert!(self.count < 64);
+        // The whole word goes in unmasked: the bits past the bytes it accepts
+        // are the input bytes that follow, which a later load ORs in again
+        // unchanged. Leaving them keeps the mask off the decoding chain.
+        self.value |= u64::from_le_bytes(*chunk) << self.count;
+        let bytes = (63 - self.count) >> 3;
+        self.count += bytes * 8;
         *consumed += bytes as usize;
         true
+    }
+
+    /// Clears the bits above `count`, which a whole-word refill leaves
+    /// holding input bytes it did not accept, before the reservoir outlives
+    /// the call whose input they came from.
+    pub(super) const fn settle(&mut self) {
+        self.value &= mask(self.count);
     }
 
     /// Returns whole buffered bytes accepted during this call to the input.
@@ -261,6 +267,48 @@ mod tests {
         assert_eq!(bits.value(), mask(48));
     }
     #[test]
+    fn unmasked_refill_agrees_with_byte_loads_and_settles_to_accepted_bits() {
+        let bytes: alloc::vec::Vec<u8> = (1..=16).collect();
+        let mut word = Bits::default();
+        let mut input = probe(&bytes);
+        assert!(word.refill(&mut input));
+        assert_eq!((word.count(), input.consumed), (56, 7));
+        // The eighth byte rides along above the accepted bits.
+        assert_eq!(word.value(), u64::from_le_bytes([1, 2, 3, 4, 5, 6, 7, 8]));
+        let mut exact = Bits::default();
+        let mut reference = probe(&bytes);
+        for _ in 0..7 {
+            assert!(exact.load_byte(&mut reference).unwrap());
+        }
+        assert_eq!(word.value() & mask(56), exact.value());
+        // Loading that byte again ORs in the bits already there.
+        word.drop(12);
+        exact.drop(12);
+        assert!(word.load_byte(&mut input).unwrap());
+        assert!(exact.load_byte(&mut reference).unwrap());
+        assert_eq!((word.count(), word.value()), (exact.count(), exact.value()));
+        // A settled reservoir holds only accepted bits.
+        let mut ahead = Bits::default();
+        let mut input = probe(&bytes);
+        assert!(ahead.refill(&mut input));
+        ahead.drop(4);
+        ahead.settle();
+        assert_eq!(
+            ahead.value(),
+            u64::from_le_bytes([1, 2, 3, 4, 5, 6, 7, 0]) >> 4
+        );
+        // Without a whole word, the answer depends only on what is buffered.
+        let mut short = probe(&bytes[..7]);
+        assert!(!Bits::default().refill(&mut short));
+        let mut full = Bits {
+            value: 0,
+            count: 57,
+        };
+        assert!(full.refill(&mut short));
+        assert_eq!((full.count(), short.consumed), (57, 0));
+    }
+
+    #[test]
     fn refill_loads_whole_words_and_unread_returns_unused_bytes() {
         let bytes: alloc::vec::Vec<u8> = (1..=20).collect();
         let mut bits = Bits::default();
@@ -301,10 +349,10 @@ mod tests {
         let mut bits = Bits::default();
         let mut input = probe(&bytes);
         assert!(bits.refill(&mut input));
-        assert_eq!((bits.count(), input.consumed), (64, 8));
-        bits.drop(64 - 7);
+        assert_eq!((bits.count(), input.consumed), (56, 7));
+        bits.drop(56 - 7);
         assert!(bits.refill(&mut input));
-        assert_eq!((bits.count(), input.consumed), (63, 15));
+        assert_eq!((bits.count(), input.consumed), (63, 14));
         assert_eq!(
             Bits::default().uint8(&mut probe(&[0b0001_0011])).unwrap(),
             Some(3)

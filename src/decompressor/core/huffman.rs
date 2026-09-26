@@ -205,6 +205,68 @@ impl<'a> Tables<'a> {
 /// One owned prefix code, a group with a single slot.
 pub(super) type Huffman = Group;
 
+/// Width of the code-length code's table: its lengths are at most five bits.
+const LENGTH_BITS: u32 = 5;
+const LENGTH_SIZE: usize = 1 << LENGTH_BITS;
+
+/// The code-length code of a complex description: eighteen symbols of at
+/// most five bits, so one inline 32-entry table decodes every code without
+/// a second level or any heap storage.
+#[derive(Debug, Clone, Copy, Default)]
+struct LengthCode([Code; LENGTH_SIZE]);
+
+impl LengthCode {
+    /// Builds the table from per-symbol lengths the caller has already
+    /// checked to form a complete code, or to hold exactly one symbol, which
+    /// decodes with zero bits.
+    fn build(lengths: &[u8; 18], count: usize) -> Self {
+        let mut table = [Code::default(); LENGTH_SIZE];
+        if count == 1 {
+            let symbol = lengths.iter().position(|&length| length != 0).unwrap_or(0);
+            table.fill(Code::new(0, symbol));
+            return Self(table);
+        }
+        let mut code = 0usize;
+        for length in 1..=LENGTH_BITS as usize {
+            for (symbol, _) in lengths
+                .iter()
+                .enumerate()
+                .filter(|&(_, &width)| usize::from(width) == length)
+            {
+                replicate(
+                    &mut table,
+                    key_of(code, length),
+                    1 << length,
+                    Code::new(length as u32, symbol),
+                );
+                code += 1;
+            }
+            code <<= 1;
+        }
+        Self(table)
+    }
+
+    /// Decodes one symbol, loading a whole word when the input allows and
+    /// otherwise accepting bytes only as the code needs them.
+    #[inline(always)]
+    fn decode(&self, bits: &mut Bits, input: &mut Input<'_>) -> Result<Option<usize>, DecodeError> {
+        if bits.count() < LENGTH_BITS && !bits.refill(input) {
+            loop {
+                let entry = self.0[(bits.value() & (LENGTH_SIZE as u64 - 1)) as usize];
+                if entry.bits() <= bits.count() {
+                    break;
+                }
+                if !bits.load_byte(input)? {
+                    return Ok(None);
+                }
+            }
+        }
+        let entry = self.0[(bits.value() & (LENGTH_SIZE as u64 - 1)) as usize];
+        bits.drop(entry.bits());
+        Ok(Some(entry.value()))
+    }
+}
+
 impl Huffman {
     #[inline(always)]
     pub(super) fn codes(&self) -> Table<'_> {
@@ -389,7 +451,7 @@ pub(super) struct Builder {
     total: usize,
     last: usize,
     small: [u8; 18],
-    code: Huffman,
+    code: LengthCode,
     symbols: [usize; 4],
     count: usize,
     index: usize,
@@ -410,7 +472,7 @@ impl Default for Builder {
             total: 0,
             last: 0,
             small: [0; 18],
-            code: Huffman::default(),
+            code: LengthCode::default(),
             symbols: [0; 4],
             count: 0,
             index: 0,
@@ -453,6 +515,7 @@ impl Builder {
     }
 
     /// Replaces the lists with an explicit length per symbol.
+    #[cfg(test)]
     fn assign(&mut self, lengths: &[u8]) -> Result<(), DecodeError> {
         self.clear();
         for (symbol, &length) in lengths.iter().enumerate() {
@@ -617,7 +680,6 @@ impl Builder {
         alphabet: usize,
         bits: &mut Bits,
         input: &mut Input<'_>,
-        memory: &mut Memory,
     ) -> Result<bool, DecodeError> {
         if alphabet == 0 || alphabet > MAX_ALPHABET {
             return Err(InvalidDataKind::Huffman.into());
@@ -737,12 +799,7 @@ impl Builder {
                     if self.space < 0 || (self.count != 1 && self.space != 0) {
                         return Err(InvalidDataKind::Huffman.into());
                     }
-                    let small = self.small;
-                    self.assign(&small)?;
-                    let mut code = core::mem::take(&mut self.code);
-                    let built = self.build(18, memory, &mut code);
-                    self.code = code;
-                    built?;
+                    self.code = LengthCode::build(&self.small, self.count);
                     self.clear();
                     self.index = 0;
                     self.space = 32768;
@@ -768,7 +825,7 @@ impl Builder {
                         repeat,
                         ..
                     } = self;
-                    let table = code.codes();
+                    let table = &*code;
                     let outcome = loop {
                         let symbol = if let Stage::Repeat(symbol) = *stage {
                             usize::from(symbol)
@@ -779,7 +836,7 @@ impl Builder {
                             if *space < 0 || *index == alphabet {
                                 break Err(InvalidDataKind::Huffman.into());
                             }
-                            match table.decode_refilling(bits, input) {
+                            match table.decode(bits, input) {
                                 Ok(Some(symbol)) => symbol,
                                 Ok(None) => break Ok(false),
                                 Err(error) => break Err(error),
@@ -891,6 +948,52 @@ mod tests {
             code <<= 1;
         }
         panic!("incomplete code");
+    }
+
+    #[test]
+    fn length_codes_decode_canonically_and_a_single_symbol_takes_no_bits() {
+        // A complete five-bit code over symbols spread across the alphabet.
+        let mut lengths = [0u8; 18];
+        for (symbol, length) in [
+            (0, 2),
+            (5, 2),
+            (17, 3),
+            (1, 3),
+            (12, 3),
+            (16, 4),
+            (9, 5),
+            (3, 5),
+        ] {
+            lengths[symbol] = length;
+        }
+        let code = LengthCode::build(&lengths, 8);
+        for byte in 0..=u8::MAX {
+            let mut bits = Bits::default();
+            let bytes = [byte];
+            let mut input = fixtures::input(&bytes);
+            let mut taken = 0;
+            let expected = canonical(&lengths, || {
+                taken += 1;
+                u64::from(byte >> (taken - 1) & 1)
+            });
+            assert_eq!(code.decode(&mut bits, &mut input).unwrap(), Some(expected));
+            assert_eq!(bits.count(), 8 - taken);
+        }
+        // An exhausted input waits for another byte.
+        let mut bits = Bits::default();
+        assert_eq!(
+            code.decode(&mut bits, &mut fixtures::input(&[])).unwrap(),
+            None
+        );
+        // With one nonzero length the only symbol decodes from no bits.
+        let mut single = [0u8; 18];
+        single[16] = 3;
+        let code = LengthCode::build(&single, 1);
+        assert_eq!(
+            code.decode(&mut bits, &mut fixtures::input(&[])).unwrap(),
+            Some(16)
+        );
+        assert_eq!(bits.count(), 0);
     }
 
     #[test]
@@ -1175,11 +1278,7 @@ mod tests {
         let mut input = fixtures::input(&bytes);
         let mut memory = Memory::default();
         let mut builder = Builder::default();
-        assert!(
-            builder
-                .read(256, &mut bits, &mut input, &mut memory)
-                .unwrap()
-        );
+        assert!(builder.read(256, &mut bits, &mut input).unwrap());
         let mut tree = Huffman::default();
         assert_eq!(builder.build(256, &mut memory, &mut tree).unwrap(), 5);
         assert_eq!(tree.codes().decode(&mut bits, &mut input).unwrap(), Some(3));
@@ -1198,11 +1297,7 @@ mod tests {
         ]);
         let mut bits = Bits::default();
         let mut input = fixtures::input(&bytes);
-        assert!(
-            builder
-                .read(256, &mut bits, &mut input, &mut memory)
-                .unwrap()
-        );
+        assert!(builder.read(256, &mut bits, &mut input).unwrap());
         assert_eq!(builder.build(256, &mut memory, &mut tree).unwrap(), 9);
         assert_eq!(tree.codes().decode(&mut bits, &mut input).unwrap(), Some(7));
         assert_eq!(tree.codes().decode(&mut bits, &mut input).unwrap(), Some(6));
@@ -1241,11 +1336,7 @@ mod tests {
                 let mut memory = Memory::default();
                 let mut builder = Builder::default();
                 let alphabet = if repeat == 16 { 4 } else { 8 };
-                assert!(
-                    builder
-                        .read(alphabet, &mut bits, &mut input, &mut memory)
-                        .unwrap()
-                );
+                assert!(builder.read(alphabet, &mut bits, &mut input).unwrap());
                 let mut tree = Huffman::default();
                 assert_eq!(
                     builder.build(alphabet, &mut memory, &mut tree).unwrap(),

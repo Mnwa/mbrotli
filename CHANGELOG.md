@@ -13,6 +13,38 @@
   safety, and filling its 8 MiB dense table twice took about 11 minutes
   under Miri, twice as long as the other 46 hasher tests together.
 
+- Faster decompression, with identical output, progress and errors. The
+  whole-word bit refill ORs the input word in unmasked and keeps at least 56
+  bits instead of 57; the bits above the buffered count are the input bytes
+  that follow, and the decoder clears them before a call returns and before
+  raw or metadata bytes bypass the reservoir. This takes a mask off the serial
+  decoding chain: Alice q0-q11 and 1 MiB text decode 3-6% faster, structured
+  binary about 2%. Literals within eight bytes of the input end, which is all
+  of them in small streams, decode as one byte-exact run that settles the block,
+  context mode and output room once instead of per symbol. The code-length
+  code of each complex prefix-code description is now a 32-entry table held
+  in the builder instead of a separately allocated 256-entry table, so a first
+  decode allocates one buffer less. Together these take 5-7% off cold and
+  8-10% off warm decoding of a 44-byte text at qualities 3 and 5-9.
+
+- `decompress_to_slice` and `decompress_with_dictionary_to_slice` decode the
+  first member straight into the destination slice and use it as the
+  member's history, instead of decoding into the decoder's window and copying
+  out of it. On a reused decoder this takes 60% off 1 MiB incompressible and
+  repetitive payloads, 48% off 64 KiB incompressible, 13% off structured
+  binary and 3-9% off text; it no longer grows the retained window for such
+  calls. Results, progress and errors are unchanged, and a successful decode
+  still leaves the unused suffix of the slice untouched. After an error other
+  than `OutputTooSmall`, bytes past the decoded prefix may now hold part of the
+  failing meta-block. Sessions and later concatenated members still decode
+  through the window. The `decompress` AFL target now checks that one-shot
+  slices match session delivery.
+
+- Refresh the published library comparisons (`enc-2026-09-26`,
+  `dec-2026-09-26`) with Burli 0.3.3, and record the 2026-09-26 six-hour AFL
+  campaign over every target in both feature builds (631 million executions,
+  no crashes) in `docs/correctness.md`.
+
 ## [v0.5.0](https://github.com/Mnwa/mbrotli/releases/tag/v0.5.0) - 2026-09-25
 
 - Add `EncoderSessionOwned` and `DecoderSessionOwned`: incremental sessions

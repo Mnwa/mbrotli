@@ -8,7 +8,7 @@ members for eligible owned-output calls. No additional public API is exposed.
 
 The context-free literal loop decodes three symbols per reservoir check.
 A Huffman symbol consumes at most 15 bits, so 45 buffered bits suffice. Whole-word refill leaves
-at least 57 bits; it reads only a checked eight-byte slice inside the input
+at least 56 bits; it reads only a checked eight-byte slice inside the input
 budget. The batch is bounded by the pending literal count, literal block count,
 output space and ring end. It cannot cross a block switch or wrap. Contextual
 literals continue using a context-dependent loop.
@@ -28,7 +28,35 @@ flowchart TD
 ```
 
 The scalar remainder also runs when input cannot refill a batch but still has
-one or two decodable symbols. Input/output pauses, consumed/produced counts,
+one or two decodable symbols.
+
+## Byte-exact literal runs
+
+Within eight bytes of the input's acceptable end the command loop cannot refill,
+so the resumable `Stage::Literals` decodes the rest of the run. It settles the
+pending block switch, the context mode, the context-map row and the run bound
+(pending literals, block remainder and output room up to the call's fast end)
+once, then loops over symbols with byte-exact loading, writing the ring and the
+destination directly. Counters are committed before any pause or error leaves,
+so progress matches the per-symbol path. When the command loop could still
+refill, the stage decodes one symbol and re-enters it instead, since it stopped
+at a boundary it does not cross. Small streams, whose whole input lies inside
+that tail, decode all their literals here.
+
+```mermaid
+flowchart TD
+    Stage[Stage::Literals] --> Ready{output ready?}
+    Ready -->|no| PauseOut[Stop::Output]
+    Ready -->|yes| Room{eight bytes before fast end?}
+    Room -->|yes| Fast[command loop]
+    Fast --> Again{literals pending and eight bytes still left?}
+    Again -->|yes| One[one symbol] --> Stage
+    Again -->|no| Settle
+    Room -->|no| Settle[block switch, context row, run bound]
+    Settle --> Loop[decode byte-exactly up to the bound]
+    Loop -->|input exhausted| Commit[commit counters; Stop::Input]
+    Loop -->|bound reached| Stage
+``` Input/output pauses, consumed/produced counts,
 resource failures and public error propagation follow the shared decoder contract.
 SIMD dispatch remains outside the command loop; batching adds no feature
 selection and uses safe ordinary Rust because the entropy dependency is serial.

@@ -64,6 +64,37 @@ C-to-native round trip; `decoder-campaign.sh` covers decoder boundaries. Both
 stable and experimental builds are needed. See the [AFL guide](../fuzz/afl/README.md)
 and [target mechanics](../architecture/fuzzing.md).
 
+## Six-hour AFL campaign — 2026-09-26
+
+After the decoder changes of 2026-09-26 (unmasked refill, literal tail runs,
+linear slice history), every fuzz target ran for **6 hours** from fresh builds of
+the working tree: `campaign.sh` with `CAMPAIGN_PARALLEL=1` (22 stable and 24
+experimental encoder-side targets), `decoder-campaign.sh` (6 stable and 7
+experimental decoder targets) and the three framed targets that neither script
+covers (`framed_decode`, `framed_encode`, `framed_roundtrip`, experimental build),
+for **62 AFL++ workers** on the i7-13700KF/WSL2 host's 24 threads.
+
+| Group | Workers | Executions |
+| --- | ---: | ---: |
+| Encoder, stable | 22 | 43,668,477 |
+| Encoder, experimental | 24 | 48,598,336 |
+| Decoder, stable | 6 | 204,316,217 |
+| Decoder, experimental | 7 | 327,495,724 |
+| Framed, experimental | 3 | 6,915,108 |
+| **Total** | **62** | **630,993,862** |
+
+No crashes or correctness-oracle failures were recorded; stability stayed at or
+above 99.38%. The `decompress` target now also checks that
+`decompress_to_slice` matches ring-backed session delivery, byte for byte.
+
+`framed_decode` saved two hangs at its 5 s timeout. Both inputs finish in 0.57 s
+standalone under instrumentation, so the timeouts came from oversubscription,
+not an unbounded loop. Their time goes to `framing::core::Engine::framing_bytes`:
+it recomputes workspace accounting over every chunk and metadata record on
+each budget check, which is quadratic in the number of records. This campaign
+found that slow path in the experimental framed decoder; it is open, and it is
+not a decoding error.
+
 ## Eight-hour AFL campaign — 2026-09-11
 
 The recorded campaign exercised compression and decompression in stable and

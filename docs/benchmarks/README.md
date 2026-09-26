@@ -2,7 +2,7 @@
 
 | Compare | Results | Data |
 | --- | --- | --- |
-| Compression speed and size | [Qualities 0–11](encoders/README.md) | [CSV](encoder-comparison.csv), [conditions](encoder-comparison.md), [size manifest](encoder-comparison-2026-09-25/sizes.csv) |
+| Compression speed and size | [Qualities 0–11](encoders/README.md) | [CSV](encoder-comparison.csv), [conditions](encoder-comparison.md), [size manifest](encoder-comparison-2026-09-26/sizes.csv) |
 | Encoder optimization, 2026-09-14 | [Changes and measured results](encoder-optimization-2026-09-14.md) | [Before](encoder-optimization-2026-09-14/comparison-before.csv), [after](encoder-optimization-2026-09-14/comparison-after.csv), [environment](encoder-optimization-2026-09-14/environment.json) |
 | Decompression speed on identical streams | [Source qualities 0–11](decoders/README.md) | [CSV](decoder-comparison.csv), [conditions](decoder-comparison.md) |
 
@@ -22,13 +22,13 @@ output size. [Exact results and confidence bounds](encoders/README.md).
 Four decoders restore the same C-produced streams in 384 cases. Quality is the
 source encoder's setting. Each bar is the median of eight C-time/decoder-time
 ratios; higher is faster. Burli decodes every quality. SIMD Brotli re-exports the
-Rust brotli decoder project and is omitted. [Exact results](decoders/README.md), [size manifest](decoder-comparison-2026-09-25/sizes.csv).
+Rust brotli decoder project and is omitted. [Exact results](decoders/README.md), [size manifest](decoder-comparison-2026-09-26/sizes.csv).
 
 ## How to interpret the results
 
 Published measurements use an Intel Core i7-13700KF under WSL2, generic mode,
 window 22, and cold native APIs including construction, allocation and disposal.
-Compression and decompression are dated 2026-09-25. See each
+Compression and decompression are dated 2026-09-26. See each
 report for provenance and limits; these are measurements of recorded builds.
 
 Empty and tiny inputs have equal weight with large inputs. Medians describe this

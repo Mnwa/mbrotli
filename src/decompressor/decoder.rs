@@ -415,9 +415,14 @@ impl Decompressor {
     }
     /// Decodes into a fixed slice, leaving its unused suffix unchanged.
     ///
+    /// The first member decodes straight into `dst`, which also serves as its
+    /// history, so no output passes through the decoder's window.
+    ///
     /// # Errors
     /// Returns codec/resource errors, trailing data, or `OutputTooSmall`.
-    /// Bytes written before an error are not rolled back.
+    /// Bytes written before an error are not rolled back. `OutputTooSmall`
+    /// fills the whole slice; after another error the bytes past the decoded
+    /// prefix may hold part of the failing meta-block.
     ///
     /// # Examples
     ///
@@ -450,8 +455,10 @@ impl Decompressor {
         dst: &mut [u8],
     ) -> Result<usize, DecodeError> {
         let mut session = DecoderSession::start(self, DecodeStreamConfig::default(), dictionary)?;
+        // The session ends with this call, so its first member may use `dst`
+        // itself as history instead of a ring it would copy out of.
         let progress = session
-            .process(src, dst, DecodeOperation::Finish)
+            .finish_linear(src, dst)
             .map_err(super::DecodeFailure::into_error)?;
         if progress.status == DecoderStatus::NeedsOutput {
             return Err(DecodeError::OutputTooSmall {
@@ -554,9 +561,14 @@ impl Decompressor {
 
     /// Decodes with an external dictionary into an exact or larger slice.
     ///
+    /// As [`Self::decompress_to_slice`], the first member uses `dst` as its
+    /// history and a successful decode leaves the unused suffix unchanged.
+    ///
     /// # Errors
     /// Returns codec/resource failures, trailing data or `OutputTooSmall`.
-    /// Any written prefix remains available on error.
+    /// Any written prefix remains available on error; after an error other
+    /// than `OutputTooSmall` the bytes past it may hold part of the failing
+    /// meta-block.
     pub fn decompress_with_dictionary_to_slice<'dict>(
         &mut self,
         dictionary: impl Into<DictionaryRef<'dict>>,

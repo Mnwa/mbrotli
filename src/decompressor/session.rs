@@ -1,4 +1,7 @@
-use super::{DecodeError, DecodeStreamConfig, Decompressor, core::OperationState};
+use super::{
+    DecodeError, DecodeStreamConfig, Decompressor,
+    core::{Delivery, OperationState},
+};
 use crate::Window;
 use crate::dictionary::{DecodeDictionary, DictionaryRef};
 
@@ -174,7 +177,7 @@ impl DecoderSession<'_, '_> {
             input,
             output,
             operation,
-            None,
+            Delivery::Slice,
         )
     }
 
@@ -258,7 +261,26 @@ impl DecoderSession<'_, '_> {
             input,
             &mut [],
             DecodeOperation::Finish,
-            Some(capacity),
+            Delivery::Collect(capacity),
+        )
+    }
+
+    /// One `Finish` call that decodes the operation's first member straight
+    /// into `output`, which also serves as its history. Progress, statuses and
+    /// errors are those of [`Self::process`]; only the one-shot slice API uses
+    /// it, because the history of a paused member is not kept for a later call.
+    pub(super) fn finish_linear(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+    ) -> Result<DecodeProgress, DecodeFailure> {
+        self.operation.process(
+            self.decoder,
+            self.dictionary,
+            input,
+            output,
+            DecodeOperation::Finish,
+            Delivery::Linear,
         )
     }
 
@@ -415,7 +437,7 @@ impl<D: AsRef<DecodeDictionary> + 'static> DecoderSessionOwned<D> {
             input,
             output,
             operation,
-            None,
+            Delivery::Slice,
         )
     }
 

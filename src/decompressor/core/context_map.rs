@@ -102,7 +102,7 @@ impl ContextMap {
                 }
                 Stage::Tree => {
                     let alphabet = self.trees + usize::from(self.run);
-                    if !builder.read(alphabet, bits, input, memory)? {
+                    if !builder.read(alphabet, bits, input)? {
                         return Ok(false);
                     }
                     builder.build(alphabet, memory, &mut self.tree)?;

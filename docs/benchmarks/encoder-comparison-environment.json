@@ -1,7 +1,7 @@
 {
-  "date": "2026-09-25",
-  "baseline_commit": "7d3430edc415bd76acd0cfed9cbf08718cf7a79e",
-  "source_state": "Working tree based on baseline_commit with the q5-q8 cold bucket-layout change (q5 dense limit 32 KiB, store-rate mid-stream sparse-to-dense promotion); competitor crates refreshed.",
+  "date": "2026-09-26",
+  "baseline_commit": "e078a49259639c7b3c8f3c56ad9349970d4573f5",
+  "source_state": "Working tree based on baseline_commit with the uncommitted decoder changes: unmasked whole-word refill, byte-exact literal tail run, inline code-length table and linear slice history for decompress_to_slice. Encoder sources unchanged from baseline_commit. Burli refreshed to 0.3.3.",
   "c_revision": "4508218e7fef90fa4273286f7a415065946f2c43",
   "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8",
   "c_compiler": "cc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
@@ -24,32 +24,32 @@
   },
   "versions": {
     "c-brotli": "1.2.0",
-    "mbrotli": "0.4.1 working tree",
+    "mbrotli": "0.5.0 working tree",
     "rust-brotli": "9.0.0",
     "simd-brotli": "10.0.1",
-    "burli": "0.3.2",
-    "burli-encode": "0.3.2",
-    "burli-decode": "0.3.2"
+    "burli": "0.3.3",
+    "burli-encode": "0.3.3",
+    "burli-decode": "0.3.3"
   },
   "sha256": {
     "src/compressor/core/greedy/hashers.rs": "859b933709d0e8a904a35584c3253b941a0b9091189f86493e609d35f6dd2500",
     "src/compressor/core/greedy/backward_references.rs": "c63b58966145ff13969ed99b0b0140c1fc22ae999df006d3836fd74b568a8757",
-    "Cargo.toml": "5076208896b8d15693a1dc398c3b271a489afd4770bee75f623b463b23ad600d",
-    "Cargo.lock": "f103d7cd17edbbfa52f152d73da03dda37a6e9aaf3d8f1362b97f707bd808728",
-    "benchmarks/comparison/Cargo.toml": "38f266ed91faf8c01a29ba8549b38842f9e5a2aff68c44fb371906d27eed09ad",
-    "benchmarks/comparison/Cargo.lock": "cfced8702896e94b1d5634e30d7da0270adb3bda8503d00fefe5de604ec79cc4",
+    "Cargo.toml": "6afa7fc5f5d40d7a8f5b3dee05c75c3c9bda604eb110f7dc574ba3a348c8044f",
+    "Cargo.lock": "478675850fbaa922c5edde8ee79c8ba403f9feb16de59158877c842d5f156ea4",
+    "benchmarks/comparison/Cargo.toml": "71fdca7f059fb42e55b553ac414b98e2ab5fd20ff77e20a47b70d2f1cb97bb5f",
+    "benchmarks/comparison/Cargo.lock": "845cc7811c7aa677ea4bc23527c1e86857732bce668035a5c786e4eefe143467",
     "benchmarks/comparison/src/core.rs": "4165ffb8a939cb60a150f7f50117f6d0d2303979aeeb782fa220f1e6ebcef7b8",
     "benchmarks/comparison/src/lib.rs": "fa7ea60a5102ea7708ef45ea31075afb3278ca2cb0967c3bffaf2f7a0862cb08",
     "benchmarks/comparison/benches/implementations.rs": "4235d7819fcae8a1833fcb7fcbe8abccb7e827d25c4e8248cc6955f94ecab045",
     "brotli-ffi/build.rs": "c2c982f3c5fdf878664ac006b850d8be4885c801ebb37e7c9266a6cc62103064",
     "brotli-ffi/vendor/brotli/tests/testdata/alice29.txt": "7467306ee0feed4971260f3c87421154a05be571d944e9cb021a5713700c38f0",
-    "docs/benchmarks/encoder-comparison.csv": "6c77910d1c4cf94c9b9580e6cdaefa8626cbe323b1b0c06c689cf9c99b4d6e2f",
+    "docs/benchmarks/encoder-comparison.csv": "dc9463ea7158e27d924c551339575f391b8112fffcefb4091f0dcf5accaff711",
     "benchmarks/comparison/quality_docs.py": "425b7fd4a4d5010b9d58e74ff7cea5e5121f9d2cc61690fd34e570e6d6ec139e",
     "benchmarks/comparison/report.py": "b6d32822384481eec23c27fb46c511b2b2162ad66ab9cab0536c441831eba224",
     "benchmarks/comparison/plot.py": "9dd839eb913a2782a676d9069d26fdd472bd78f3ae2c387cc43a613a8e2aa84b"
   },
-  "binary": "benchmarks/comparison/target/release/deps/implementations-ae02fc4b72b991c6",
-  "binary_sha256": "19f0614aff4361a273d3ee83da7a78255b07fd39bb18af2fef8252569166ed14",
+  "binary": "benchmarks/comparison/target/release/deps/implementations-725bcc5ac49cfff9",
+  "binary_sha256": "d348ccc4138404389aec6799e7451356e58792a386912fcaad217d3aff31db84",
   "corpus_generation": "See pinned core.rs: xorshift64 seed 0x243f6a8885a308d3; structured binary ((i/16)^i) mod 256; repeated a; cyclic Alice.",
   "sampling": {
     "samples": 20,
@@ -62,19 +62,20 @@
     "timed_sweep_exit_code": 0,
     "measured_cases": 432,
     "exporter": "report.py rejected no rows; all input lengths matched",
-    "output_sizes_vs_2026_09_14": "identical for every implementation, quality and corpus"
+    "output_sizes_vs_2026_09_25": "identical for C, mbrotli, Rust brotli and simd-brotli; Burli 0.3.3 output differs from 0.3.2"
   },
   "plotting": "Matplotlib 3.10.8",
-  "baseline": "enc-2026-09-25",
-  "command": "taskset -c 2 cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench implementations --locked -- --save-baseline enc-2026-09-25",
-  "started_at_utc": "2026-09-25T15:28:40+00:00",
-  "finished_at_utc": "2026-09-25T16:18:01+00:00",
+  "baseline": "enc-2026-09-26",
+  "command": "taskset -c 2 cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench implementations --locked -- --save-baseline enc-2026-09-26",
+  "started_at_utc": "2026-09-25T23:39:04+00:00",
+  "finished_at_utc": "2026-09-26T00:28:23+00:00",
   "measured_cases": 432,
-  "size_manifest": "encoder-comparison-2026-09-25/sizes.csv",
+  "size_manifest": "encoder-comparison-2026-09-26/sizes.csv",
   "limitations": [
     "Single WSL2 host; frequency, thermal state, and host scheduling uncontrolled.",
     "Fixed encoder order; confidence bounds describe sampling variation, not all environmental bias.",
     "Cold native APIs; retained workspace and streaming are measured by the root benchmarks.",
     "Sampling is longer than the 2026-09-14 publication (1 s / 3 s versus 0.1 s / 0.3 s), so small shifts against it mix code and method changes."
-  ]
+  ],
+  "timed_sweep_exit_code": 0
 }

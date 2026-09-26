@@ -26,6 +26,17 @@ pub(crate) struct OperationState {
     failed: bool,
 }
 
+/// How one call delivers decoded bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Delivery {
+    /// Copy history into the caller's slice as it is decoded.
+    Slice,
+    /// Decode into the ring up to this capacity; the owned Vec takes it.
+    Collect(usize),
+    /// Decode the first member straight into the caller's slice.
+    Linear,
+}
+
 impl OperationState {
     /// Validates the stream against `decoder` and claims it for one operation.
     pub(crate) fn start(
@@ -69,8 +80,9 @@ impl OperationState {
     /// Runs one call of the incremental contract against `decoder`.
     ///
     /// `dictionary` must be the one the operation started with on every call.
-    /// `collect` lets the owned one-shot API use history as its destination
-    /// until the first wrap; public streaming always passes `None`.
+    /// `delivery` lets the one-shot APIs decode into history: the owned Vec
+    /// collects until the first wrap, and a slice holds the first member of
+    /// a fresh operation. Public streaming always passes `Delivery::Slice`.
     pub(crate) fn process(
         &mut self,
         decoder: &mut Decompressor,
@@ -78,7 +90,7 @@ impl OperationState {
         input: &[u8],
         output: &mut [u8],
         operation: DecodeOperation,
-        collect: Option<usize>,
+        delivery: Delivery,
     ) -> Result<DecodeProgress, DecodeFailure> {
         let invalid = |error| DecodeFailure {
             error,
@@ -112,7 +124,13 @@ impl OperationState {
         let limits = config.limits();
         let mut input = Input::new(input, self.total_in, limits.max_input_bytes());
         let mut output = Output {
-            collect,
+            collect: match delivery {
+                Delivery::Collect(capacity) => Some(capacity),
+                Delivery::Slice | Delivery::Linear => None,
+            },
+            // Only a call that starts the operation begins its first member
+            // at `output[0]`; the member boundary below turns it off.
+            linear: delivery == Delivery::Linear && self.total_in == 0 && self.total_out == 0,
             bytes: output,
             produced: 0,
             total_before: self.total_out,
@@ -153,6 +171,7 @@ impl OperationState {
                 Stop::Input => return Ok(DecoderStatus::NeedsInput),
                 Stop::Output => return Ok(DecoderStatus::NeedsOutput),
                 Stop::Member => {
+                    output.linear = false;
                     self.members = self
                         .members
                         .checked_add(1)

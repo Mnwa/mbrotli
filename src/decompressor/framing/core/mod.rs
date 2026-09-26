@@ -876,6 +876,7 @@ impl Engine {
             let mut target = Output {
                 bytes: destination,
                 collect: None,
+                linear: false,
                 produced: 0,
                 total_before: self.chunk_out,
                 limit: Some(

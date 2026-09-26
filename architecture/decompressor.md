@@ -156,8 +156,14 @@ transactionally; partial peeks retain bits, and a validated field commits by
 dropping exactly its width. Padding must be zero.
 
 The hot path uses a whole-word `refill`, which loads a full little-endian word
-while at least eight acceptable bytes remain before the input limit, and a
-matching `unread`, which returns every whole speculatively buffered byte. The
+while at least eight acceptable bytes remain before the input limit and accepts
+the whole bytes that keep at least 56 bits buffered, and a matching `unread`,
+which returns every whole speculatively buffered byte. The word is ORed in
+unmasked: bits above the buffered count then hold the input bytes that follow,
+which a later byte load ORs in again unchanged, so no mask sits on the decoding
+chain. `Stream::run` clears those bits (`settle`) before every return that keeps
+the reservoir, and `unread` clears them at output pauses and member ends, so
+between calls the reservoir holds only accepted bits. The
 `Input` computes its acceptable prefix (`fast_end`) once at construction, and the
 command loop refills through `refill_from` over that prefix with the cursor in a
 local, so the hot loop keeps it in a register. Input pauses retain the reservoir for incomplete fields. Output pauses and
@@ -193,7 +199,10 @@ second-level entries the code appends. `second_size` counts those entries by
 replaying the canonical walk over the length counts alone, so a cold build
 zero-fills only slots the fill overwrites rather than a loose worst-case bound.
 `build` or `build_slot` fills an owned table or a group slot; `reset` abandons a
-partial description.
+partial description. The code-length code of a complex description (18 symbols
+of at most five bits) is a 32-entry table held inline in the builder and rebuilt
+per description, so reading a description allocates nothing and never fills a
+256-entry root for it.
 
 ```mermaid
 classDiagram
@@ -225,7 +234,8 @@ classDiagram
     class Builder {
         next: [u16; 1128]
         head, tail, counts: [u16; 16]
-        read(alphabet, bits, input, memory)
+        code: LengthCode inline 32 entries
+        read(alphabet, bits, input)
         build_slot(alphabet, group, tree, memory)
         fill(codes, start, used, memory)
     }

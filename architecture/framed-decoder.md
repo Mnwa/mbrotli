@@ -64,6 +64,10 @@ or concatenated top-level objects are provided. Indexed random access is describ
 in [Framed seek reader](framed-seek-reader.md).
 Only the current host can execute its available SIMD levels; other architectures
 need native execution evidence. Runtime checks and measurements are recorded below.
+Workspace accounting (`Engine::framing_bytes`) sums every chunk and metadata
+record on each budget check, so a container with many records costs time
+quadratic in their number; the 2026-09-26 AFL campaign saved two such inputs
+(0.57 s standalone under instrumentation). A running total would remove it.
 
 ## Public ownership and lifecycle
 

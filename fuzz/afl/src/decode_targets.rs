@@ -64,11 +64,57 @@ pub fn decompress(ctx: &Context, data: &[u8]) {
             .unwrap();
         assert_eq!(owned.decompress(data).unwrap(), *expected);
     }
+    // A slice one byte short, exact or one byte long, or a small slice for a
+    // failing stream: the one-shot slice decodes straight into it.
+    let selector = data.last().map_or(0, |&value| usize::from(value));
+    let size = match &actual {
+        Ok(expected) => (expected.len() + selector % 3).saturating_sub(1),
+        Err(_) => selector % 64 * 16,
+    };
+    slice_matches_session(ctx, data, size);
     compare(
         actual,
         crate::decode_oracle::decode(data, MAX_OUTPUT, None),
         data.len(),
     );
+}
+
+/// `decompress_to_slice` uses the slice as the member's history; a session
+/// delivering the same operation from its ring must agree on the outcome, and
+/// on success or a full slice, on every slice byte including the unused tail.
+fn slice_matches_session(ctx: &Context, data: &[u8], size: usize) {
+    let build = || {
+        Decompressor::builder(config())
+            .with_backend(ctx.level)
+            .build()
+            .unwrap()
+    };
+    let mut direct = vec![0xa5; size];
+    let actual = build().decompress_to_slice(data, &mut direct);
+    let mut delivered = vec![0xa5; size];
+    let mut ring = build();
+    let expected = ring
+        .start(DecodeStreamConfig::default())
+        .and_then(|mut session| {
+            let progress = session
+                .process(data, &mut delivered, DecodeOperation::Finish)
+                .map_err(|failure| failure.error)?;
+            if progress.status == DecoderStatus::NeedsOutput {
+                return Err(DecodeError::OutputTooSmall {
+                    written: progress.produced,
+                });
+            }
+            if progress.consumed != data.len() {
+                return Err(DecodeError::TrailingData {
+                    offset: progress.consumed as u64,
+                });
+            }
+            Ok(progress.produced)
+        });
+    assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+    if matches!(actual, Ok(_) | Err(DecodeError::OutputTooSmall { .. })) {
+        assert!(direct == delivered, "slice bytes differ from ring delivery");
+    }
 }
 
 fn compare(
