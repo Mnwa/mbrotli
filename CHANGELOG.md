@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v0.5.1](https://github.com/Mnwa/mbrotli/releases/tag/v0.5.1) - 2026-09-26
+
 - Stop the Miri workflow's `compressor::core::stream::tests` step from also
   running the nine `decompressor::core::stream::tests`. libtest filters match
   substrings, so the step ran the decoder's golden and ring-boundary tests
