@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v0.5.2](https://github.com/Mnwa/mbrotli/releases/tag/v0.5.2) - 2026-09-26
+
 - Add a manually dispatched `release.yml` workflow that publishes `mbrotli`
   from a `v*` tag through crates.io trusted publishing. It refuses branches
   and tags that do not match the package version, and stores no API token.
