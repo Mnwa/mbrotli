@@ -88,4 +88,4 @@ FFI do not appear in public signatures. Each codec compiles independently.
 | --- | --- |
 | [Implementation comparison](benchmark-comparison.md) | Isolated Criterion suites, validation, recorded-run provenance and encoder/decoder charts. |
 | [Fuzzing](fuzzing.md) | Target inputs, oracles, campaigns and regression replay. |
-| [Continuous integration](ci.md) | Triggers, checks, framed fuzz campaigns, artifacts and coverage gating. |
+| [Continuous integration](ci.md) | Triggers, checks, framed fuzz campaigns, artifacts, coverage gating and crates.io release publishing. |

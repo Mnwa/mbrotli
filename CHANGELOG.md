@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Add a manually dispatched `release.yml` workflow that publishes `mbrotli`
+  from a `v*` tag through crates.io trusted publishing. It refuses branches
+  and tags that do not match the package version, and stores no API token.
+
 - Add the `mbrotli-ffi` workspace crate, a C ABI over the one-shot codecs.
   It builds `libmbrotli_ffi` as a static and a shared library and ships
   `include/mbrotli.h` with `mbrotli_compress`, `mbrotli_decompress`,

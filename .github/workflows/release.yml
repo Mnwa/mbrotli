@@ -1,0 +1,45 @@
+name: Release
+
+# Run by hand: pick a `v*` tag in "Use workflow from". The crate is published
+# through crates.io trusted publishing, so no API token is stored; the job
+# exchanges its GitHub OIDC identity for a short-lived crates.io token.
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: publish mbrotli to crates.io
+    runs-on: ubuntu-latest
+    # Must match the environment configured for the trusted publisher on
+    # crates.io; protection rules on it can require an approval.
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: require a release tag
+        if: github.ref_type != 'tag' || !startsWith(github.ref_name, 'v')
+        run: |
+          echo "::error::Run this workflow from a v* tag, not '$GITHUB_REF_NAME'."
+          exit 1
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - name: check the tag matches the package version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "mbrotli") | .version')
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match mbrotli $version."
+            exit 1
+          fi
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      # Publishing verifies the packaged crate by building it first.
+      - run: cargo publish --package mbrotli
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

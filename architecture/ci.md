@@ -15,6 +15,7 @@ All checkouts include vendored submodules. Local commands are in
 | `ci-miri.yml` | Every tag, manual | Retained-storage checks and pure Rust decoder goldens |
 | `ci-sanitizer.yml` | Every tag, manual | AddressSanitizer integration tests |
 | `ci-decompressor-heavy.yml` | `v*` tag, manual | Actual 25–30-bit history and counters beyond 4 GiB in four decoder profiles |
+| `release.yml` | Manual, from a `v*` tag | Publishes `mbrotli` to crates.io through trusted publishing |
 
 ```mermaid
 flowchart TD
@@ -28,6 +29,7 @@ flowchart TD
     Manual --> Decoder
     Manual --> Bench[benchmarks]
     Manual --> Coverage[std tests plus no_std overrides]
+    Manual --> Publish[release.yml: publish mbrotli]
     Coverage --> Gate[100% function coverage and HTML artifact]
 ```
 
@@ -39,6 +41,30 @@ Consumer scripts check available imports and imports that must fail.
 The semver job compares the default `mbrotli` API with the latest published
 release. Experimental APIs and the development-only C FFI crate are outside
 that gate. A violation requires a sufficient package version bump.
+
+## Release publishing
+
+`release.yml` runs only on manual dispatch and refuses any ref that is not a
+`v*` tag. It checks that the tag equals `v` plus the `mbrotli` package version,
+then exchanges the job's GitHub OIDC token for a short-lived crates.io token
+with `rust-lang/crates-io-auth-action` and runs `cargo publish --package
+mbrotli`, which builds the packaged crate before uploading it. No registry
+token is stored in the repository. The job runs in the `release` environment,
+which must match the trusted publisher configured on crates.io. The
+development-only `mbrotli-ffi` and `google-brotli-ffi` crates are not published.
+
+```mermaid
+sequenceDiagram
+    actor Maintainer
+    participant GH as release.yml
+    participant CIO as crates.io
+    Maintainer->>GH: workflow_dispatch on a v* tag
+    GH->>GH: fail unless ref is a v* tag
+    GH->>GH: fail unless tag == v + mbrotli version
+    GH->>CIO: OIDC token (id-token: write)
+    CIO-->>GH: short-lived publish token
+    GH->>CIO: cargo publish --package mbrotli
+```
 
 ## AFL execution and artifacts
 
@@ -83,7 +109,8 @@ unit/API run. Both use test optimization level 1 and `CARGO_INCREMENTAL=1` to ke
 coverage code generation consistent. The report enforces 100% function coverage;
 HTML rendering and upload run even if tests or the gate fail.
 
-There is no scheduled workflow. Each manual dispatch starts only its selected
+There is no scheduled workflow, and publishing never starts on its own: a
+pushed tag runs checks only. Each manual dispatch starts only its selected
 workflow. Ordinary branches do not run heavy tools; coverage and benchmarks
 always require explicit dispatch. Bounded fuzz campaigns and shared-runner timings
 provide limited evidence, not exhaustive verification or stable speed guarantees.
