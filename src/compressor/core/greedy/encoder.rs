@@ -134,6 +134,8 @@ impl GreedyEncoder {
         } else {
             (last_bytes, last_bytes_bits)
         };
+        let mut ringbuffer = RingBuffer::new(resolved.rb_bits(), resolved.lgblock);
+        ringbuffer.expect_input(size_hint);
         let references = ReferenceState::default();
         #[cfg(feature = "experimental")]
         let references = {
@@ -146,7 +148,7 @@ impl GreedyEncoder {
         Ok(Self {
             kernels: dispatch::select(level),
             params: resolved,
-            ringbuffer: RingBuffer::new(resolved.rb_bits(), resolved.lgblock),
+            ringbuffer,
             matcher: MatchFinder::for_input(resolved.hasher, size_hint),
             is_prepared: false,
             matcher_dirty: false,
@@ -201,6 +203,7 @@ impl GreedyEncoder {
         if !self.matcher.retarget(fresh.hasher, fresh.size_hint) {
             return false;
         }
+        self.ringbuffer.expect_input(fresh.size_hint);
         self.params = fresh;
         true
     }

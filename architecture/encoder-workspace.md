@@ -107,8 +107,15 @@ One-shot calls need no staging or pending allocation: all input and its finality
 are known, and the output is an append destination or a non-resumable slice. Fast
 encoders write directly to slices with enough fragment reservation and into
 append destinations through a statically specialized growing bit writer. Other
-output paths use retained encoder scratch. [Bit output](bit-output.md) describes
-the storage and partial-byte invariants. Slice overflow returns a
+output paths use retained encoder scratch. Before a one-shot append,
+`Compressor::compress_into` reserves `bound::append_reserve`: the full
+`bound` for q0/q1, whose bit writer fills the vector's spare capacity, and
+for every other quality the reference's `BrotliEncoderMaxCompressedSize`
+(input, four bytes per 16 KiB, six framing bytes), since those append each
+finished meta-block from scratch and a longer stream just grows the vector.
+Reserving twice the input there made a cold 1 MiB call's peak footprint exceed
+glibc's adaptive trim threshold, so every call faulted its pages in again.
+[Bit output](bit-output.md) describes the storage and partial-byte invariants. Slice overflow returns a
 private output-capacity error; sessions retain the suffix and report `NeedsOutput`.
 
 ```mermaid
@@ -171,6 +178,13 @@ and tree vectors. The quality 0 arena itself is created by the first fragment
 that scans for matches, not by the constructor, so a stream stored verbatim
 never allocates it. Before its first wrap, the ring buffer allocates only the
 written prefix plus seven lookahead bytes. Its logical size and mask remain fixed.
+A prefix write appends the new bytes and the zero margin (`append_prefix`)
+instead of zero-extending the buffer and copying over the zeros, so each byte
+is written once. The greedy encoder passes its size hint to the window
+(`expect_input`, also on `retarget`): the first growth then reserves the whole
+expected prefix, or the complete layout when the hint reaches the window, so a
+one-shot call does not reallocate and copy the prefix at every doubling. The
+hint only changes capacity, never the layout.
 Before reaching the last two window bytes or reading into the tail, it allocates
 the complete layout and replays deferred tail copies. A short first write retains
 the reference's omitted tail range and sentinel. Reset retains capacity and
@@ -199,6 +213,15 @@ bounded extra pool capacity only after enough buckets have been populated; their
 position and tag capacities remain part of the same accounting. See the
 [greedy](greedy-encoder.md#23-storage-layouts-runs-and-sweeps) and
 [HQ](hq-encoder.md#4-the-dynamic-program) specifications for the growth rules.
+
+```mermaid
+flowchart TD
+    Write[RingBuffer::write bytes] --> Lap{before the first wrap and end below size - 8?}
+    Lap -->|yes| Reserve[reserve expected prefix, or full layout when the hint reaches the window]
+    Reserve --> Append[truncate to head + pos, append bytes, append 7 zero bytes, zero head]
+    Lap -->|no| Full[init_buffer total_size, sentinel, replay deferred tail copies]
+    Full --> Copy[copy into window and tail mirror, refresh head bytes]
+```
 
 HQ prefix candidates occupy retained workspace. They merge backwards into the
 existing match arena, without `split_off` or a temporary merge vector. Earlier

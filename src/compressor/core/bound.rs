@@ -40,6 +40,49 @@ pub(crate) const fn bound(params: &CompressParams, input_size: usize) -> BrotliR
     }
 }
 
+/// Returns what a one-shot call appending to a vector reserves up front.
+///
+/// The fast qualities write their bits straight into the vector's spare
+/// capacity, so they reserve the full [`bound`]. Every other quality builds
+/// each meta-block in its own scratch buffer and appends the finished bytes,
+/// so the vector only has to hold the stream itself: those reserve the
+/// reference's `BrotliEncoderMaxCompressedSize` — the input plus four bytes per
+/// 16 KiB and six bytes of framing, which is what an uncompressed stream takes
+/// — and let the vector grow in the rare case a stream is longer. Reserving
+/// twice the input instead pushes a cold one-shot call's peak footprint past
+/// glibc's adaptive trim threshold, so the allocator hands the pages back
+/// after every call and the next call faults them in again.
+///
+/// # Errors
+///
+/// Returns [`BrotliCompressError::BoundOverflow`] exactly when [`bound`] does.
+///
+/// Not `const`: in some feature sets the error has a destructor, which a
+/// constant function cannot run on its early return.
+pub(crate) fn append_reserve(params: &CompressParams, input_size: usize) -> BrotliResult<usize> {
+    let full = bound(params, input_size)?;
+    match params.quality {
+        QualityLevel::Q0 | QualityLevel::Q1 => Ok(full),
+        _ => {
+            let stream = reference_max_compressed_size(input_size);
+            Ok(if stream < full { stream } else { full })
+        }
+    }
+}
+
+/// The reference's `BrotliEncoderMaxCompressedSize`, saturating.
+///
+/// Window bits and an empty metadata block, four header bytes per 16 KiB
+/// uncompressed meta-block, and the final empty meta-block.
+const fn reference_max_compressed_size(input_size: usize) -> usize {
+    if input_size == 0 {
+        return 2;
+    }
+    input_size
+        .saturating_add(4 * (input_size >> 14))
+        .saturating_add(6)
+}
+
 /// Returns the base-2 logarithm of the input the encoder consumes per step.
 ///
 /// Both encoder families emit at most one meta-block per step, so this is what
@@ -104,6 +147,52 @@ mod tests {
         for size in [0usize, 1, 1024, 1 << 20] {
             assert!(bound(&params, size).is_ok_and(|value| value >= size));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn fast_qualities_reserve_the_full_bound_for_appending() -> Result<(), WindowOutOfRange> {
+        let params = params(22)?;
+        for size in [0usize, 1, 1024, 1 << 20] {
+            assert_eq!(
+                append_reserve(&params, size).ok(),
+                bound(&params, size).ok()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn other_qualities_reserve_the_reference_stream_bound() -> Result<(), WindowOutOfRange> {
+        for quality in [
+            QualityLevel::Q2,
+            QualityLevel::Q4,
+            QualityLevel::Q9,
+            QualityLevel::Q11,
+        ] {
+            let params = CompressParams::new(quality, WindowBits::standard(22)?);
+            assert_eq!(append_reserve(&params, 0).ok(), Some(2));
+            assert_eq!(append_reserve(&params, 44).ok(), Some(50));
+            assert_eq!(
+                append_reserve(&params, 1 << 20).ok(),
+                Some((1 << 20) + 256 + 6)
+            );
+            for size in [1usize, 1024, 1 << 20] {
+                let reserve = append_reserve(&params, size).unwrap_or_default();
+                assert!(reserve >= size && bound(&params, size).is_ok_and(|full| reserve <= full));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn the_append_reserve_overflows_exactly_when_the_bound_does() -> Result<(), WindowOutOfRange> {
+        let params = CompressParams::new(QualityLevel::Q5, WindowBits::standard(22)?);
+        assert!(matches!(
+            append_reserve(&params, usize::MAX),
+            Err(BrotliCompressError::BoundOverflow)
+        ));
+        assert_eq!(reference_max_compressed_size(usize::MAX), usize::MAX);
         Ok(())
     }
 

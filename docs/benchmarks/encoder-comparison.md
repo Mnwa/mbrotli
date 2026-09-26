@@ -4,14 +4,16 @@
 
 The [432-case CSV](encoder-comparison.csv) and
 [environment record](encoder-comparison-environment.json) describe the working
-tree based on `e078a49259639c7b3c8f3c56ad9349970d4573f5`, recorded as
-`enc-2026-09-26`. The tree's uncommitted changes are all in the decoder; the
-encoder sources are those of the commit. Competitors are Rust brotli 9.0.0 and
-simd-brotli 10.0.1 (still the latest releases) and Burli 0.3.3 (was 0.3.2).
-The [size manifest](encoder-comparison-2026-09-26/sizes.csv) is archived with
-the run; the environment records source and executable hashes. The previous
-publication is the September 25 sweep (`enc-2026-09-25`), whose
-[size manifest](encoder-comparison-2026-09-25/sizes.csv) remains archived.
+tree based on `3916af75`, recorded as `enc-2026-09-26b`. The tree's
+uncommitted changes are encoder-only: the quick matchers' out-of-line
+match-length tail, the inline empty-bucket answer of the shallow dictionary
+probe, the ring buffer's append-and-reserve growth and the smaller one-shot
+destination reservation at qualities 2-11. Competitors are unchanged: Rust
+brotli 9.0.0, simd-brotli 10.0.1 and Burli 0.3.3. The
+[size manifest](encoder-comparison-2026-09-26/sizes.csv) is archived with the
+run and is identical to that of the earlier September 26 sweep
+(`enc-2026-09-26`), which this publication replaces; the environment records
+source and executable hashes.
 
 ## Final measurements
 
@@ -25,37 +27,39 @@ times. Higher speed and lower output are better.
 
 | Quality | mbrotli median speed / C ↑ | mbrotli median output / C ↓ |
 | --- | ---: | ---: |
-| 0 | 1.109× | 1.000× |
-| 1 | 1.202× | 1.000× |
-| 2 | 1.184× | 1.000× |
-| 3 | 1.076× | 1.000× |
-| 4 | 0.955× | 1.000× |
-| 5 | 0.942× | 1.000× |
-| 6 | 0.966× | 1.000× |
-| 7 | 0.925× | 1.000× |
-| 8 | 0.917× | 1.000× |
-| 9 | 2.501× | 1.000× |
-| 10 | 1.140× | 1.000× |
-| 11 | 1.289× | 1.000× |
+| 0 | 1.147× | 1.000× |
+| 1 | 1.216× | 1.000× |
+| 2 | 1.129× | 1.000× |
+| 3 | 1.145× | 1.000× |
+| 4 | 0.984× | 1.000× |
+| 5 | 0.984× | 1.000× |
+| 6 | 0.974× | 1.000× |
+| 7 | 0.936× | 1.000× |
+| 8 | 0.894× | 1.000× |
+| 9 | 2.605× | 1.000× |
+| 10 | 1.110× | 1.000× |
+| 11 | 1.260× | 1.000× |
 
-mbrotli has a lower mean latency than C in 60 of 96 shared cases and the lowest
-mean among supported implementations in 52 of 96 cases. These counts compare
-point estimates, not statistical significance. In 47 cases, mbrotli's 95% mean
+mbrotli has a lower mean latency than C in 58 of 96 shared cases and the lowest
+mean among supported implementations in 49 of 96 cases. These counts compare
+point estimates, not statistical significance. In 45 cases, mbrotli's 95% mean
 timing interval is wholly below every competitor's interval. The medians also
 retain qualities where mbrotli is slower than C.
 
-For Alice at q5, mbrotli measures 58.89 MiB/s against C's 63.77 MiB/s, both
-producing 52,809 bytes. Burli measures 67.05 MiB/s with 54,228 bytes. At q11,
-mbrotli measures 1.468 MiB/s against C's 1.093 MiB/s, both producing 46,487 bytes;
-SIMD Brotli measures 1.349 MiB/s with 46,493 bytes.
+For Alice at q4, mbrotli measures 91.07 MiB/s against C's 93.01 MiB/s, both
+producing 55,504 bytes; Burli measures 93.94 MiB/s with 57,813 bytes. At q5,
+mbrotli measures 58.57 MiB/s against C's 63.92 MiB/s, both producing 52,809
+bytes. At q11, mbrotli measures 1.451 MiB/s against C's 1.111 MiB/s, both
+producing 46,487 bytes; SIMD Brotli measures 1.349 MiB/s with 46,493 bytes.
 
-Against the September 25 publication, output sizes of C, mbrotli, Rust brotli
-and SIMD Brotli are unchanged, and so is mbrotli's encoder source. Its median
-speed / C moved by 1–7% per quality (q6 0.911× → 0.966×, q9 2.684× → 2.501×)
-with identical code and sampling, which is the size of this host's
-run-to-run variation. Burli 0.3.3 is faster than 0.3.2 at q1–q5 (median
-speed / C at q5 0.476× → 0.858×, at q4 0.968× → 1.205×) with unchanged median
-output.
+Against the earlier September 26 sweep, every output size is unchanged. The
+encoder changes show where they apply: at q4 the median speed / C rose from
+0.955× to 0.984× and at q3 from 1.076× to 1.145×; q4 means fell on Alice
+(1653 → 1593 µs), cyclic 1 MiB text (1640 → 1583 µs), random 1 MiB
+(1249 → 1160 µs) and repeated 1 MiB (212 → 182 µs). Other qualities moved by
+1–5% in both directions (q2 1.184× → 1.129×, q9 2.501× → 2.605×), which is
+the size of this host's run-to-run and allocator-state variation: the lower
+count of cases faster than C (60 → 58) is within it.
 
 The [quality pages](encoders/README.md) retain all datasets, all implementations,
 and exact timings with 95% mean confidence bounds. Burli supports q0–q5 only.
@@ -99,8 +103,8 @@ Run from the repository root; use a fresh baseline name when repeating timings:
 
 ```sh
 cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench implementations --locked -- --test
-taskset -c 2 cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench implementations --locked -- --save-baseline enc-2026-09-26
-python3 benchmarks/comparison/report.py --baseline enc-2026-09-26 --csv docs/benchmarks/encoder-comparison.csv
+taskset -c 2 cargo bench --manifest-path benchmarks/comparison/Cargo.toml --bench implementations --locked -- --save-baseline enc-2026-09-26b
+python3 benchmarks/comparison/report.py --baseline enc-2026-09-26b --csv docs/benchmarks/encoder-comparison.csv
 python3 benchmarks/comparison/quality_docs.py --csv docs/benchmarks/encoder-comparison.csv --environment docs/benchmarks/encoder-comparison-environment.json --report docs/benchmarks/encoder-comparison.md --output docs/benchmarks/encoders
 python3 benchmarks/comparison/plot.py --csv docs/benchmarks/encoder-comparison.csv --output docs/benchmarks/encoders/charts --subtitle 'i7-13700KF; working tree; 20 samples; 2026-09-26'
 ```

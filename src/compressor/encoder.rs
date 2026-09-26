@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use super::config::{ConfigError, EncoderConfig, SizeOverflow};
-use super::core::bound::bound;
+use super::core::bound::{append_reserve, bound};
 use super::core::driver::{
     EncoderCache, compress_to_slice_attached, compress_to_vec_attached, quality_reads_a_prefix,
 };
@@ -740,7 +740,7 @@ impl Compressor {
         }
         let start = dst.len();
         let params = self.config.lower(Some(src.len()));
-        let reserve = bound(&params, src.len()).map_err(|_| SizeOverflow)?;
+        let reserve = append_reserve(&params, src.len()).map_err(|_| SizeOverflow)?;
         dst.try_reserve(reserve)
             .map_err(|_| EncodeError::AllocationFailed { requested: reserve })?;
 

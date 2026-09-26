@@ -618,8 +618,23 @@ about a dozen values. The greedy matchers measure a match with
 and a trailing-zero count before cutting any window, and only then continues
 with `match_len_windows`, a whole-word scan with one overlapping word at the
 tail (§8.1) — together the reference's `FindMatchLengthWithLimit` without its
-byte loop. None of this changes a decision: the sequence below is the same as
-the reference's.
+byte loop. The quick matchers (`H2`, `H3`, `H4`, `H54`) use
+`match_len_at_outlined`, the same scan with everything past the first word
+behind an out-of-line call that re-enters the SIMD feature context: inlined,
+that scan's setup does not depend on the slot, so it was hoisted in front of
+the slot loop and paid, with its spills, at every position, although only
+about a quarter of the candidates get past the first word. `current_window`
+and the candidate cut mask their index and length to 32 bits, which proves
+the slice end neither overflows nor precedes the start and leaves one compare.
+
+The static-dictionary probe is chosen at compile time
+(`search_dictionary::<SHALLOW>`). A shallow probe (the quick matchers) hashes
+the four bytes inline and answers an empty bucket — about three quarters of
+the probes on text — without a call, counting the lookup exactly as the
+out-of-line probe would; only a filled bucket calls `probe_shallow`. The deep
+probe of the bucket matchers keeps its hash inside `probe_deep`, so their
+search loop is unchanged. None of this changes a decision: the sequence below
+is the same as the reference's.
 
 ```mermaid
 sequenceDiagram
@@ -634,7 +649,11 @@ sequenceDiagram
         Finder->>Finder: probe the four cached distances
         Finder->>Finder: probe the hash bucket
         opt nothing beat the minimum score
-            Finder->>Dict: search(shallow?)
+            alt shallow and the bucket is empty
+                Finder->>Finder: count the lookup inline
+            else
+                Finder->>Dict: probe_shallow(key) / probe_deep
+            end
         end
         Finder-->>Search: SearchResult
         opt a context is attached (q5 and above)

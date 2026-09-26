@@ -6,7 +6,7 @@ import xml.etree.ElementTree as ET
 
 import matplotlib.pyplot as plt
 from plot import before_after_chart, median_chart, render
-from quality_docs import bars, cases, chart, load_rows, medians, quality_order
+from quality_docs import CORPORA, bars, cases, chart, load_rows, medians, quality_order
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -58,7 +58,11 @@ class PlotTests(unittest.TestCase):
             text = " ".join(ET.parse(output / "throughput.svg").getroot().itertext())
             positions = [text.index(f"Quality {q}") for q in quality_order(rows)]
             self.assertEqual(positions, sorted(positions))
-            before_after_chart(ROOT / "docs/benchmarks/competitor-paths-before-after.csv", output / "before-after.svg")
+            paired = output / "paired.csv"
+            paired.write_text("corpus,quality,before_ns,after_ns\n" + "".join(
+                f"{corpus},{q},{1000 + q},{900 + corpus_index}\n"
+                for corpus_index, corpus in enumerate(CORPORA) for q in range(12)))
+            before_after_chart(paired, output / "before-after.svg")
             for filename in ["median.svg", "throughput.svg", "size.svg", "overview.svg", "before-after.svg"]:
                 self.assertTrue(ET.parse(output / filename).getroot().tag.endswith("svg"))
             invalid = output / "invalid.csv"

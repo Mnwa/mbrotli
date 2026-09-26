@@ -18,6 +18,53 @@
   against Google's one-shot encoder and streaming decoder, and
   `mbrotli-ffi/benches/one_shot.rs` compares both one-shot APIs.
 
+- Refresh the encoder comparison (`enc-2026-09-26b`, 432 cases, same corpus,
+  sampling and competitors) for the encoder changes below, and regenerate the
+  quality pages and charts. Output sizes are identical to the previous sweep.
+  mbrotli's median speed / C moved to 0.984x at q4 (was 0.955x), 0.984x at q5
+  (0.942x) and 1.145x at q3 (1.076x); the decoder comparison is unchanged.
+  Retire superseded benchmark snapshots from `docs/benchmarks/`: the
+  2026-09-25 size manifests, the competitor-path, implementation-comparison
+  and 2026-09-14 encoder-optimization reports, the decoder before/after and
+  owned-output pairs, and the q11 review sweep. Git history keeps them; the
+  plot test now builds its own paired-run fixture.
+
+- `Compressor::compress` and `compress_into` reserve less up front at
+  qualities 2-11: the reference's maximum stream size (the input plus four
+  bytes per 16 KiB and six bytes of framing) instead of twice the input.
+  Those qualities append each finished meta-block, so a longer stream only
+  grows the vector; qualities 0 and 1 keep the full bound their bit writer
+  fills directly. Output is unchanged; the returned vector's capacity is
+  smaller. Halving the destination kept a cold 1 MiB call's peak footprint
+  under glibc's adaptive trim threshold, which it used to exceed, so the heap
+  was handed back and faulted in again on every call. With the system
+  allocator at default settings (i7-13700KF, CPU 2, minimum of 3 runs), cold
+  quality 4 on Alice repeated to 1 MiB went from 3125 to 1519 us (1746 to
+  111 page faults per call; C 1812 us) and quality 2 from 1471 to 1016 us.
+  1 MiB of random bytes still exceeds the threshold: 2332 us against C's
+  950 us, which keeps its heap because its full-window ring-buffer
+  allocation raises glibc's threshold.
+
+- Faster compression at qualities 2-4, with byte-identical output. The quick
+  matchers (`H2`, `H3`, `H4`, `H54`) keep the match-length scan past the first
+  word out of line, so its setup is no longer hoisted in front of the slot
+  loop and paid at every position; the searched and candidate windows are cut
+  with 32-bit arithmetic, which leaves one bounds compare. A shallow
+  static-dictionary probe answers an empty bucket inline instead of calling
+  the probe (the lookup is still counted, so the give-up point is unchanged),
+  and the shallow/deep choice is now a const parameter. The ring buffer
+  appends each prefix write instead of zero-extending the buffer and copying
+  over the zeros, and reserves the one-shot size hint on its first growth
+  instead of reallocating at every doubling. Per call, quality 4 now runs
+  23.8M instructions on Alice (was 26.1M; C 20.6M) and 18.3M on 1 MiB of
+  random bytes (was 21.3M; C 19.1M). Cold one-shot quality 4 on the
+  comparison corpora, i7-13700KF pinned to CPU 2 with raised glibc
+  trim/mmap thresholds, minimum of 7 runs: Alice 1582 -> 1522 us (C 1513),
+  structured 64 KiB binary 56.0 -> 54.5 us (C 54.8), random 64 KiB
+  44.6 -> 42.8 us (C 43.3), random 1 MiB 1032 -> 965 us (C 947), 44-byte text
+  4.7 -> 4.5 us (C 4.3). Quality 3 on random 1 MiB is 8% faster; qualities
+  5-9 run 0.4-2.5% fewer instructions.
+
 ## [v0.5.1](https://github.com/Mnwa/mbrotli/releases/tag/v0.5.1) - 2026-09-26
 
 - Stop the Miri workflow's `compressor::core::stream::tests` step from also
@@ -167,8 +214,10 @@
 - Optimize greedy match measurement and sparse-pool growth, and HQ command
   pricing and sorted start insertion, using safe Rust and preserving encoded
   bytes. Add differential coverage and 1 MiB random/repeated Criterion cases.
-  See the [encoder optimization measurements](docs/benchmarks/encoder-optimization-2026-09-14.md)
-  for per-workload speed, size, memory and competitor results.
+  The per-workload speed, size, memory and competitor measurements were
+  published as `docs/benchmarks/encoder-optimization-2026-09-14.md`, since
+  retired from the tree with the other superseded benchmark snapshots; git
+  history keeps them.
 - Refresh all 111 encoder benchmark charts, quality tables and run provenance
   from the final 432-case September 14 sweep.
 

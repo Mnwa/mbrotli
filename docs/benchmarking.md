@@ -102,7 +102,7 @@ python3 benchmarks/comparison/plot.py \
 `quality_docs.py` writes the index, twelve quality pages and their detailed
 charts. `plot.py` writes `overview.svg`, `throughput.svg` and `size.svg` into
 the same charts directory. All eight corpora contribute to the medians.
-The current encoder CSV is the September 26 sweep (`enc-2026-09-26`), with its
+The current encoder CSV is the second September 26 sweep (`enc-2026-09-26b`), with its
 [size manifest](benchmarks/encoder-comparison-2026-09-26/sizes.csv) archived.
 Its environment record identifies the measured source and binary; regenerating
 charts reuses those measurements and does not rerun the benchmark.

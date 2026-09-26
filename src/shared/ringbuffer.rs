@@ -50,6 +50,8 @@ pub(crate) struct RingBuffer {
     // The reference omits tail mirroring for a short first write.
     tail_start: usize,
     pos: u32,
+    /// Bytes the caller expects the stream to hold, zero when unknown.
+    expected_input: usize,
     data: Vec<u8>,
 }
 
@@ -69,8 +71,21 @@ impl RingBuffer {
             cur_size: 0,
             tail_start: 0,
             pos: 0,
+            expected_input: 0,
             data: Vec::new(),
         }
+    }
+
+    /// Tells the window how many bytes the stream is expected to hold.
+    ///
+    /// The prefix a stream writes before its first wrap grows with every
+    /// block; knowing the total up front lets the first growth reserve all
+    /// of it, instead of reallocating and copying the prefix at every
+    /// doubling. Only capacity changes: the layout is the same with or
+    /// without a hint, and the reservation never exceeds the full window, so
+    /// a wrong hint costs at most what a long stream allocates anyway.
+    pub(crate) const fn expect_input(&mut self, bytes: usize) {
+        self.expected_input = bytes;
     }
 
     /// Returns the mask that turns an absolute position into a buffer index.
@@ -139,6 +154,39 @@ impl RingBuffer {
         }
     }
 
+    /// Appends `bytes` to a window still holding only the written prefix,
+    /// which then ends at `end`.
+    ///
+    /// Leaves exactly the layout `init_buffer(end)` followed by a copy would:
+    /// the two zero head bytes, the prefix, and the zeroed margin. The bytes
+    /// are appended rather than copied over a zero-filled extension, so each
+    /// byte of the window is written once instead of twice.
+    #[cfg_attr(all(feature = "hotpath", not(feature = "no_std")), hotpath::measure)]
+    fn append_prefix(&mut self, bytes: &[u8], end: usize) {
+        let start = HEAD_ROOM + self.pos as usize;
+        // Capacity kept across a reset may still hold a longer stream; the
+        // margin of the previous write is overwritten by the new bytes.
+        self.data.truncate(start);
+        // One growth for all three appends below, and for the rest of the
+        // expected stream: a stream that will fill the window materializes
+        // the full layout next, so that is what it reserves.
+        let expected = if self.expected_input >= self.size.saturating_sub(8) {
+            self.total_size
+        } else {
+            self.expected_input.max(end)
+        };
+        self.data
+            .reserve(HEAD_ROOM + expected + SLACK_FOR_EIGHT_BYTE_HASHING - self.data.len());
+        self.data.resize(start, 0);
+        self.data.extend_from_slice(bytes);
+        self.data
+            .extend_from_slice(&[0; SLACK_FOR_EIGHT_BYTE_HASHING]);
+        self.cur_size = end;
+        if let Some(head) = self.data.get_mut(..HEAD_ROOM) {
+            head.fill(0);
+        }
+    }
+
     /// Writes `index`-th byte of the window, ignoring an out-of-range index.
     fn set(&mut self, index: usize, value: u8) {
         if let Some(byte) = self.data.get_mut(HEAD_ROOM + index) {
@@ -177,11 +225,7 @@ impl RingBuffer {
                     0
                 };
             }
-            self.init_buffer(end);
-            let start = HEAD_ROOM + self.pos as usize;
-            if let Some(target) = self.data.get_mut(start..HEAD_ROOM + end) {
-                target.copy_from_slice(bytes);
-            }
+            self.append_prefix(bytes, end);
             self.pos = end as u32;
             return;
         }
@@ -303,6 +347,35 @@ mod tests {
         assert_eq!(rb.cur_size, payload.len() + 16);
         assert_eq!(&rb.buffer()[payload.len()..payload.len() + 16], &[8; 16]);
         assert_eq!(rb.mask(), rb.size - 1);
+    }
+
+    #[test]
+    fn an_expected_input_is_reserved_by_the_first_write_without_changing_the_layout() {
+        let blocks: Vec<Vec<u8>> = (0..4u8).map(|block| vec![block + 1; 1000]).collect();
+        let mut plain = ring(16, 10);
+        let mut hinted = ring(16, 10);
+        hinted.expect_input(4000);
+        hinted.write(&blocks[0]);
+        let reserved = hinted.retained_bytes();
+        assert!(reserved >= HEAD_ROOM + 4000 + SLACK_FOR_EIGHT_BYTE_HASHING);
+        plain.write(&blocks[0]);
+        for block in &blocks[1..] {
+            plain.write(block);
+            hinted.write(block);
+        }
+        assert_eq!(hinted.retained_bytes(), reserved);
+        assert_eq!(hinted.data, plain.data);
+        assert_eq!(hinted.cur_size, plain.cur_size);
+    }
+
+    #[test]
+    fn an_expected_input_that_fills_the_window_reserves_the_full_layout() {
+        let mut rb = ring(10, 8);
+        rb.expect_input(1 << 20);
+        rb.write(&[1; 16]);
+        assert!(rb.retained_bytes() >= HEAD_ROOM + rb.total_size + SLACK_FOR_EIGHT_BYTE_HASHING);
+        assert_eq!(&rb.buffer()[..16], &[1; 16]);
+        assert_eq!(&rb.buffer()[16..23], &[0; 7]);
     }
 
     #[test]

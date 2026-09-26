@@ -41,9 +41,16 @@ pub(crate) fn load_u64_le(data: &[u8], offset: usize) -> u64 {
 /// once per search so every candidate scan needs one bounds check, on its
 /// own side. A position the buffer cannot hold in full leaves an empty
 /// slice, which matches nothing — the answer [`find_match_length`] gives.
+///
+/// Both operands are masked to 32 bits, as in [`load_u64_le`]: every buffer
+/// index and length is below 2^32, and the mask lets the compiler see that
+/// the end cannot overflow or precede the start, so only the compare
+/// against the buffer's length survives.
 #[inline(always)]
 pub(crate) fn current_window(data: &[u8], cur_ix_masked: usize, max_length: usize) -> &[u8] {
-    data.get(cur_ix_masked..cur_ix_masked + max_length)
+    debug_assert!(cur_ix_masked <= u32::MAX as usize && max_length <= u32::MAX as usize);
+    let start = cur_ix_masked & u32::MAX as usize;
+    data.get(start..start + (max_length & u32::MAX as usize))
         .unwrap_or_default()
 }
 
@@ -69,6 +76,47 @@ pub(crate) fn match_len_at<S: Simd>(simd: S, data: &[u8], prev_ix: usize, cur: &
         return 8 + match_len_windows(simd, &left[8..], &cur[8..]);
     }
     match_len_windows(simd, left, cur)
+}
+
+/// [`match_len_at`] with the scan past the first word kept out of line.
+///
+/// The quick matchers probe several slots per position with one current
+/// window. Inlined, the longer scan's setup does not depend on the slot, so
+/// the compiler hoists it in front of the slot loop and pays for it — and for
+/// spilling what it computed — at every position, although only about a
+/// quarter of the candidates get past the first word. Out of line, a
+/// position whose candidates all differ within eight bytes pays for nothing
+/// but the first-word compares.
+#[inline(always)]
+pub(crate) fn match_len_at_outlined<S: Simd>(
+    simd: S,
+    data: &[u8],
+    prev_ix: usize,
+    cur: &[u8],
+) -> usize {
+    // Masked to 32 bits for the reason `current_window` gives.
+    debug_assert!(prev_ix <= u32::MAX as usize && cur.len() <= u32::MAX as usize);
+    let start = prev_ix & u32::MAX as usize;
+    let Some(left) = data.get(start..start + (cur.len() & u32::MAX as usize)) else {
+        return 0;
+    };
+    if let (Some(left_word), Some(cur_word)) = (left.first_chunk::<8>(), cur.first_chunk::<8>()) {
+        let difference = u64::from_le_bytes(*left_word) ^ u64::from_le_bytes(*cur_word);
+        if difference != 0 {
+            return difference.trailing_zeros() as usize >> 3;
+        }
+        return 8 + match_len_tail(simd, &left[8..], &cur[8..]);
+    }
+    match_len_tail(simd, left, cur)
+}
+
+/// [`match_len_windows`] behind a call, back inside `simd`'s feature context.
+#[inline(never)]
+fn match_len_tail<S: Simd>(simd: S, left: &[u8], right: &[u8]) -> usize {
+    simd.vectorize(
+        #[inline(always)]
+        move || match_len_windows(simd, left, right),
+    )
 }
 
 /// Counts the leading bytes two windows of the same length share.
@@ -415,6 +463,59 @@ mod tests {
             assert_eq!(measure(&data, left, right, limit), 0);
             assert_eq!(measure_fallback(&data, left, right, limit), 0);
         }
+    }
+
+    /// Runs `match_len_at` and `match_len_at_outlined` on one level.
+    fn both_scans(level: Level, data: &[u8], prev_ix: usize, cur: &[u8]) -> (usize, usize) {
+        dispatch!(level, simd => (
+            match_len_at(simd, data, prev_ix, cur),
+            match_len_at_outlined(simd, data, prev_ix, cur),
+        ))
+    }
+
+    #[test]
+    fn the_outlined_scan_agrees_with_the_inlined_one_on_every_level() {
+        // Runs of equal bytes of every length, so matches end inside the
+        // first word, right after it, inside the vector scan and at the limit.
+        let mut data = Vec::new();
+        for run in 0..80u8 {
+            data.extend(core::iter::repeat_n(run % 3, usize::from(run)));
+        }
+        // Every level the host runs, and the scalar fallback.
+        let levels: Vec<Level> = crate::backend::Backend::available()
+            .into_iter()
+            .map(|backend| backend.0)
+            .collect();
+        for level in levels {
+            for cur_ix in (0..data.len()).step_by(5) {
+                for max_length in [0, 1, 7, 8, 9, 16, 17, 63, 200] {
+                    let cur = current_window(&data, cur_ix, max_length);
+                    for prev_ix in (0..data.len() + 4).step_by(3) {
+                        let (inlined, outlined) = both_scans(level, &data, prev_ix, cur);
+                        assert_eq!(
+                            inlined, outlined,
+                            "prev {prev_ix} cur {cur_ix} max {max_length}"
+                        );
+                        if prev_ix + cur.len() <= data.len() {
+                            let limit = cur.len();
+                            assert_eq!(outlined, baseline(&data, prev_ix, cur_ix, limit));
+                        } else {
+                            assert_eq!(outlined, 0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_current_window_is_empty_unless_it_fits_the_buffer() {
+        let data = [1u8, 2, 3, 4, 5];
+        assert_eq!(current_window(&data, 1, 3), &[2, 3, 4]);
+        assert_eq!(current_window(&data, 2, 3), &[3, 4, 5]);
+        assert!(current_window(&data, 3, 3).is_empty());
+        assert!(current_window(&data, 9, 0).is_empty());
+        assert!(current_window(&data, 5, 0).is_empty());
     }
 
     /// The stride the caller reasons with has to be the one the scan takes.

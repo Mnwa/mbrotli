@@ -26,7 +26,9 @@ use fearless_simd::{Simd, SimdBase, SimdMask, u8x16, u8x32};
 use super::params::{BucketShape, ChainShape, HasherPlan};
 use crate::shared::constants::HASH_MUL32;
 use crate::shared::dictionary::{self, DictionaryStats};
-use crate::shared::match_len::{current_window, match_len_at, match_len_windows};
+use crate::shared::match_len::{
+    current_window, match_len_at, match_len_at_outlined, match_len_windows,
+};
 use crate::shared::score::{
     SearchResult, backward_reference_penalty_using_last_distance, backward_reference_score,
     backward_reference_score_using_last_distance,
@@ -170,7 +172,11 @@ impl MatchQuery<'_> {
         self.dictionary_start() + self.gap
     }
 
-    fn search_dictionary(self, stats: &mut DictionaryStats, out: &mut SearchResult, shallow: bool) {
+    fn search_dictionary<const SHALLOW: bool>(
+        self,
+        stats: &mut DictionaryStats,
+        out: &mut SearchResult,
+    ) {
         let data = self.data.get(self.cur_ix & self.mask..).unwrap_or_default();
         #[cfg(feature = "experimental")]
         if let Some(custom) = self.custom {
@@ -182,18 +188,17 @@ impl MatchQuery<'_> {
                 self.dictionary_distance(),
                 self.max_distance,
                 out,
-                shallow,
+                SHALLOW,
             );
             return;
         }
-        dictionary::search(
+        dictionary::search::<SHALLOW>(
             stats,
             data,
             self.max_length,
             self.dictionary_distance(),
             self.max_distance,
             out,
-            shallow,
         );
     }
 }
@@ -697,7 +702,7 @@ impl<
         if prev_ix < query.cur_ix {
             let prev_ix = prev_ix & query.mask;
             if compare_char == read_u8(data, prev_ix + best_len) {
-                let len = match_len_at(simd, data, prev_ix, cur());
+                let len = match_len_at_outlined(simd, data, prev_ix, cur());
                 if len >= 4 {
                     let score = backward_reference_score_using_last_distance(len);
                     if best_score < score {
@@ -728,7 +733,7 @@ impl<
             if backward == 0 || backward > query.max_backward {
                 return;
             }
-            let len = match_len_at(simd, data, prev_ix, cur());
+            let len = match_len_at_outlined(simd, data, prev_ix, cur());
             if len >= 4 {
                 let score = backward_reference_score(len, backward);
                 if best_score < score {
@@ -756,7 +761,7 @@ impl<
                 if backward == 0 || backward > query.max_backward {
                     continue;
                 }
-                let len = match_len_at(simd, data, prev_ix, cur());
+                let len = match_len_at_outlined(simd, data, prev_ix, cur());
                 if len >= 4 {
                     let score = backward_reference_score(len, backward);
                     if best_score < score {
@@ -772,7 +777,7 @@ impl<
         }
 
         if USE_DICTIONARY && min_score == out.score {
-            query.search_dictionary(stats, out, true);
+            query.search_dictionary::<true>(stats, out);
         }
         // The sweeping variant writes its own slot last; the single-slot one
         // has already written it, which is why the reference guards this
@@ -1797,7 +1802,7 @@ impl<const BUCKETS: usize, const BLOCK: usize> SparseLayout<BUCKETS, BLOCK> {
         }
         self.push_found(key, count, offset, query.cur_ix as u32, tag, size_hint);
         if min_score == out.score {
-            query.search_dictionary(stats, out, false);
+            query.search_dictionary::<false>(stats, out);
         }
     }
 }
@@ -2390,7 +2395,7 @@ impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize> MatchRun
         self.0
             .push_chain(key, slot, count, head, query.cur_ix as u32);
         if min_score == out.score {
-            query.search_dictionary(stats, out, false);
+            query.search_dictionary::<false>(stats, out);
         }
     }
 }
@@ -2446,7 +2451,7 @@ impl<const HASH64: bool, const BUCKETS: usize, const BLOCK: usize> MatchRun
             tag,
         );
         if min_score == out.score {
-            query.search_dictionary(stats, out, false);
+            query.search_dictionary::<false>(stats, out);
         }
     }
 }
@@ -2850,7 +2855,7 @@ impl<const NUM_BANKS: usize, const BANK_BITS: u32> Matcher for ChainMatcher<NUM_
         self.store(data, mask, query.cur_ix);
 
         if out.score == min_score {
-            query.search_dictionary(stats, out, false);
+            query.search_dictionary::<false>(stats, out);
         }
     }
 }

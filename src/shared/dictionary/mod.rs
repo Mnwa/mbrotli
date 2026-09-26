@@ -201,21 +201,21 @@ fn test_item(
 
 /// Probes the static dictionary for a match at the start of `data`.
 ///
-/// `shallow` limits the probe to the bucket of shorter words, which is what the
-/// quick match finders use.
+/// `SHALLOW` limits the probe to the bucket of shorter words, which is what
+/// the quick match finders use. It is a const parameter so each match finder
+/// gets only its own probe, whether or not this search is inlined into it.
 ///
 /// Mirrors `SearchInStaticDictionary`, including the point at which it gives up
 /// on the dictionary entirely for this stream.
 #[inline(always)]
 #[cfg(feature = "compression")]
-pub(crate) fn search(
+pub(crate) fn search<const SHALLOW: bool>(
     stats: &mut DictionaryStats,
     data: &[u8],
     max_length: usize,
     max_backward: usize,
     max_distance: usize,
     out: &mut SearchResult,
-    shallow: bool,
 ) {
     // The give-up test is inlined into the match finder, which calls this
     // at every position that found nothing; the probe itself is not. It
@@ -225,34 +225,97 @@ pub(crate) fn search(
         return;
     }
     let mut probed = *out;
-    probe(
+    if SHALLOW {
+        // Most shallow probes land on an empty bucket. Answering those here
+        // spares the out-of-line call its prologue and the spill of the
+        // caller's live registers; the count is what the probe would have
+        // added, so the give-up test sees the same statistics.
+        let key = hash14(data) << 1;
+        if HASH_LENGTHS.get(key).is_none_or(|&len| len == 0) {
+            stats.lookups += 1;
+            return;
+        }
+        probe_shallow(
+            stats,
+            key,
+            data,
+            max_length,
+            max_backward,
+            max_distance,
+            &mut probed,
+        );
+    } else {
+        probe_deep(
+            stats,
+            data,
+            max_length,
+            max_backward,
+            max_distance,
+            &mut probed,
+        );
+    }
+    *out = probed;
+}
+
+/// Probes the shorter-word bucket `key`, which is known to hold a word.
+#[inline(never)]
+#[cfg(feature = "compression")]
+fn probe_shallow(
+    stats: &mut DictionaryStats,
+    key: usize,
+    data: &[u8],
+    max_length: usize,
+    max_backward: usize,
+    max_distance: usize,
+    out: &mut SearchResult,
+) {
+    probe_buckets::<1>(
         stats,
+        key,
         data,
         max_length,
         max_backward,
         max_distance,
-        &mut probed,
-        shallow,
+        out,
     );
-    *out = probed;
 }
 
-/// Probes the dictionary buckets of `data`'s hash (`SearchInStaticDictionary`
-/// after its give-up test).
+/// Probes both buckets of `data`'s hash (`SearchInStaticDictionary` after its
+/// give-up test).
 #[inline(never)]
 #[cfg(feature = "compression")]
-fn probe(
+fn probe_deep(
     stats: &mut DictionaryStats,
     data: &[u8],
     max_length: usize,
     max_backward: usize,
     max_distance: usize,
     out: &mut SearchResult,
-    shallow: bool,
 ) {
-    let key = hash14(data) << 1;
-    let probes = if shallow { 1usize } else { 2 };
-    for offset in 0..probes {
+    probe_buckets::<2>(
+        stats,
+        hash14(data) << 1,
+        data,
+        max_length,
+        max_backward,
+        max_distance,
+        out,
+    );
+}
+
+/// Probes the `PROBES` buckets from `key` on.
+#[inline(always)]
+#[cfg(feature = "compression")]
+fn probe_buckets<const PROBES: usize>(
+    stats: &mut DictionaryStats,
+    key: usize,
+    data: &[u8],
+    max_length: usize,
+    max_backward: usize,
+    max_distance: usize,
+    out: &mut SearchResult,
+) {
+    for offset in 0..PROBES {
         let bucket = key + offset;
         stats.lookups += 1;
         let Some(&len) = HASH_LENGTHS.get(bucket) else {
@@ -332,15 +395,25 @@ mod tests {
     fn probe(data: &[u8], shallow: bool) -> (DictionaryStats, SearchResult) {
         let mut stats = DictionaryStats::default();
         let mut out = SearchResult::empty();
-        search(
-            &mut stats,
-            data,
-            data.len(),
-            1000,
-            u32::MAX as usize,
-            &mut out,
-            shallow,
-        );
+        if shallow {
+            search::<true>(
+                &mut stats,
+                data,
+                data.len(),
+                1000,
+                u32::MAX as usize,
+                &mut out,
+            );
+        } else {
+            search::<false>(
+                &mut stats,
+                data,
+                data.len(),
+                1000,
+                u32::MAX as usize,
+                &mut out,
+            );
+        }
         (stats, out)
     }
 
@@ -371,14 +444,13 @@ mod tests {
         let mut stats = DictionaryStats::default();
         let mut out = SearchResult::empty();
         let data = b"time is a construct";
-        search(
+        search::<false>(
             &mut stats,
             data,
             data.len(),
             1 << 20,
             u32::MAX as usize,
             &mut out,
-            false,
         );
         assert!(!out.is_match());
     }
@@ -388,7 +460,7 @@ mod tests {
         let mut stats = DictionaryStats::default();
         let mut out = SearchResult::empty();
         let data = b"time is a construct";
-        search(&mut stats, data, data.len(), 1000, 0, &mut out, false);
+        search::<false>(&mut stats, data, data.len(), 1000, 0, &mut out);
         assert!(!out.is_match());
     }
 
@@ -400,14 +472,13 @@ mod tests {
         };
         let mut out = SearchResult::empty();
         let data = b"time is a construct";
-        search(
+        search::<false>(
             &mut stats,
             data,
             data.len(),
             1000,
             u32::MAX as usize,
             &mut out,
-            false,
         );
         assert!(!out.is_match());
         assert_eq!(stats.lookups, 1 << 20);
@@ -419,6 +490,57 @@ mod tests {
         assert_eq!(stats.lookups, 1);
         let (stats, _) = probe(b"time is a construct", false);
         assert_eq!(stats.lookups, 2);
+    }
+
+    #[test]
+    fn a_shallow_probe_of_an_empty_bucket_counts_like_the_full_probe() {
+        let word = (0u32..)
+            .map(u32::to_le_bytes)
+            .find(|bytes| HASH_LENGTHS[hash14(bytes) << 1] == 0)
+            .unwrap_or_default();
+        let data = [word.as_slice(), b"tail"].concat();
+        let (stats, out) = probe(&data, true);
+        assert_eq!(stats.lookups, 1);
+        assert_eq!(stats.matches, 0);
+        assert!(!out.is_match());
+
+        let mut full = DictionaryStats::default();
+        let mut full_out = SearchResult::empty();
+        probe_buckets::<1>(
+            &mut full,
+            hash14(&data) << 1,
+            &data,
+            data.len(),
+            1000,
+            u32::MAX as usize,
+            &mut full_out,
+        );
+        assert_eq!((full.lookups, full.matches), (stats.lookups, stats.matches));
+        assert_eq!(full_out.score, out.score);
+    }
+
+    #[test]
+    fn a_shallow_probe_of_a_filled_bucket_still_tests_its_word() {
+        // The word a shallow bucket holds, followed by bytes that end it.
+        let (len, word) = (0..NUM_HASH_BUCKETS)
+            .step_by(2)
+            .filter(|&key| HASH_LENGTHS[key] != 0)
+            .map(|key| {
+                let len = usize::from(HASH_LENGTHS[key]);
+                let index = usize::from(u16::from_le_bytes([
+                    HASH_WORDS[2 * key],
+                    HASH_WORDS[2 * key + 1],
+                ]));
+                let offset = BUILTIN_OFFSETS_BY_LENGTH[len] as usize + len * index;
+                (len, &BUILTIN_WORDS[offset..offset + len])
+            })
+            .find(|(_, word)| HASH_LENGTHS[hash14(word) << 1] != 0)
+            .unwrap_or_default();
+        let data = [word, b"\x00\x00\x00\x00"].concat();
+        let (stats, out) = probe(&data, true);
+        assert_eq!(stats.lookups, 1);
+        assert_eq!(stats.matches, 1);
+        assert_eq!(out.len, len);
     }
 
     #[test]
